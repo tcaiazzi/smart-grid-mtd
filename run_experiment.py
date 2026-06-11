@@ -226,7 +226,10 @@ def main():
     )
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
-    manager.exec_obj(semp, "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5")
+    manager.exec_obj(
+        semp,
+        "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5",
+    )
 
     if args.generate_dataset is not None:
         duration = args.generate_dataset
@@ -328,12 +331,4 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the smart-grid MTD Kathara experiment")
-    parser.add_argument(
-        "--no-background",
-        action="store_true",
-        help="Do not replay the background PCAP trace on the router",
-    )
-    args = parser.parse_args()
-
-    main(replay_background=not args.no_background)
+    main()
