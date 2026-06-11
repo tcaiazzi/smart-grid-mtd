@@ -133,7 +133,7 @@ def main():
     )
 
     log.info("Waiting for mosquitto server on semp")
-    output = manager.exec_obj(
+    manager.exec_obj(
         semp,
         'bash -c "chown mosquitto:mosquitto /etc/mosquitto/certs/server.key;'
         "chmod 640 /etc/mosquitto/certs/server.key;"
