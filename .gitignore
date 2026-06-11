@@ -51,5 +51,5 @@ Thumbs.db
 
 # Project-specific
 output/
-assets/pcap/*.pcap
-assets/pcap/*.pcapng
+assets/pcap/*
+pcaps.zip

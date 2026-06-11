@@ -1,3 +1,4 @@
+import argparse
 import logging
 import docker
 import tarfile
@@ -44,16 +45,18 @@ def download_file_from_container(
             out.write(f.read())
 
 
-def _drain(exec_stream):
+def _drain(exec_stream, to_print=False):
     """Exhaust a DockerExecStream so the command runs to completion."""
     try:
         while True:
-            next(exec_stream)
+            e = next(exec_stream)
+            if to_print:
+                print(e)
     except StopIteration:
         pass
 
 
-def main():
+def main(replay_background: bool = True):
     log.info("Initializing Kathara manager")
     manager = Kathara.get_instance()
     manager.wipe()
@@ -74,10 +77,11 @@ def main():
 
     log.info("Copying asset files into machines")
     semp.create_file_from_path("assets/qkd/cert_authority.py", "/cert_authority.py")
+    semp.create_file_from_path("assets/mtd_coordinator.py", "/mtd_coordinator.py")
     semp.create_file_from_path(
         "assets/mosquitto/mosquitto.conf", "/etc/mosquitto/mosquitto.conf"
     )
-    scmc.create_file_from_path("assets/simple_client.py", "simple_client.py")
+    scmc.create_file_from_path("assets/mtd_executor.py", "mtd_executor.py")
     scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
     router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
     router.create_file_from_path("assets/pcap/traccia.pcap", "traccia.pcap")
@@ -143,24 +147,28 @@ def main():
     )
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
+    manager.exec_obj(semp, "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5")
 
-    log.info("Starting background traffic replay on router")
-    manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
+    if replay_background:
+        log.info("Starting background traffic replay on router")
+        manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
+    else:
+        log.info("Skipping background traffic replay (--no-background)")
 
     log.info("Starting scmc client")
-    manager.exec_obj(scmc, "python3 simple_client.py --ssl --cafile certs/ca.crt \
-    --certfile certs/client.crt --keyfile certs/client.key")
+    agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
+    # _drain(agent_stream, to_print=True) 
 
     # Live sniffing 
     log.info("Starting traffic caputure")
     attacker_stream = manager.exec_obj(
         attacker,
-        "timeout 10 tcpdump -i eth0 -w attacker_capture.pcap",
+        "timeout 30 tcpdump -i eth0 -w attacker_capture.pcap",
     )
 
     router_stream = manager.exec_obj(
         router,
-        "timeout 30 tcpdump -i eth1 -w router_capture.pcap",
+        "timeout 50 tcpdump -i eth1 -w router_capture.pcap",
     )
 
     log.info("Waiting attacker capture for creating the live dataset")
@@ -196,4 +204,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run the smart-grid MTD Kathara experiment")
+    parser.add_argument(
+        "--no-background",
+        action="store_true",
+        help="Do not replay the background PCAP trace on the router",
+    )
+    args = parser.parse_args()
+
+    main(replay_background=not args.no_background)
