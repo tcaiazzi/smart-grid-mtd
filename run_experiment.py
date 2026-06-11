@@ -1,3 +1,4 @@
+import argparse
 import logging
 import docker
 import tarfile
@@ -7,6 +8,13 @@ import time
 
 from Kathara.manager.Kathara import Kathara
 from Kathara.model.Lab import Lab
+
+from classify import (
+    extract_features,
+    load_artifacts,
+    predict_packets,
+    rank_nanogrid_ips,
+)
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -53,7 +61,79 @@ def _drain(exec_stream):
         pass
 
 
+def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str) -> tuple:
+    """
+    Score a captured PCAP with the trained model and rank source IPs by how
+    nanogrid-like their traffic is.
+
+    Returns (top_ip, ranking) where ranking is the per-IP DataFrame from
+    rank_nanogrid_ips (indexed by src_ip, sorted by nanogrid_frac desc).
+    Returns ("", empty) if nothing could be scored.
+    """
+    df = extract_features(pcap_path)  # unlabeled — attacker has no ground truth
+    model, scaler = load_artifacts(model_path, scaler_path)
+    pkt_preds = predict_packets(df, model, scaler)
+    ranking = rank_nanogrid_ips(pkt_preds)
+    if ranking.empty:
+        return "", ranking
+    return str(ranking.index[0]), ranking
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Smart-grid MTD experiment")
+    p.add_argument(
+        "--generate-dataset",
+        type=int,
+        metavar="DURATION",
+        default=None,
+        help="Capture a single mixed PCAP (background + SCMC together) "
+        "for DURATION seconds.",
+    )
+    p.add_argument(
+        "--name",
+        default="dataset",
+        help="Name tag for the output PCAP file (default: 'dataset' "
+        "→ output/datasets/dataset.pcap). Use different names for "
+        "train/test captures, e.g. --name train, --name test.",
+    )
+    p.add_argument(
+        "--trace",
+        default="assets/pcap/traccia_2b.pcap",
+        help="Local path to the background PCAP trace replayed by tcpreplay "
+        "(default: assets/pcap/traccia_2b.pcap).",
+    )
+    p.add_argument(
+        "--attack",
+        type=int,
+        metavar="DURATION",
+        default=None,
+        help="Run the attacker emulation: sniff for DURATION seconds, score the "
+        "capture with the trained model, block the top-ranked nanogrid IP.",
+    )
+    p.add_argument(
+        "--post-attack",
+        type=int,
+        default=15,
+        metavar="SECONDS",
+        help="Seconds to keep the router capture running after the block, to "
+        "record the post-attack effect (default: 15).",
+    )
+    p.add_argument(
+        "--model",
+        default="output/ml_results/model.pt",
+        help="Path to the trained model (default: output/ml_results/model.pt).",
+    )
+    p.add_argument(
+        "--scaler",
+        default="output/ml_results/scaler.pkl",
+        help="Path to the fitted scaler (default: output/ml_results/scaler.pkl).",
+    )
+    return p.parse_args()
+
+
 def main():
+    args = _parse_args()
+
     log.info("Initializing Kathara manager")
     manager = Kathara.get_instance()
     manager.wipe()
@@ -80,7 +160,7 @@ def main():
     scmc.create_file_from_path("assets/simple_client.py", "simple_client.py")
     scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
     router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
-    router.create_file_from_path("assets/pcap/traccia.pcap", "traccia.pcap")
+    router.create_file_from_path(args.trace, "traccia.pcap")
 
     log.info("Creating startup files")
     lab.create_startup_file_from_list(
@@ -128,7 +208,7 @@ def main():
     log.info("Executing certification client for getting client certificate and key")
     manager.exec_obj(
         scmc,
-        f"python3 cert_client.py --shared-key {shared_key} --ca-host 10.1.0.2 --cn scmc1 --out-dir certs/",
+        f'bash -c "sleep 1; python3 cert_client.py --shared-key {shared_key} --ca-host 10.1.0.2 --cn scmc1 --out-dir certs/"',
         stream=False,
     )
 
@@ -144,51 +224,99 @@ def main():
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
 
-    log.info("Starting background traffic replay on router")
-    manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
+    if args.generate_dataset is not None:
+        duration = args.generate_dataset
+        pcap_name = f"{args.name}.pcap"
+        local_path = f"./output/datasets/{pcap_name}"
 
-    log.info("Starting scmc client")
-    manager.exec_obj(scmc, "python3 simple_client.py --ssl --cafile certs/ca.crt \
-    --certfile certs/client.crt --keyfile certs/client.key")
+        log.info("[Dataset] Capturing mixed traffic (%ds) → %s", duration, local_path)
+        manager.exec_obj(
+            router,
+            f"timeout {duration} bash ./replay_background.sh eth1 2 1",
+        )
+        manager.exec_obj(
+            scmc,
+            f"timeout {duration} python3 simple_client.py --ssl --cafile certs/ca.crt "
+            "--certfile certs/client.crt --keyfile certs/client.key",
+        )
+        capture_stream = manager.exec_obj(
+            router,
+            f"timeout {duration} tcpdump -i eth1 -w {pcap_name}",
+        )
+        log.info("[Dataset] Waiting for capture to finish")
+        _drain(capture_stream)
 
-    # Live sniffing 
-    log.info("Starting traffic caputure")
-    attacker_stream = manager.exec_obj(
-        attacker,
-        "timeout 10 tcpdump -i eth0 -w attacker_capture.pcap",
-    )
+        log.info("[Dataset] Downloading dataset from container")
+        download_file_from_container(
+            router.api_object,
+            pcap_name,
+            local_path,
+        )
+        log.info("[Dataset] Dataset saved to %s", local_path)
 
-    router_stream = manager.exec_obj(
-        router,
-        "timeout 30 tcpdump -i eth1 -w router_capture.pcap",
-    )
+    elif args.attack is not None:
+        sniff_duration = args.attack
 
-    log.info("Waiting attacker capture for creating the live dataset")
-    _drain(attacker_stream)
+        log.info("[Attack] Starting background traffic replay on router")
+        manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
 
-    # Run the model on the captured traffic to get the ip of the mqtt client
-    log.info("Processing captured traffic")
-    # ... (model execution code would go here)
-    time.sleep(2)  # Simulate time taken by model execution
-    scmc_ip = "10.0.0.2"
-    # Adding filter to drop all traffic from the identified MQTT client IP
-    log.info(f"Blocking traffic from identified MQTT client IP: {scmc_ip}")
-    manager.exec_obj(
-        router,
-        f"iptables -A FORWARD -s {scmc_ip} -j DROP",
-    )
+        log.info("[Attack] Starting scmc client")
+        manager.exec_obj(
+            scmc,
+            "python3 simple_client.py --ssl --cafile certs/ca.crt "
+            "--certfile certs/client.crt --keyfile certs/client.key",
+        )
 
-    log.info("Waiting experiment end")
-    _drain(router_stream)
+        log.info("[Attack] Starting router capture (before + after attack)")
+        manager.exec_obj(router, "tcpdump -i eth1 -w router_capture.pcap")
 
-    
-    log.info("Downloading files from containers")
-    download_file_from_container(attacker.api_object, "attacker_capture.pcap", "./output/attacker_capture.pcap")
-    download_file_from_container(router.api_object, "router_capture.pcap", "./output/router_capture.pcap")
-    download_file_from_container(
-        semp.api_object, "/var/log/mosquitto/mosquitto.log", "./output/mosquitto.log"
-    )
-    log.info("Capture saved to capture.pcap")
+        # Attacker sniffs link B for `sniff_duration` seconds to build its dataset.
+        log.info("[Attack] Attacker sniffing for %ds", sniff_duration)
+        attacker_stream = manager.exec_obj(
+            attacker,
+            f"timeout {sniff_duration} tcpdump -i eth0 -w attacker_capture.pcap",
+        )
+        _drain(attacker_stream)
+
+        log.info("[Attack] Downloading attacker capture")
+        download_file_from_container(
+            attacker.api_object,
+            "attacker_capture.pcap",
+            "./output/attacker_capture.pcap",
+        )
+
+        log.info("[Attack] Scoring capture with the trained model")
+        detected_ip, ranking = detect_nanogrid_ip(
+            "./output/attacker_capture.pcap", args.model, args.scaler
+        )
+        log.info("[Attack] Per-IP nanogrid ranking:\n%s", ranking.to_string())
+
+        if detected_ip:
+            log.info("[Attack] Blocking nanogrid IP: %s", detected_ip)
+            manager.exec_obj(
+                router,
+                f"iptables -A FORWARD -s {detected_ip} -j DROP",
+            )
+        else:
+            log.warning("[Attack] No nanogrid IP detected — nothing blocked")
+
+        log.info("[Attack] Observing post-attack effect for %ds", args.post_attack)
+        time.sleep(args.post_attack)
+
+        log.info("[Attack] Stopping router capture")
+        manager.exec_obj(router, "pkill -INT tcpdump")
+        time.sleep(2)  # let tcpdump flush the file before download
+
+        log.info("[Attack] Downloading router capture and broker log")
+        download_file_from_container(
+            router.api_object, "router_capture.pcap", "./output/router_capture.pcap"
+        )
+        download_file_from_container(
+            semp.api_object,
+            "/var/log/mosquitto/mosquitto.log",
+            "./output/mosquitto.log",
+        )
+        log.info("[Attack] Captures saved to output/")
 
     log.info("Undeploying lab")
     manager.undeploy_lab(lab=lab)
