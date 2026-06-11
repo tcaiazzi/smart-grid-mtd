@@ -52,11 +52,13 @@ def download_file_from_container(
             out.write(f.read())
 
 
-def _drain(exec_stream):
+def _drain(exec_stream, to_print=False):
     """Exhaust a DockerExecStream so the command runs to completion."""
     try:
         while True:
-            next(exec_stream)
+            e = next(exec_stream)
+            if to_print:
+                print(e)
     except StopIteration:
         pass
 
@@ -154,10 +156,11 @@ def main():
 
     log.info("Copying asset files into machines")
     semp.create_file_from_path("assets/qkd/cert_authority.py", "/cert_authority.py")
+    semp.create_file_from_path("assets/mtd_coordinator.py", "/mtd_coordinator.py")
     semp.create_file_from_path(
         "assets/mosquitto/mosquitto.conf", "/etc/mosquitto/mosquitto.conf"
     )
-    scmc.create_file_from_path("assets/simple_client.py", "simple_client.py")
+    scmc.create_file_from_path("assets/mtd_executor.py", "mtd_executor.py")
     scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
     router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
     router.create_file_from_path(args.trace, "traccia.pcap")
@@ -223,6 +226,7 @@ def main():
     )
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
+    manager.exec_obj(semp, "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5")
 
     if args.generate_dataset is not None:
         duration = args.generate_dataset
@@ -324,4 +328,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Run the smart-grid MTD Kathara experiment")
+    parser.add_argument(
+        "--no-background",
+        action="store_true",
+        help="Do not replay the background PCAP trace on the router",
+    )
+    args = parser.parse_args()
+
+    main(replay_background=not args.no_background)

@@ -16,14 +16,7 @@ MBPS="${2:-2}"
 LOOPS="${3:-0}"
 
 PCAP_DIR=/
-SRC="$PCAP_DIR/traccia.pcapng"
 PCAP="$PCAP_DIR/traccia.pcap"
-
-# tcpreplay needs classic pcap; convert once with editcap and cache the result.
-if [ ! -f "$PCAP" ]; then
-    echo "[replay] converting $SRC -> $PCAP (one-time)..."
-    editcap -F pcap "$SRC" "$PCAP" || { echo "[replay] editcap failed"; exit 1; }
-fi
 
 echo "[replay] tcpreplay on $IFACE @ ${MBPS}Mbps loop=$LOOPS"
 exec tcpreplay -i "$IFACE" --loop="$LOOPS" --mbps="$MBPS" "$PCAP"

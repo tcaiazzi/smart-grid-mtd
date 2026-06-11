@@ -1,10 +1,10 @@
 paho-mqtt==1.6.1
-scapy==2.5.0
-torch==2.3.1
-gymnasium==0.29.1
-stable-baselines3==2.3.2
-scikit-learn==1.5.0
 numpy==1.26.4
+cryptography==48.0.1
+docker==7.1.0
+dpkt==1.9.8
+kathara==3.8.3
+pymgrid==1.2.2
 pandas==2.2.2
 matplotlib==3.9.0
 seaborn==0.13.2
