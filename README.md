@@ -82,17 +82,24 @@ python split_trace.py assets/pcap/traccia.pcap --train-ratio 0.7 \
 The whole workflow (split → datasets → train → attack) is driven by `make`:
 
 ```bash
-make split        # split BG_TRACE into train/test background traces (SPLIT_RATIO)
-make datasets     # generate train+test dataset PCAPs (deploys the Kathará lab twice)
-make train        # train the 1D-CNN on the train dataset
-make evaluate     # train + evaluate on the test dataset (plots + report)
-make attack       # run the model-driven attack in the lab
-make experiment   # full pipeline: datasets -> train -> attack
-make demo         # legacy demo, no model needed (hardcoded IP block)
-make clean        # remove generated outputs (datasets, model, captures)
+make split               # split BG_TRACE into train/test background traces (SPLIT_RATIO)
+make datasets            # generate train+test dataset PCAPs (deploys the Kathará lab twice)
+make train               # train the 1D-CNN on the train dataset
+make evaluate            # train + evaluate on the test dataset (plots + report)
+make attack              # run the model-driven attack in the lab
+make experiment          # full pipeline: datasets -> train -> attack
+make baseline            # run the attack with MTD disabled (-> output/baseline/)
+make experiment-baseline # full pipeline without MTD
+make demo                # legacy demo, no model needed (hardcoded IP block)
+make clean               # remove generated outputs (both variants)
 ```
 
-Steps whose output already exists are skipped, regardless of timestamps: `dataset-train`/`dataset-test` skip when `output/datasets/{train,test}.pcap` are present, `train` skips when `output/ml_results/model.pt` is present, and the split runs automatically only when the train/test background traces are missing. Delete the artifact (or `make clean`) to force regeneration.
+Each target writes to a per-variant output tree: `output/mtd/` by default, `output/baseline/`
+when MTD is disabled. Pass `NO_MTD=1` to any target to switch tree, or use the `baseline` /
+`experiment-baseline` convenience targets (which recurse with `NO_MTD=1`). The two trees are
+independent, so MTD and baseline runs keep separate datasets, models, and captures.
+
+Steps whose output already exists are skipped, regardless of timestamps: `dataset-train`/`dataset-test` skip when `output/<variant>/datasets/{train,test}.pcap` are present, `train` skips when `output/<variant>/ml_results/model.pt` is present, and the split runs automatically only when the train/test background traces are missing. Delete the artifact (or `make clean`) to force regeneration.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -132,7 +139,7 @@ python run_experiment.py --generate-dataset 120 --name test  --trace assets/pcap
 | Flag | Default | Meaning |
 |---|---|---|
 | `--generate-dataset DURATION` | — | Capture seconds; triggers dataset mode |
-| `--name NAME` | `dataset` | Output → `output/datasets/NAME.pcap` |
+| `--name NAME` | `dataset` | Output → `output/<variant>/datasets/NAME.pcap` (`mtd`/`baseline`) |
 | `--trace PATH` | `assets/pcap/traccia_2b.pcap` | Background PCAP replayed by tcpreplay |
 | `--split TRAIN_RATIO` | — | Split `--trace` by packet count into `assets/pcap/datasets/<stem>_{train,test}.pcap` and replay the part matching `--name` (test split when `--name test`, train split otherwise) |
 
@@ -152,6 +159,26 @@ python run_experiment.py --attack 30
 | `--model PATH` | `output/ml_results/model.pt` | Trained model |
 | `--scaler PATH` | `output/ml_results/scaler.pkl` | Fitted scaler |
 
+#### Baseline (no MTD)
+
+Add `--no-mtd` (or run `make baseline`) to repeat the attack with the defense turned off — the
+comparison point for the MTD experiment. In baseline mode the broker uses a dedicated config
+(`assets/mosquitto/mosquitto_nomtd.conf`) that listens directly on `8883`, so the MTD
+coordinator and its iptables NAT are not needed: no coordinator/executor is started and the
+SCMC runs the plain publisher (`simple_client.py`) with a fixed packet fingerprint. The
+classifier then identifies the SCMC's real IP and the router block takes it down, whereas with
+MTD the padding defeats the fingerprint and the wrong IP is blocked. The flag also applies to
+`--generate-dataset` (capture an un-defended dataset).
+
+All baseline artifacts (datasets and captures) land under `output/baseline/`, keeping them
+separate from the MTD run in `output/mtd/`. `make baseline` builds the baseline dataset and
+model on demand, then runs the attack.
+
+```bash
+python run_experiment.py --attack 30 --no-mtd
+make baseline
+```
+
 ### 3. Default demo (no model)
 
 With no flag, `run_experiment.py` runs the legacy demo: it blocks a hardcoded SCMC IP after a
@@ -161,14 +188,16 @@ fixed 10 s sniff. Useful for a quick end-to-end smoke test without a trained mod
 python run_experiment.py
 ```
 
-**Outputs** (written to `output/`):
+**Outputs** are written to a per-variant tree — `output/mtd/` with MTD enabled,
+`output/baseline/` with `--no-mtd` — so the two runs never overwrite each other (`<v>` below
+is `mtd` or `baseline`):
 
 | File | Contents |
 |---|---|
-| `output/datasets/<name>.pcap` | Labelled dataset (dataset mode) |
-| `output/attacker_capture.pcap` | Packets seen by the attacker on the backbone |
-| `output/router_capture.pcap` | Router traffic spanning before + after the block |
-| `output/mosquitto.log` | Mosquitto broker log (connections, publishes) |
+| `output/<v>/datasets/<name>.pcap` | Labelled dataset (dataset mode) |
+| `output/<v>/attacker_capture.pcap` | Packets seen by the attacker on the backbone |
+| `output/<v>/router_capture.pcap` | Router traffic spanning before + after the block |
+| `output/<v>/mosquitto.log` | Mosquitto broker log (connections, publishes) |
 
 ---
 
@@ -182,16 +211,18 @@ derived from the SCMC/SEMP IPs and broker port (defaults match the lab: `10.0.0.
 ### Train
 
 ```bash
-python classify.py --mode train --train-pcap output/datasets/train.pcap
+python classify.py --mode train --train-pcap output/mtd/datasets/train.pcap --out-dir output/mtd/ml_results
 ```
-Saves `model.pt` + `scaler.pkl` to `--out-dir` (default `output/ml_results/`).
+Saves `model.pt` + `scaler.pkl` to `--out-dir` (default `output/ml_results/`; the Makefile
+passes `output/<variant>/ml_results`).
 
 ### Evaluate (train + test in one run)
 
 ```bash
 python classify.py --mode evaluate \
-  --train-pcap output/datasets/train.pcap \
-  --test-pcap  output/datasets/test.pcap
+  --train-pcap output/mtd/datasets/train.pcap \
+  --test-pcap  output/mtd/datasets/test.pcap \
+  --out-dir    output/mtd/ml_results
 ```
 Prints the packet-level classification report, ROC-AUC and confusion matrix, and saves
 `roc_curve.png`, `confusion_matrix.png` and per-packet `predictions.csv` to `--out-dir`.
@@ -199,7 +230,7 @@ Prints the packet-level classification report, ROC-AUC and confusion matrix, and
 ### Infer (detect the nanogrid IP in a capture)
 
 ```bash
-python classify.py --mode infer --test-pcap output/attacker_capture.pcap
+python classify.py --mode infer --test-pcap output/mtd/attacker_capture.pcap
 ```
 Loads `--model`/`--scaler`, scores the PCAP, and prints the most likely nanogrid source IP.
 

@@ -117,6 +117,14 @@ def _parse_args() -> argparse.Namespace:
         "when --name is 'test', the train split otherwise.",
     )
     p.add_argument(
+        "--no-mtd",
+        action="store_true",
+        help="Baseline mode: no MTD. mosquitto listens directly on 8883 "
+        "(dedicated config), the coordinator/executor are not started, and the "
+        "SCMC runs the plain publisher (simple_client.py). Applies to --attack "
+        "and --generate-dataset.",
+    )
+    p.add_argument(
         "--attack",
         type=int,
         metavar="DURATION",
@@ -148,6 +156,10 @@ def _parse_args() -> argparse.Namespace:
 def main():
     args = _parse_args()
 
+    # Keep MTD and baseline (no-MTD) artifacts in separate output trees so the
+    # two runs never overwrite each other: output/mtd/... vs output/baseline/...
+    variant = "baseline" if args.no_mtd else "mtd"
+
     log.info("Initializing Kathara manager")
     manager = Kathara.get_instance()
     manager.wipe()
@@ -169,10 +181,14 @@ def main():
     log.info("Copying asset files into machines")
     semp.create_file_from_path("assets/qkd/cert_authority.py", "/cert_authority.py")
     semp.create_file_from_path("assets/mtd_coordinator.py", "/mtd_coordinator.py")
-    semp.create_file_from_path(
-        "assets/mosquitto/mosquitto.conf", "/etc/mosquitto/mosquitto.conf"
+    mosquitto_conf = (
+        "assets/mosquitto/mosquitto_nomtd.conf"
+        if args.no_mtd
+        else "assets/mosquitto/mosquitto.conf"
     )
+    semp.create_file_from_path(mosquitto_conf, "/etc/mosquitto/mosquitto.conf")
     scmc.create_file_from_path("assets/mtd_executor.py", "mtd_executor.py")
+    scmc.create_file_from_path("assets/simple_client.py", "simple_client.py")
     scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
     router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
 
@@ -254,23 +270,29 @@ def main():
     )
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
-    manager.exec_obj(
-        semp,
-        "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5",
-    )
+    if args.no_mtd:
+        log.info("[Baseline] MTD disabled — coordinator not started (mosquitto on 8883)")
+    else:
+        manager.exec_obj(
+            semp,
+            "python3 mtd_coordinator.py --control-port 9998 --ip-pool 10.1.0.2 --port-pool 8883,8884,8885 --real-port 18883 --hop-interval 5 --pad-buckets 256,512,1024 --pad-interval 5",
+        )
 
     if args.generate_dataset is not None:
         duration = args.generate_dataset
         pcap_name = f"{args.name}.pcap"
-        local_path = f"./output/datasets/{pcap_name}"
+        local_path = f"./output/{variant}/datasets/{pcap_name}"
 
         log.info("[Dataset] Capturing mixed traffic (%ds) → %s", duration, local_path)
         manager.exec_obj(
             router,
             f"timeout {duration} bash ./replay_background.sh eth1 2 1",
         )
-        agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
-        # _drain(agent_stream, to_print=True) 
+        if args.no_mtd:
+            agent_stream = manager.exec_obj(scmc, f"timeout {duration} python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key")
+        else:
+            agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
+        # _drain(agent_stream, to_print=True)
 
         capture_stream = manager.exec_obj(
             router,
@@ -289,12 +311,17 @@ def main():
 
     elif args.attack is not None:
         sniff_duration = args.attack
+        out_dir = f"./output/{variant}"
+        attacker_cap = f"{out_dir}/attacker_capture.pcap"
 
         log.info("[Attack] Starting background traffic replay on router")
         manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
 
         log.info("[Attack] Starting scmc client")
-        agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
+        if args.no_mtd:
+            agent_stream = manager.exec_obj(scmc, "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key")
+        else:
+            agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
         # _drain(agent_stream, to_print=True)
 
         log.info("[Attack] Starting router capture (before + after attack)")
@@ -312,12 +339,12 @@ def main():
         download_file_from_container(
             attacker.api_object,
             "attacker_capture.pcap",
-            "./output/attacker_capture.pcap",
+            attacker_cap,
         )
 
         log.info("[Attack] Scoring capture with the trained model")
         detected_ip, ranking = detect_nanogrid_ip(
-            "./output/attacker_capture.pcap", args.model, args.scaler
+            attacker_cap, args.model, args.scaler
         )
         log.info("[Attack] Per-IP nanogrid ranking:\n%s", ranking.to_string())
 
@@ -339,14 +366,14 @@ def main():
 
         log.info("[Attack] Downloading router capture and broker log")
         download_file_from_container(
-            router.api_object, "router_capture.pcap", "./output/router_capture.pcap"
+            router.api_object, "router_capture.pcap", f"{out_dir}/router_capture.pcap"
         )
         download_file_from_container(
             semp.api_object,
             "/var/log/mosquitto/mosquitto.log",
-            "./output/mosquitto.log",
+            f"{out_dir}/mosquitto.log",
         )
-        log.info("[Attack] Captures saved to output/")
+        log.info("[Attack] Captures saved to %s/", out_dir)
 
     log.info("Undeploying lab")
     manager.undeploy_lab(lab=lab)
