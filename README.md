@@ -61,9 +61,52 @@ All lab nodes use a single image that bakes in mosquitto, paho-mqtt, scapy, tcpr
 docker build -t smartgrid/node:latest docker/mqtt/
 ```
 
-### 3. Background traffic trace (optional)
+### 3. Background traffic trace
 
-The experiment replays a real PCAP onto the backbone so the attacker sees realistic noise. Place a `traccia.pcap` (or `traccia.pcapng`) in `assets/pcap/`. The file is gitignored due to size. Without it, the router step will fail — comment out the relevant lines in `run_experiment.py` to skip replay.
+The experiment replays a real PCAP onto the backbone so the attacker sees realistic noise. Place a `traccia.pcap` in `assets/pcap/` (gitignored due to size). Without it, the router step will fail — comment out the relevant lines in `run_experiment.py` to skip replay.
+
+A single source trace is split by packet count into independent train/test background traces (default 70/30) under `assets/pcap/datasets/`, either via `make split` or directly:
+
+```bash
+python split_trace.py assets/pcap/traccia.pcap --train-ratio 0.7 \
+  --train-out assets/pcap/datasets/traccia_train.pcap \
+  --test-out  assets/pcap/datasets/traccia_test.pcap
+```
+
+`split_trace.py` uses dpkt (raw packet records, no layer dissection), so splitting a ~1 GB trace takes seconds.
+
+---
+
+## Makefile pipeline
+
+The whole workflow (split → datasets → train → attack) is driven by `make`:
+
+```bash
+make split        # split BG_TRACE into train/test background traces (SPLIT_RATIO)
+make datasets     # generate train+test dataset PCAPs (deploys the Kathará lab twice)
+make train        # train the 1D-CNN on the train dataset
+make evaluate     # train + evaluate on the test dataset (plots + report)
+make attack       # run the model-driven attack in the lab
+make experiment   # full pipeline: datasets -> train -> attack
+make demo         # legacy demo, no model needed (hardcoded IP block)
+make clean        # remove generated outputs (datasets, model, captures)
+```
+
+Steps whose output already exists are skipped, regardless of timestamps: `dataset-train`/`dataset-test` skip when `output/datasets/{train,test}.pcap` are present, `train` skips when `output/ml_results/model.pt` is present, and the split runs automatically only when the train/test background traces are missing. Delete the artifact (or `make clean`) to force regeneration.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BG_TRACE` | `assets/pcap/traccia.pcap` | Source background trace to split |
+| `SPLIT_RATIO` | `0.7` | Fraction of packets in the train split |
+| `TRAIN_TRACE` / `TEST_TRACE` | `assets/pcap/datasets/<stem>_{train,test}.pcap` | Background traces replayed during the train/test captures |
+| `DATASET_DURATION` | `120` | Capture duration (seconds) per dataset |
+| `ATTACK_DURATION` | `30` | Attacker sniff duration (seconds) |
+
+Override on the command line, e.g.:
+
+```bash
+make experiment BG_TRACE=assets/pcap/capture.pcap SPLIT_RATIO=0.8 DATASET_DURATION=60
+```
 
 ---
 
@@ -76,20 +119,22 @@ starts the mosquitto broker. The flags select what happens next.
 ### 1. Generate a labelled dataset
 
 Captures one mixed PCAP (background replay + SCMC telemetry together) for `DURATION` seconds.
-Run it **twice on different background traces** to get independent train/test sets.
+Run it **twice on independent background traces** to get train/test sets — `make datasets`
+automates both runs on the two splits of the source trace.
 
 ```bash
-# training set
-python run_experiment.py --generate-dataset 120 --name train --trace assets/pcap/traccia_1.pcap
-# test set (different trace → avoids overfitting)
-python run_experiment.py --generate-dataset 120 --name test  --trace assets/pcap/traccia_2.pcap
+# training set (background: train split of the source trace)
+python run_experiment.py --generate-dataset 120 --name train --trace assets/pcap/datasets/traccia_train.pcap
+# test set (background: test split → independent noise, avoids overfitting)
+python run_experiment.py --generate-dataset 120 --name test  --trace assets/pcap/datasets/traccia_test.pcap
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--generate-dataset DURATION` | — | Capture seconds; triggers dataset mode |
 | `--name NAME` | `dataset` | Output → `output/datasets/NAME.pcap` |
-| `--trace PATH` | `assets/pcap/traccia.pcap` | Background PCAP replayed by tcpreplay |
+| `--trace PATH` | `assets/pcap/traccia_2b.pcap` | Background PCAP replayed by tcpreplay |
+| `--split TRAIN_RATIO` | — | Split `--trace` by packet count into `assets/pcap/datasets/<stem>_{train,test}.pcap` and replay the part matching `--name` (test split when `--name test`, train split otherwise) |
 
 ### 2. Run the model-driven attack
 
@@ -168,8 +213,10 @@ Loads `--model`/`--scaler`, scores the PCAP, and prints the most likely nanogrid
 
 ```
 smart-grid-mtd/
+├── Makefile                   # Pipeline driver: split -> datasets -> train -> attack
 ├── run_experiment.py          # Kathará orchestrator — main entry point
 ├── classify.py                # Packet-level 1D-CNN traffic classifier
+├── split_trace.py             # Train/test split of a background pcap (dpkt, fast)
 ├── requirements.txt
 ├── assets/
 │   ├── qkd/
@@ -181,6 +228,7 @@ smart-grid-mtd/
 │   ├── traffic_generator.py   # Alternative traffic generator
 │   ├── replay_background.sh   # tcpreplay wrapper for background noise
 │   └── pcap/                  # Real traffic traces (gitignored if large)
+│       └── datasets/          # Train/test background splits (make split)
 ├── docker/
 │   └── mqtt/Dockerfile        # Custom node image (kathara/core + mosquitto + tooling)
 └── output/                    # Experiment outputs (gitignored)

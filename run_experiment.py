@@ -15,6 +15,7 @@ from classify import (
     predict_packets,
     rank_nanogrid_ips,
 )
+from split_trace import split_trace
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
@@ -105,6 +106,17 @@ def _parse_args() -> argparse.Namespace:
         "(default: assets/pcap/traccia_2b.pcap).",
     )
     p.add_argument(
+        "--split",
+        type=float,
+        metavar="TRAIN_RATIO",
+        default=None,
+        help="Split the background trace by packet count before replaying: "
+        "the first TRAIN_RATIO fraction goes to "
+        "assets/pcap/datasets/<stem>_train.pcap, the rest to "
+        "assets/pcap/datasets/<stem>_test.pcap. The test split is replayed "
+        "when --name is 'test', the train split otherwise.",
+    )
+    p.add_argument(
         "--attack",
         type=int,
         metavar="DURATION",
@@ -163,7 +175,23 @@ def main():
     scmc.create_file_from_path("assets/mtd_executor.py", "mtd_executor.py")
     scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
     router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
-    router.create_file_from_path(args.trace, "traccia.pcap")
+
+    logging.info("Background trace: %s", args.trace)
+    trace_path = args.trace
+    if args.split is not None:
+        out_dir = "assets/pcap/datasets"
+        os.makedirs(out_dir, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(args.trace))[0]
+        train_path, test_path = split_trace(
+            args.trace,
+            args.split,
+            train_path=os.path.join(out_dir, f"{stem}_train.pcap"),
+            test_path=os.path.join(out_dir, f"{stem}_test.pcap"),
+        )
+        trace_path = test_path if args.name == "test" else train_path
+        log.info("Replaying %s split of the background trace: %s",
+                 "test" if args.name == "test" else "train", trace_path)
+    router.create_file_from_path(trace_path, "traccia.pcap")
 
     log.info("Creating startup files")
     lab.create_startup_file_from_list(
@@ -241,11 +269,9 @@ def main():
             router,
             f"timeout {duration} bash ./replay_background.sh eth1 2 1",
         )
-        manager.exec_obj(
-            scmc,
-            f"timeout {duration} python3 simple_client.py --ssl --cafile certs/ca.crt "
-            "--certfile certs/client.crt --keyfile certs/client.key",
-        )
+        agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
+        # _drain(agent_stream, to_print=True) 
+
         capture_stream = manager.exec_obj(
             router,
             f"timeout {duration} tcpdump -i eth1 -w {pcap_name}",
@@ -268,11 +294,8 @@ def main():
         manager.exec_obj(router, "bash ./replay_background.sh eth1 2 0")
 
         log.info("[Attack] Starting scmc client")
-        manager.exec_obj(
-            scmc,
-            "python3 simple_client.py --ssl --cafile certs/ca.crt "
-            "--certfile certs/client.crt --keyfile certs/client.key",
-        )
+        agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998")
+        # _drain(agent_stream, to_print=True)
 
         log.info("[Attack] Starting router capture (before + after attack)")
         manager.exec_obj(router, "tcpdump -i eth1 -w router_capture.pcap")
