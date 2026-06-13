@@ -393,9 +393,9 @@ def evaluate(
         ax.set_title("ROC Curve — nanogrid detection (packet-level)")
         ax.legend()
         fig.tight_layout()
-        fig.savefig(out_dir / "roc_curve.png", dpi=120)
+        fig.savefig(out_dir / "roc_curve.pdf", dpi=120)
         plt.close(fig)
-        print(f"[evaluate] Saved: {out_dir / 'roc_curve.png'}")
+        print(f"[evaluate] Saved: {out_dir / 'roc_curve.pdf'}")
 
     # Confusion matrix
     fig, ax = plt.subplots(figsize=(5, 5))
@@ -415,9 +415,9 @@ def evaluate(
             )
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    fig.savefig(out_dir / "confusion_matrix.png", dpi=120)
+    fig.savefig(out_dir / "confusion_matrix.pdf", dpi=120)
     plt.close(fig)
-    print(f"[evaluate] Saved: {out_dir / 'confusion_matrix.png'}")
+    print(f"[evaluate] Saved: {out_dir / 'confusion_matrix.pdf'}")
 
 
 def save_artifacts(
@@ -510,6 +510,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument(
+        "--load-model",
+        action="store_true",
+        help="In evaluate mode, load --model/--scaler instead of retraining",
+    )
     return p.parse_args()
 
 
@@ -544,31 +549,38 @@ def main() -> None:
         save_artifacts(model, scaler, out_dir)
 
     elif args.mode == "evaluate":
-        if not args.train_pcap or not args.test_pcap:
-            sys.exit("[ERROR] --train-pcap and --test-pcap required for evaluate mode")
+        if not args.test_pcap:
+            sys.exit("[ERROR] --test-pcap required for evaluate mode")
 
-        print(f"[main] Extracting train features from {args.train_pcap}")
-        train_df = extract_features(
-            args.train_pcap,
-            scmc_ip=args.scmc_ip,
-            semp_ip=args.semp_ip,
-            broker_port=args.broker_port,
-        )
-        print(
-            f"[main] Train packets: {len(train_df)}  "
-            f"(nanogrid={int((train_df['is_nanogrid'] == 1).sum())}, "
-            f"background={int((train_df['is_nanogrid'] == 0).sum())})"
-        )
-
-        model, scaler = train_classifier(
-            train_df,
-            window_size=args.window_size,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            lr=args.lr,
-            device=device,
-        )
-        save_artifacts(model, scaler, out_dir)
+        if args.load_model:
+            model, scaler = load_artifacts(args.model, args.scaler)
+            model.to(device)
+            window_size = model.window_size
+        else:
+            if not args.train_pcap:
+                sys.exit("[ERROR] --train-pcap required for evaluate mode (or use --load-model)")
+            print(f"[main] Extracting train features from {args.train_pcap}")
+            train_df = extract_features(
+                args.train_pcap,
+                scmc_ip=args.scmc_ip,
+                semp_ip=args.semp_ip,
+                broker_port=args.broker_port,
+            )
+            print(
+                f"[main] Train packets: {len(train_df)}  "
+                f"(nanogrid={int((train_df['is_nanogrid'] == 1).sum())}, "
+                f"background={int((train_df['is_nanogrid'] == 0).sum())})"
+            )
+            model, scaler = train_classifier(
+                train_df,
+                window_size=args.window_size,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                lr=args.lr,
+                device=device,
+            )
+            save_artifacts(model, scaler, out_dir)
+            window_size = args.window_size
 
         print(f"[main] Extracting test features from {args.test_pcap}")
         test_df = extract_features(
@@ -585,7 +597,7 @@ def main() -> None:
 
         pkt_preds = predict_packets(
             test_df, model, scaler,
-            window_size=args.window_size,
+            window_size=window_size,
             threshold=args.threshold,
             device=device,
         )

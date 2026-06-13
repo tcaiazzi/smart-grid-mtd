@@ -34,12 +34,15 @@ Deps:   pip install paho-mqtt pymgrid
 
 import argparse
 import json
+import logging
 import random
 import socket
 import struct
 import threading
 import time
 import warnings
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 import paho.mqtt.client as mqtt
@@ -185,7 +188,7 @@ class SCMCExecutor:
         self._mqtt_client    = None
         self._mqtt_connected = False
 
-        print(f"[{grid_id}] Building microgrid simulator...", flush=True)
+        log.info("[%s] Building microgrid simulator...", grid_id)
         self.mg = build_microgrid()
 
     # ── MQTT ──
@@ -194,12 +197,12 @@ class SCMCExecutor:
         with self._lock:
             self._mqtt_connected = (rc == 0)
         status = "ok" if rc == 0 else f"rc={rc}"
-        print(f"[{self.grid_id}] MQTT → {self.broker}:{self.mqtt_port} ({status})", flush=True)
+        log.info("[%s] MQTT → %s:%s (%s)", self.grid_id, self.broker, self.mqtt_port, status)
 
     def _on_disconnect(self, client, userdata, rc, props=None):
         with self._lock:
             self._mqtt_connected = False
-        print(f"[{self.grid_id}] MQTT disconnected (rc={rc})", flush=True)
+        log.info("[%s] MQTT disconnected (rc=%s)", self.grid_id, rc)
 
     def _mqtt_connect(self) -> None:
         if self._mqtt_client:
@@ -231,7 +234,7 @@ class SCMCExecutor:
                     time.sleep(0.2)
                 raise ConnectionError("CONNACK timeout")
             except Exception as e:
-                print(f"[{self.grid_id}] MQTT connect failed ({e}), retry in 3s", flush=True)
+                log.warning("[%s] MQTT connect failed (%s), retry in 3s", self.grid_id, e)
                 time.sleep(3)
 
     def _pad_payload(self, obj: dict) -> bytes:
@@ -275,13 +278,10 @@ class SCMCExecutor:
         self._mqtt_client.publish(f"{topic_base}/snapshot", self._pad_payload(r), qos=0)
 
         pad_label = ",".join(map(str, self.pad_buckets)) if self.pad_buckets else "off"
-        print(
-            f"[{self.grid_id}] #{seq_num} → {self.broker}:{self.mqtt_port}  "
-            f"power={r['power_kw']:6.1f} kW  "
-            f"freq={r['frequency']:.4f} Hz  "
-            f"volt={r['voltage']:.2f} V  "
-            f"pad=[{pad_label}]",
-            flush=True,
+        log.info(
+            "[%s] #%d → %s:%d  power=%6.1f kW  freq=%.4f Hz  volt=%.2f V  pad=[%s]",
+            self.grid_id, seq_num, self.broker, self.mqtt_port,
+            r["power_kw"], r["frequency"], r["voltage"], pad_label,
         )
 
     # ── hop execution ──
@@ -290,11 +290,8 @@ class SCMCExecutor:
         seq      = hop["seq"]
         new_ip   = hop["new_ip"]
         new_port = hop["new_port"]
-        print(
-            f"[{self.grid_id}] hop seq={seq}  "
-            f"{self.broker}:{self.mqtt_port} → {new_ip}:{new_port}",
-            flush=True,
-        )
+        log.info("[%s] hop seq=%s  %s:%s → %s:%s",
+                 self.grid_id, seq, self.broker, self.mqtt_port, new_ip, new_port)
         self.broker    = new_ip
         self.mqtt_port = new_port
         self._mqtt_connect()
@@ -306,7 +303,7 @@ class SCMCExecutor:
         try:
             _send_msg(self._ctrl_sock, msg)
         except OSError as e:
-            print(f"[{self.grid_id}] ctrl send error: {e}", flush=True)
+            log.warning("[%s] ctrl send error: %s", self.grid_id, e)
 
     def _ctrl_reader(self) -> None:
         """Daemon thread: receives MTD action commands from the coordinator."""
@@ -318,24 +315,17 @@ class SCMCExecutor:
                 in_m  = msg.get("in_messages", 0)
 
                 if mtype == "SCHEDULE_HOP":
-                    print(
-                        f"[{self.grid_id}] SCHEDULE_HOP seq={seq}"
-                        f"  action={msg['action']}"
-                        f"  → {msg['new_ip']}:{msg['new_port']}"
-                        f"  in {in_m} msgs",
-                        flush=True,
-                    )
+                    log.info("[%s] SCHEDULE_HOP seq=%s  action=%s  → %s:%s  in %d msgs",
+                             self.grid_id, seq, msg["action"],
+                             msg["new_ip"], msg["new_port"], in_m)
                     with self._lock:
                         self._pending_hop = {**msg, "fire_at": self._pub_seq + in_m}
                     self._send_ctrl({"type": "HOP_ACK", "seq": seq, "scmc_id": self.grid_id})
 
                 elif mtype == "SET_PADDING":
                     buckets = msg.get("buckets", [])
-                    print(
-                        f"[{self.grid_id}] SET_PADDING seq={seq}"
-                        f"  buckets={buckets}  in {in_m} msgs",
-                        flush=True,
-                    )
+                    log.info("[%s] SET_PADDING seq=%s  buckets=%s  in %d msgs",
+                             self.grid_id, seq, buckets, in_m)
                     with self._lock:
                         self._pending_pad = {
                             "buckets": buckets, "seq": seq,
@@ -343,7 +333,7 @@ class SCMCExecutor:
                         }
                     self._send_ctrl({"type": "PAD_ACK", "seq": seq, "scmc_id": self.grid_id})
             except (ConnectionError, OSError) as e:
-                print(f"[{self.grid_id}] ctrl lost ({e}), reconnecting...", flush=True)
+                log.warning("[%s] ctrl lost (%s), reconnecting...", self.grid_id, e)
                 self._ctrl_connect()
 
     def _ctrl_connect(self) -> None:
@@ -355,10 +345,10 @@ class SCMCExecutor:
                 sock.settimeout(None)
                 self._ctrl_sock = sock
                 _send_msg(sock, {"type": "HELLO", "scmc_id": self.grid_id})
-                print(f"[{self.grid_id}] ctrl → {self.semp_ip}:{self.semp_port}", flush=True)
+                log.info("[%s] ctrl → %s:%s", self.grid_id, self.semp_ip, self.semp_port)
                 return
             except OSError as e:
-                print(f"[{self.grid_id}] ctrl connect failed ({e}), retry in 3s", flush=True)
+                log.warning("[%s] ctrl connect failed (%s), retry in 3s", self.grid_id, e)
                 time.sleep(3)
 
     # ── main publish loop ──
@@ -389,6 +379,7 @@ class SCMCExecutor:
                     if pad:
                         self.pad_buckets = pad["buckets"]
                         print(f"[{self.grid_id}] padding policy → {pad['buckets']}", flush=True)
+                        log.info("[%s] padding policy → %s", self.grid_id, pad["buckets"])
                         self._send_ctrl({"type": "PAD_DONE", "seq": pad["seq"],
                                          "scmc_id": self.grid_id})
 
@@ -404,7 +395,7 @@ class SCMCExecutor:
 
                 time.sleep(self.interval + np.random.uniform(-0.05, 0.05))
         except KeyboardInterrupt:
-            print(f"\n[{self.grid_id}] stopped", flush=True)
+            log.info("[%s] stopped", self.grid_id)
         finally:
             if self._mqtt_client:
                 self._mqtt_client.loop_stop()
@@ -437,7 +428,20 @@ def main():
     parser.add_argument("--pad-buckets", default="",
                         help="Initial padding bucket sizes, comma-separated "
                              "(default: empty = no padding until coordinator sets it)")
+    parser.add_argument("--log-file", default="mtd_executor.log",
+                        help="File to write the message-exchange log "
+                             "(default: mtd_executor.log in the working directory)")
     args = parser.parse_args()
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if args.log_file:
+        handlers.append(logging.FileHandler(args.log_file))
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+        handlers=handlers,
+    )
 
     if args.ssl and args.cafile is None:
         parser.error("--cafile is required when --ssl is set")

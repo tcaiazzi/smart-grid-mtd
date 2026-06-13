@@ -3,30 +3,31 @@
 # Quick start:
 #   make datasets     # generate train+test PCAPs (deploys the Kathará lab twice)
 #   make train        # train the 1D-CNN on the train dataset
-#   make evaluate     # train + evaluate on the test dataset (plots + report)
+#   make evaluate     # evaluate on the test dataset using the saved model (trains first if absent)
 #   make attack       # run the model-driven attack in the lab
 #   make experiment   # full pipeline: datasets -> train -> attack
 #
-# MTD vs baseline: every target writes to a per-variant output tree
-#   output/mtd/...       (default, MTD enabled)
-#   output/baseline/...  (NO_MTD=1, MTD disabled)
-# so the two runs never overwrite each other. Use the `baseline` /
-# `experiment-baseline` convenience targets, or pass NO_MTD=1 to any target.
+# Output structure:
+#   output/models/<variant>/              trained model + scaler
+#   output/datasets/<variant>/            train/test PCAPs
+#   output/ml-results/<scenario-slug>/    evaluate metrics (predictions, plots)
+#   output/experiment-results/<slug>/     attack captures, ranking, broker log
+#
+# MTD vs baseline: set NO_MTD=1 for the baseline (no-MTD) variant.
+# Cross-model attack: MODEL_SRC=baseline uses the baseline model on MTD traffic.
 #
 # Override variables as needed, e.g.:
 #   make dataset-train TRAIN_TRACE=assets/pcap/traccia.pcap DATASET_DURATION=60
+#   make datasets MTD_HOP_INTERVAL=1 MTD_PORT_POOL=8883,8884,8885,8886,8887,8888
 
 PYTHON ?= .venv/bin/python
 
 # Guard: NO_MTD must be a variable *assignment* (NO_MTD=1), not a bare goal.
-# `make train NO_MTD` treats NO_MTD as a target and silently leaves MTD on, so
-# catch that and point at the right syntax.
 ifneq ($(filter NO_MTD,$(MAKECMDGOALS)),)
   $(error Use NO_MTD=1 as an assignment, e.g. `make train NO_MTD=1` (not a bare `NO_MTD`))
 endif
 
 # Experiment variant: MTD enabled (default) or baseline without MTD.
-# Baseline only when NO_MTD is truthy; unset, empty, or 0 keeps MTD on.
 ifeq ($(filter-out 0 no false off,$(NO_MTD)),)
   VARIANT  := mtd
   MTD_FLAG :=
@@ -35,46 +36,109 @@ else
   MTD_FLAG := --no-mtd
 endif
 
-# Background trace split (make split): one source trace -> train/test parts.
-# Shared between variants (the background noise is the same).
+# Background trace split: one source trace -> train/test parts.
 BG_TRACE    ?= assets/pcap/traccia.pcap
 SPLIT_RATIO ?= 0.7
 SPLIT_DIR   := assets/pcap/datasets
-
-# Background traces replayed during the train/test captures
-# (default: the two parts produced by `make split` from BG_TRACE)
 TRAIN_TRACE ?= $(SPLIT_DIR)/$(basename $(notdir $(BG_TRACE)))_train.pcap
 TEST_TRACE  ?= $(SPLIT_DIR)/$(basename $(notdir $(BG_TRACE)))_test.pcap
 
 DATASET_DURATION ?= 120
 ATTACK_DURATION  ?= 30
+BG_REPLAY_MBPS   ?= 2
 
-# Per-variant output tree (output/mtd/... vs output/baseline/...)
-OUT_DIR     := output/$(VARIANT)
-DATASET_DIR := $(OUT_DIR)/datasets
-ML_DIR      := $(OUT_DIR)/ml_results
-TRAIN_PCAP  := $(DATASET_DIR)/train.pcap
-TEST_PCAP   := $(DATASET_DIR)/test.pcap
-MODEL       := $(ML_DIR)/model.pt
-SCALER      := $(ML_DIR)/scaler.pkl
+# ── MTD parameters ─────────────────────────────────────────────────────────────
+# Tune these to make fingerprinting harder.
+# Shorter intervals and larger pools create more candidate flows, diluting the
+# nanogrid signal seen by the attacker.
+MTD_HOP_INTERVAL ?= 2
+MTD_IP_POOL      ?= 10.1.0.2,10.1.0.4,10.1.0.5
+MTD_PORT_POOL    ?= 8883,8884,8885,8886,8887
+MTD_PAD_BUCKETS  ?= 128,256,384,512,640,768,1024
+MTD_PAD_INTERVAL ?= 3
+MTD_PARAMS_FLAG  := --mtd-hop-interval $(MTD_HOP_INTERVAL) \
+                    --mtd-ip-pool $(MTD_IP_POOL) \
+                    --mtd-port-pool $(MTD_PORT_POOL) \
+                    --mtd-pad-buckets $(MTD_PAD_BUCKETS) \
+                    --mtd-pad-interval $(MTD_PAD_INTERVAL)
 
-.PHONY: help split datasets dataset-train dataset-test train evaluate attack baseline demo experiment experiment-baseline clean
+# Compact slug encoding the active MTD parameters (used in output dir names).
+comma        := ,
+MTD_N_IPS    := $(words $(subst $(comma), ,$(MTD_IP_POOL)))
+MTD_N_PORTS  := $(words $(subst $(comma), ,$(MTD_PORT_POOL)))
+MTD_N_PADS   := $(words $(subst $(comma), ,$(MTD_PAD_BUCKETS)))
+MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_IPS)-ports$(MTD_N_PORTS)-pads$(MTD_N_PADS)-mbps$(BG_REPLAY_MBPS)
+
+# ── Attack model source ────────────────────────────────────────────────────────
+# Defaults to the run variant. Set MODEL_SRC=baseline to use the baseline model
+# on MTD traffic (cross-model attack).
+MODEL_SRC ?= $(VARIANT)
+
+# ── Scenario slug ─────────────────────────────────────────────────────────────
+# Identifies the (dataset-variant, model-variant, MTD-params) triple.
+# MTD params are omitted for the baseline scenario (coordinator not started).
+ifeq ($(VARIANT),baseline)
+  SCENARIO_SLUG := baseline-scenario-baseline-model-mbps$(BG_REPLAY_MBPS)
+else ifeq ($(MODEL_SRC),baseline)
+  SCENARIO_SLUG := mtd-scenario-baseline-model-$(MTD_PARAMS_SLUG)
+else
+  SCENARIO_SLUG := mtd-scenario-mtd-model-$(MTD_PARAMS_SLUG)
+endif
+
+# ── Output directories ─────────────────────────────────────────────────────────
+MODELS_DIR   := output/models
+MODEL_DIR    := $(MODELS_DIR)/$(VARIANT)
+MODEL        := $(MODEL_DIR)/model.pt
+SCALER       := $(MODEL_DIR)/scaler.pkl
+
+ATTACK_MODEL  := $(MODELS_DIR)/$(MODEL_SRC)/model.pt
+ATTACK_SCALER := $(MODELS_DIR)/$(MODEL_SRC)/scaler.pkl
+
+DATASETS_DIR := output/datasets/$(VARIANT)
+TRAIN_PCAP   := $(DATASETS_DIR)/train.pcap
+TEST_PCAP    := $(DATASETS_DIR)/test.pcap
+
+EVAL_OUT_DIR   := output/ml-results/$(SCENARIO_SLUG)
+ATTACK_OUT_DIR := output/experiment-results/$(SCENARIO_SLUG)
+
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots clean
 
 help:
-	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for the baseline tree)  ->  $(OUT_DIR)/"
+	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
+	@echo "Scenario slug: $(SCENARIO_SLUG)"
+	@echo ""
 	@echo "Targets:"
-	@echo "  split               Split $(BG_TRACE) into $(TRAIN_TRACE) + $(TEST_TRACE) (SPLIT_RATIO=$(SPLIT_RATIO))"
-	@echo "  dataset-train       Generate the training dataset ($(TRAIN_PCAP))"
-	@echo "  dataset-test        Generate the test dataset ($(TEST_PCAP))"
+	@echo "  split               Split $(BG_TRACE) into train/test traces (SPLIT_RATIO=$(SPLIT_RATIO))"
+	@echo "  dataset-train       Generate the training dataset -> $(TRAIN_PCAP)"
+	@echo "  dataset-test        Generate the test dataset -> $(TEST_PCAP)"
 	@echo "  datasets            Generate both datasets"
+	@echo "  all-datasets        Generate datasets for both variants (baseline + mtd)"
 	@echo "  train               Train the classifier -> $(MODEL)"
-	@echo "  evaluate            Train + evaluate on the test set (report, ROC, confusion matrix)"
+	@echo "  all-train           Train both classifiers (baseline + mtd)"
+	@echo "  evaluate            Evaluate saved model on the test set (trains first if absent)"
+	@echo "                      -> $(EVAL_OUT_DIR)"
+	@echo "                      Cross-model: make evaluate MODEL_SRC=baseline"
+	@echo "  all-evaluate        Run all three evaluations: no-mtd/no-mtd, mtd/mtd, mtd/no-mtd"
 	@echo "  attack              Run the model-driven attack (ATTACK_DURATION=$(ATTACK_DURATION)s)"
-	@echo "  baseline            Run the attack with MTD disabled (-> output/baseline/)"
-	@echo "  demo                Legacy demo, no model needed (hardcoded IP block)"
+	@echo "                      -> $(ATTACK_OUT_DIR)"
+	@echo "                      Cross-model: make attack MODEL_SRC=baseline"
+	@echo "  baseline            Run the attack with MTD disabled"
+	@echo "  all-attack          Run all three attack scenarios"
+	@echo "  all                 Full pipeline: both datasets -> all-evaluate -> all-attack -> plots"
 	@echo "  experiment          Full pipeline with MTD: datasets -> train -> attack"
 	@echo "  experiment-baseline Full pipeline without MTD (NO_MTD=1)"
-	@echo "  clean               Remove generated outputs (both variants)"
+	@echo "  plots               Compare scenarios -> output/plots/"
+	@echo "  clean               Remove all generated outputs"
+	@echo ""
+	@echo "MTD parameters (override on the command line):"
+	@echo "  MTD_HOP_INTERVAL    Seconds between hops              (default: $(MTD_HOP_INTERVAL))"
+	@echo "  MTD_IP_POOL         Broker IP pool (IP hopping)       (default: $(MTD_IP_POOL))"
+	@echo "  MTD_PORT_POOL       Broker port pool (port hopping)   (default: $(MTD_PORT_POOL))"
+	@echo "  MTD_PAD_BUCKETS     Payload padding bucket sizes      (default: $(MTD_PAD_BUCKETS))"
+	@echo "  MTD_PAD_INTERVAL    Seconds between padding rotations (default: $(MTD_PAD_INTERVAL))"
+	@echo ""
+	@echo "Replay parameters:"
+	@echo "  BG_REPLAY_MBPS      Background trace replay rate Mbit/s (default: $(BG_REPLAY_MBPS))"
 
 split $(TRAIN_TRACE) $(TEST_TRACE):
 	@mkdir -p $(SPLIT_DIR)
@@ -85,32 +149,52 @@ split $(TRAIN_TRACE) $(TEST_TRACE):
 dataset-train: $(TRAIN_PCAP)
 
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) --name train --trace $(TRAIN_TRACE)
+	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--name train --trace $(TRAIN_TRACE) --datasets-dir $(DATASETS_DIR)
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) --name test --trace $(TEST_TRACE)
+	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--name test --trace $(TEST_TRACE) --datasets-dir $(DATASETS_DIR)
 
 datasets: dataset-train dataset-test
 
-# Training produces model.pt + scaler.pkl in $(ML_DIR)
+# Generate datasets for both variants (baseline + mtd).
+all-datasets:
+	$(MAKE) datasets NO_MTD=1
+	$(MAKE) datasets
+
+# Training produces model.pt + scaler.pkl in $(MODEL_DIR)
 $(MODEL):
-	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(ML_DIR)
+	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(MODEL_DIR)
 
 train: $(MODEL)
 
-evaluate: $(TRAIN_PCAP) $(TEST_PCAP)
-	$(PYTHON) classify.py --mode evaluate --train-pcap $(TRAIN_PCAP) --test-pcap $(TEST_PCAP) --out-dir $(ML_DIR)
+# Train both classifiers (baseline + mtd).
+all-train:
+	$(MAKE) train NO_MTD=1
+	$(MAKE) train
 
-attack: $(MODEL)
-	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) $(MTD_FLAG) --model $(MODEL) --scaler $(SCALER) --trace $(TEST_TRACE)
+evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
+	$(PYTHON) classify.py --mode evaluate --load-model --test-pcap $(TEST_PCAP) \
+		--model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --out-dir $(EVAL_OUT_DIR)
 
-# Baseline: same as `attack` but with MTD disabled (mosquitto on 8883, no
-# coordinator, plain publisher). Recursive make so every path resolves under
-# output/baseline/ (prerequisites build the baseline dataset + model first).
-# The classifier should fingerprint the SCMC and the block should take it down
-# — the threat MTD must counter.
+attack: $(ATTACK_MODEL)
+	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
+
+# Cross-model: the foreign model must be trained already — don't silently
+# rebuild it on the wrong dataset.
+ifneq ($(MODEL_SRC),$(VARIANT))
+$(ATTACK_MODEL):
+	@echo "Cross-model: $@ not found. Train it first: 'make train NO_MTD=1' (baseline) or 'make train' (mtd)." >&2; exit 1
+endif
+
+# Baseline: same as `attack` but with MTD disabled.
 baseline:
 	$(MAKE) attack NO_MTD=1
 
@@ -122,5 +206,28 @@ experiment: datasets train attack
 experiment-baseline:
 	$(MAKE) experiment NO_MTD=1
 
+# All three evaluation/attack combinations in dependency order:
+# 1. baseline dataset + baseline model (also trains baseline model)
+# 2. mtd dataset + mtd model (also trains mtd model)
+# 3. mtd dataset + baseline model (cross-model; both models already exist after 1+2)
+all-evaluate:
+	$(MAKE) evaluate NO_MTD=1
+	$(MAKE) evaluate
+	$(MAKE) evaluate MODEL_SRC=baseline
+
+all-attack:
+	$(MAKE) attack NO_MTD=1
+	$(MAKE) attack
+	$(MAKE) attack MODEL_SRC=baseline
+
+all:
+	$(MAKE) all-datasets
+	$(MAKE) all-evaluate
+	$(MAKE) all-attack
+	$(MAKE) plots
+
+plots:
+	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --bg-replay-mbps $(BG_REPLAY_MBPS)
+
 clean:
-	rm -rf output/mtd output/baseline
+	rm -rf output/models output/datasets output/ml-results output/experiment-results output/plots
