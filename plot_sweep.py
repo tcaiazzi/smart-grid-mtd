@@ -2,12 +2,12 @@
 """
 plot_sweep.py — paper sweep figures from run_sweep.sh results
 
-Reads:   output/sweep_manifest.csv
-         output/plots/<slug>/summary.csv   (one per config, from plot_results.py)
-Writes:  output/plots/sweep/e1_address_diversity.pdf
-         output/plots/sweep/e2_hop_interval.pdf
-         output/plots/sweep/e3_bg_noise.pdf
-         output/plots/sweep/sweep_results.csv
+Reads:   output/sweep_manifest.csv            (slug column = experiment dir name)
+         output/<exp-dir>/summary.csv         (one per config, from plot_results.py)
+Writes:  output/sweep/e1_address_diversity.pdf
+         output/sweep/e2_hop_interval.pdf
+         output/sweep/e3_bg_noise.pdf
+         output/sweep/sweep_results.csv
 
 Usage:
   .venv/bin/python plot_sweep.py
@@ -236,9 +236,10 @@ def plot_e2_delivery(df: pd.DataFrame, out_path: str) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Generate paper sweep figures")
     p.add_argument("--manifest",   default="output/sweep_manifest.csv")
-    p.add_argument("--plots-root", default="output/plots",
-                   help="Root dir containing per-config plots/ subdirs")
-    p.add_argument("--out-dir",    default="output/plots/sweep")
+    p.add_argument("--plots-root", default="output",
+                   help="Root dir containing the per-experiment dirs "
+                        "(each holds summary.csv)")
+    p.add_argument("--out-dir",    default="output/sweep")
     args = p.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)

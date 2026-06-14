@@ -16,7 +16,7 @@ Usage:
     python3 cert_authority.py --shared-key <hex64>
                               [--host 0.0.0.0] [--port 9999]
                               [--out-dir /etc/mosquitto/certs/]
-                              [--server-cn semp] [--server-ip 10.1.0.2]
+                              [--server-cn semp] [--server-ip 10.1.0.2,10.1.0.4,...]
 """
 
 import argparse
@@ -80,15 +80,23 @@ def generate_ca(out_dir: str):
 
 
 def generate_server_cert(ca_key, ca_cert, cn: str, ip: str, out_dir: str):
-    """Generate server key + certificate signed by the CA. Save to out_dir."""
+    """Generate server key + certificate signed by the CA. Save to out_dir.
+
+    `ip` may be a comma-separated list of addresses (the MTD IP-hop pool); each
+    valid address is added as its own SAN IP entry so the single broker cert is
+    valid on every address it can appear on after a hop.
+    """
     srv_key = generate_key()
 
     san_entries = [x509.DNSName(cn)]
-    if ip:
+    for entry in (ip or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
         try:
-            san_entries.append(x509.IPAddress(ipaddress.ip_address(ip)))
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(entry)))
         except ValueError:
-            print(f"[CA] Warning: invalid server IP '{ip}', skipping SAN IP entry")
+            print(f"[CA] Warning: invalid server IP '{entry}', skipping SAN IP entry")
 
     srv_cert = (
         x509.CertificateBuilder()
@@ -230,7 +238,8 @@ def main():
     parser.add_argument("--server-cn", default="semp",
                         help="CN for the broker certificate (default: semp)")
     parser.add_argument("--server-ip", default="",
-                        help="IP to include in the broker certificate SAN")
+                        help="IP(s) to include in the broker certificate SAN; "
+                             "comma-separated to cover an MTD IP-hop pool")
     args = parser.parse_args()
 
     if len(args.shared_key) != 64:

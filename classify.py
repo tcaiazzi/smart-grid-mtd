@@ -415,9 +415,9 @@ def evaluate(
             )
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     fig.tight_layout()
-    fig.savefig(out_dir / "confusion_matrix.pdf", dpi=120)
+    fig.savefig(out_dir / "confusion_matrix.png", dpi=120)
     plt.close(fig)
-    print(f"[evaluate] Saved: {out_dir / 'confusion_matrix.pdf'}")
+    print(f"[evaluate] Saved: {out_dir / 'confusion_matrix.png'}")
 
 
 def save_artifacts(
@@ -502,9 +502,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--scmc-ip", default="10.0.0.2")
     p.add_argument("--semp-ip", default="10.1.0.2")
     p.add_argument("--broker-port", type=int, default=8883)
-    p.add_argument("--model", default="output/ml_results/model.pt")
-    p.add_argument("--scaler", default="output/ml_results/scaler.pkl")
-    p.add_argument("--out-dir", default="output/ml_results")
+    p.add_argument("--model", default="output/model.pt")
+    p.add_argument("--scaler", default="output/scaler.pkl")
+    p.add_argument("--out-dir", default="output")
     p.add_argument("--window-size", type=int, default=32)
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--batch-size", type=int, default=64)
@@ -551,6 +551,10 @@ def main() -> None:
     elif args.mode == "evaluate":
         if not args.test_pcap:
             sys.exit("[ERROR] --test-pcap required for evaluate mode")
+
+        # Results are written straight to --out-dir; the caller (Makefile) points
+        # it at the per-experiment eval/model-<src>/ directory.
+        results_dir = out_dir
 
         if args.load_model:
             model, scaler = load_artifacts(args.model, args.scaler)
@@ -601,9 +605,9 @@ def main() -> None:
             threshold=args.threshold,
             device=device,
         )
-        evaluate(pkt_preds, out_dir)
+        evaluate(pkt_preds, results_dir)
 
-        csv_path = out_dir / "predictions.csv"
+        csv_path = results_dir / "predictions.csv"
         pkt_preds.to_csv(csv_path, index=False)
         print(f"[main] Per-packet predictions saved to {csv_path}")
 

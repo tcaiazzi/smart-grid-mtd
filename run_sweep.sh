@@ -11,9 +11,10 @@
 # are comparable.  The baseline (no-MTD) run is shared for E0/E1/E2
 # (same noise level) and re-run independently for each E3 noise level.
 #
-# Outputs per config:
-#   output/experiment-results/<slug>/   attack captures, broker log
-#   output/plots/<slug>/summary.csv     detection score + availability
+# Outputs per config (one self-contained dir per experiment):
+#   output/<exp-dir>/attack/model-<src>/   attack captures, broker log
+#   output/<exp-dir>/summary.csv           detection score + availability
+#   exp-dir = baseline-mbps<M> | mtd-<slug>
 #
 # After the sweep:
 #   .venv/bin/python plot_sweep.py
@@ -57,10 +58,16 @@ make_slug() {
 run_baseline() {
     local mbps=${1:-$DEFAULT_MBPS}
     log "  baseline (no MTD, mbps=$mbps)"
-    run "rm -rf output/models/baseline output/datasets/baseline"
-    run "make datasets NO_MTD=1 BG_REPLAY_MBPS=$mbps"
-    run "make train    NO_MTD=1"
+    #run "rm -rf output/baseline-mbps$mbps"
+    #run "make datasets NO_MTD=1 BG_REPLAY_MBPS=$mbps"
+    #run "make train    NO_MTD=1 BG_REPLAY_MBPS=$mbps"
+    #run "make evaluate NO_MTD=1 BG_REPLAY_MBPS=$mbps"
     run "make attack   NO_MTD=1 BG_REPLAY_MBPS=$mbps"
+
+    # Standalone baseline figures (availability + detection) in its own dir.
+    run "$PYTHON plot_results.py --baseline-only \
+        --bg-replay-mbps $mbps \
+        --plots-dir output/baseline-mbps$mbps"
 }
 
 # ── One MTD configuration ─────────────────────────────────────────────────────
@@ -73,11 +80,9 @@ run_config() {
     n_ports=$(count_items "$port_pool")
     n_pads=$(count_items  "$pad_buckets")
     slug=$(make_slug "$hop" "$pad_interval" "$ip_pool" "$port_pool" "$pad_buckets" "$mbps")
+    local exp="mtd-$slug"
 
-    log "  [$experiment] $slug"
-
-    # MTD dataset and model change with every parameter combo — always regenerate.
-    run "rm -rf output/models/mtd output/datasets/mtd"
+    log "  [$experiment] $exp"
 
     local args=(
         "MTD_HOP_INTERVAL=$hop"
@@ -87,29 +92,48 @@ run_config() {
         "MTD_PAD_INTERVAL=$pad_interval"
         "BG_REPLAY_MBPS=$mbps"
     )
-    run "make datasets ${args[*]}"
-    run "make train    ${args[*]}"
+
+    # Reuse an existing config when its datasets + model are already built:
+    # regenerating them is the expensive part, so only the attack is re-run.
+    # Otherwise build the config from scratch (wipe any partial dir first).
+    if [[ -f "output/$exp/datasets/train.pcap" \
+       && -f "output/$exp/datasets/test.pcap" \
+       && -f "output/$exp/model/model.pt" ]]; then
+        log "    datasets + model present — running attack only"
+    else
+        log "    datasets/model missing — full rebuild"
+        run "rm -rf output/$exp"
+        run "make datasets ${args[*]}"
+        run "make train    ${args[*]}"
+        # Evaluate on the held-out test set — writes eval/model-<src>/predictions.csv,
+        # which plot_results.py reads for the top-k suspected-flows chart.
+        run "make evaluate ${args[*]}"
+        # Cross-model eval: MTD test traffic scored with the baseline-trained model.
+        run "make evaluate MODEL_SRC=baseline ${args[*]}"
+    fi
+
     # MTD scenario with MTD-trained model
     run "make attack   ${args[*]}"
     # Cross-model: MTD traffic but attacker uses the baseline-trained model
     run "make attack MODEL_SRC=baseline ${args[*]}"
 
-    # Per-config summary.csv for plot_sweep.py to collect
+    # Per-config summary.csv (lands in output/$exp/) for plot_sweep.py to collect
     run "$PYTHON plot_results.py \
         --mtd-params-slug '$slug' \
         --bg-replay-mbps $mbps \
-        --plots-dir output/plots/$slug"
+        --plots-dir output/$exp"
 
-    # Manifest (idempotent: skip if slug already recorded)
+    # Manifest (idempotent: skip if already recorded). The slug column holds the
+    # experiment dir name so plot_sweep reads output/<slug>/summary.csv.
     mkdir -p output
     if [[ ! -f "$MANIFEST" ]]; then
         printf 'experiment,hop,n_ips,n_ports,n_pads,pad_interval,bg_mbps,slug\n' \
             > "$MANIFEST"
     fi
-    if ! grep -qF "$slug" "$MANIFEST" 2>/dev/null; then
+    if ! grep -qF "$exp" "$MANIFEST" 2>/dev/null; then
         printf '%s,%d,%d,%d,%d,%d,%d,%s\n' \
             "$experiment" "$hop" "$n_ips" "$n_ports" "$n_pads" \
-            "$pad_interval" "$mbps" "$slug" >> "$MANIFEST"
+            "$pad_interval" "$mbps" "$exp" >> "$MANIFEST"
     fi
 }
 

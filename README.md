@@ -75,3 +75,29 @@ Variables can be overridden on the command line:
 ```bash
 make experiment DATASET_DURATION=60 MTD_HOP_INTERVAL=1
 ```
+
+### Output layout
+
+Everything for one parameter configuration is written to a single self-contained
+directory `output/<exp-slug>/`, where the slug is `baseline-mbps<M>` for the
+baseline variant and `mtd-hop<H>-padint<PI>-ips<NI>-ports<NP>-pads<NB>-mbps<M>`
+for an MTD configuration:
+
+```
+output/
+  baseline-mbps2/
+    datasets/   train.pcap test.pcap  train.client.log train.mosquitto.log  test.*.log
+    model/      model.pt scaler.pkl
+    eval/       model-baseline/   predictions.csv roc_curve.pdf confusion_matrix.png
+    attack/     model-baseline/   attacker_capture.pcap router_capture.pcap nanogrid_ranking.csv mosquitto.log client.log
+    summary.csv detection.pdf availability.pdf            # from `make plots`
+  mtd-hop2-padint3-ips3-ports5-pads7-mbps2/
+    datasets/  model/
+    eval/  attack/    model-mtd/...  model-baseline/...   # cross-model results too
+    summary.csv ...
+  sweep/        e1_*.pdf e2_*.pdf e3_*.pdf sweep_results.csv   # aggregate (run_sweep.sh)
+  sweep_manifest.csv
+```
+
+Results are keyed by the scoring model (`model-mtd` / `model-baseline`); the
+cross-model run reads the baseline model from `output/baseline-mbps<M>/model/`.

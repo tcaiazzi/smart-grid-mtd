@@ -1,12 +1,14 @@
 import argparse
 import logging
 import docker
+import sys
 import tarfile
 import io
 import os
 import time
 
 from Kathara.manager.Kathara import Kathara
+from Kathara.setting.Setting import Setting
 from Kathara.model.Lab import Lab
 
 from classify import (
@@ -17,10 +19,45 @@ from classify import (
 )
 from split_trace import split_trace
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 log = logging.getLogger(__name__)
+
+
+class _Tee:
+    """A write-through stream that fans out to several underlying streams.
+
+    Used to mirror stdout onto a log file while still printing to the console.
+    """
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            s.write(data)
+            s.flush()
+
+    def flush(self):
+        for s in self._streams:
+            s.flush()
+
+
+def setup_run_log(log_path: str) -> None:
+    """Tee stdout and the logging output of this run into log_path.
+
+    Captures both the experiment narration (log.* — deploy/capture/ranking) and
+    plain prints (e.g. the model scoring) so each run leaves a self-contained
+    transcript next to its artifacts. One shared, line-buffered file object backs
+    both sinks so console and file stay in lock-step and a `tail -f` works live.
+    """
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    log_file = open(log_path, "w", buffering=1)
+    sys.stdout = _Tee(sys.__stdout__, log_file)
+    handler = logging.StreamHandler(log_file)
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    logging.getLogger().addHandler(handler)
+    log.info("Logging this run to %s", log_path)
 
 
 def generate_shared_key(n_bytes: int = 32) -> str:
@@ -87,6 +124,68 @@ def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str) -> tup
     return str(ranking.index[0]), ranking
 
 
+def scmc_client_command(args, duration=None):
+    """Build the SCMC publisher command for the active variant.
+
+    Baseline (--no-mtd) runs the plain simple_client; otherwise the MTD executor.
+    When `duration` is set the command is wrapped in `timeout` so it self-terminates.
+    """
+    prefix = f"timeout {duration} " if duration is not None else ""
+    if args.no_mtd:
+        return (
+            prefix
+            + "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl "
+            "--cafile certs/ca.crt --certfile certs/client.crt "
+            "--keyfile certs/client.key --log-file simple_client.log"
+        )
+    return (
+        prefix
+        + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
+        "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
+        "--semp-control-ip 10.1.0.2 --semp-control-port 9998 --log-file mtd_executor.log"
+    )
+
+
+def experiment_slug(args) -> str:
+    """Compact directory name for one parameter configuration.
+
+    Mirrors the Makefile's EXP_SLUG / MTD_PARAMS_SLUG exactly so a standalone run
+    lands in the same output/<slug>/ directory the Makefile expects:
+        baseline -> baseline-mbps<M>
+        mtd      -> mtd-hop<H>-padint<PI>-ips<NI>-ports<NP>-pads<NB>-mbps<M>
+    """
+    if args.no_mtd:
+        return f"baseline-mbps{args.bg_replay_mbps}"
+    n_ips = len(args.mtd_ip_pool.split(","))
+    n_ports = len(args.mtd_port_pool.split(","))
+    n_pads = len(args.mtd_pad_buckets.split(","))
+    return (
+        f"mtd-hop{args.mtd_hop_interval}-padint{args.mtd_pad_interval}"
+        f"-ips{n_ips}-ports{n_ports}-pads{n_pads}-mbps{args.bg_replay_mbps}"
+    )
+
+
+def download_logs(scmc, semp, args, dst_dir, prefix=""):
+    """Download the SCMC client log and the broker log into dst_dir.
+
+    `prefix` (e.g. the capture name) is prepended to the filenames so several
+    captures can share one directory without colliding (train.client.log vs
+    test.client.log); attack runs pass no prefix (client.log / mosquitto.log).
+    """
+    log.info("Downloading client log")
+    download_file_from_container(
+        scmc.api_object,
+        "simple_client.log" if args.no_mtd else "mtd_executor.log",
+        f"{dst_dir}/{prefix}client.log",
+    )
+    log.info("Downloading broker log")
+    download_file_from_container(
+        semp.api_object,
+        "/var/log/mosquitto/mosquitto.log",
+        f"{dst_dir}/{prefix}mosquitto.log",
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Smart-grid MTD experiment")
     p.add_argument(
@@ -101,7 +200,7 @@ def _parse_args() -> argparse.Namespace:
         "--name",
         default="dataset",
         help="Name tag for the output PCAP file (default: 'dataset' "
-        "→ output/datasets/dataset.pcap). Use different names for "
+        "→ <datasets-dir>/dataset.pcap). Use different names for "
         "train/test captures, e.g. --name train, --name test.",
     )
     p.add_argument(
@@ -133,15 +232,15 @@ def _parse_args() -> argparse.Namespace:
         "--datasets-dir",
         default=None,
         metavar="DIR",
-        help="Directory where captured dataset PCAPs are saved "
-        "(default: output/<variant>/datasets/).",
+        help="Directory where the captured dataset PCAP + capture logs are saved "
+        "(default: output/<exp-slug>/datasets/).",
     )
     p.add_argument(
         "--results-dir",
         default=None,
         metavar="DIR",
         help="Directory where attack artifacts are saved "
-        "(default: output/<variant>/).",
+        "(default: output/<exp-slug>/attack/model-<variant>/).",
     )
     p.add_argument(
         "--attack",
@@ -168,13 +267,15 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--model",
-        default="output/ml_results/model.pt",
-        help="Path to the trained model (default: output/ml_results/model.pt).",
+        default="output/model.pt",
+        help="Path to the trained model used by --attack (the Makefile passes the "
+        "per-experiment path; default output/model.pt is a standalone placeholder).",
     )
     p.add_argument(
         "--scaler",
-        default="output/ml_results/scaler.pkl",
-        help="Path to the fitted scaler (default: output/ml_results/scaler.pkl).",
+        default="output/scaler.pkl",
+        help="Path to the fitted scaler (the Makefile passes the per-experiment "
+        "path; default output/scaler.pkl is a standalone placeholder).",
     )
     mtd = p.add_argument_group("MTD parameters (ignored in --no-mtd baseline mode)")
     mtd.add_argument(
@@ -215,13 +316,22 @@ def _parse_args() -> argparse.Namespace:
 def main():
     args = _parse_args()
 
-    # Keep MTD and baseline (no-MTD) artifacts in separate output trees so the
-    # two runs never overwrite each other: output/mtd/... vs output/baseline/...
+    # Variant label used for the per-experiment output dir and the model tag.
     variant = "baseline" if args.no_mtd else "mtd"
+
+    # Tee this run's stdout into a log file next to its artifacts. The output dir
+    # is recomputed identically inside the --generate-dataset / --attack branches.
+    if args.generate_dataset is not None:
+        datasets_dir = args.datasets_dir or f"./output/{experiment_slug(args)}/datasets"
+        setup_run_log(f"{datasets_dir}/{args.name}.run.log")
+    elif args.attack is not None:
+        out_dir = args.results_dir or f"./output/{experiment_slug(args)}/attack/model-{variant}"
+        setup_run_log(f"{out_dir}/run.log")
 
     log.info("Initializing Kathara manager")
     manager = Kathara.get_instance()
-    manager.wipe()
+
+    Setting.get_instance().load_from_dict({"network_plugin": "kathara/katharanp_vde"})
 
     log.info("Creating lab and machines")
     lab = Lab("test")
@@ -300,6 +410,9 @@ def main():
         ],
     )
 
+    log.info("Undeploying eventually existing lab (to avoid conflicts)")
+    manager.undeploy_lab(lab=lab)
+
     log.info("Deploying lab")
     manager.deploy_lab(lab=lab)
 
@@ -309,7 +422,7 @@ def main():
     log.info("Executing certification authority server")
     manager.exec_obj(
         semp,
-        f"python3 cert_authority.py --shared-key {shared_key} --host 0.0.0.0 --port 9999 --out-dir /etc/mosquitto/certs/ --server-cn semp --server-ip 10.1.0.2",
+        f"python3 cert_authority.py --shared-key {shared_key} --host 0.0.0.0 --port 9999 --out-dir /etc/mosquitto/certs/ --server-cn semp --server-ip {args.mtd_ip_pool}",
         wait=False,
     )
 
@@ -346,21 +459,24 @@ def main():
 
     if args.generate_dataset is not None:
         duration = args.generate_dataset
-        pcap_name = f"{args.name}.pcap"
-        datasets_dir = args.datasets_dir or f"./output/{variant}/datasets"
+        datasets_dir = args.datasets_dir or f"./output/{experiment_slug(args)}/datasets"
         os.makedirs(datasets_dir, exist_ok=True)
+        pcap_name = f"{args.name}.pcap"
         local_path = f"{datasets_dir}/{pcap_name}"
 
         log.info("[Dataset] Capturing mixed traffic (%ds) → %s", duration, local_path)
+        log.info("[Dataset] Starting background traffic replay on router at %d Mbps", args.bg_replay_mbps)
         manager.exec_obj(
             router,
-            f"timeout {duration} bash ./replay_background.sh eth1 {args.bg_replay_mbps} 1",
+            f"timeout {duration} bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0",
         )
-        if args.no_mtd:
-            agent_stream = manager.exec_obj(scmc, f"timeout {duration} python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --log-file simple_client.log")
-        else:
-            agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998 --log-file mtd_executor.log")
+        log.info("[Dataset] Starting SCMC client in parallel with the replay")
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args))
         # _drain(agent_stream, to_print=True)
+
+        # manager.connect_tty_obj(scmc)
+        # manager.connect_tty_obj(router)
+        # manager.connect_tty_obj(semp)
 
         capture_stream = manager.exec_obj(
             router,
@@ -377,37 +493,26 @@ def main():
         )
         log.info("[Dataset] Dataset saved to %s", local_path)
 
-        if args.no_mtd:
-            log.info("[Dataset] Downloading client log")
-            download_file_from_container(
-                scmc.api_object, "simple_client.log",
-                f"{datasets_dir}/simple_client.log",
-            )
-        else:
-            log.info("[Dataset] Downloading executor log")
-            download_file_from_container(
-                scmc.api_object, "mtd_executor.log",
-                f"{datasets_dir}/mtd_executor.log",
-            )
+        download_logs(scmc, semp, args, datasets_dir, prefix=f"{args.name}.")
 
     elif args.attack is not None:
         sniff_duration = args.attack
-        out_dir = args.results_dir or f"./output/{variant}"
+        out_dir = args.results_dir or f"./output/{experiment_slug(args)}/attack/model-{variant}"
         os.makedirs(out_dir, exist_ok=True)
         attacker_cap = f"{out_dir}/attacker_capture.pcap"
 
-        log.info("[Router] Starting background traffic replay on router")
+        log.info("[Attack] Starting background traffic replay on router")
         manager.exec_obj(router, f"bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0")
 
-        log.info("[SCMC] Starting scmc client")
-        if args.no_mtd:
-            agent_stream = manager.exec_obj(scmc, "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --log-file simple_client.log")
-        else:
-            agent_stream = manager.exec_obj(scmc, "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl --cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key --semp-control-ip 10.1.0.2 --semp-control-port 9998 --log-file mtd_executor.log")
+        log.info("[Attack] Starting scmc client")
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args))
         # _drain(agent_stream, to_print=True)
 
-        log.info("[Router] Starting router capture (before + after attack)")
+        log.info("[Attack] Starting router capture (before + after attack)")
         manager.exec_obj(router, "tcpdump -i eth1 -w router_capture.pcap")
+
+        log.info("[Attack] Starting scmc capture (before + after attack)")
+        manager.exec_obj(scmc, "tcpdump -i eth0 -w scmc_capture.pcap")
 
         # Attacker sniffs link B for `sniff_duration` seconds to build its dataset.
         log.info("[Attack] Attacker sniffing for %ds", sniff_duration)
@@ -445,32 +550,21 @@ def main():
         log.info("[Attack] Observing post-attack effect for %ds", args.post_attack)
         time.sleep(args.post_attack)
 
-        log.info("[Router] Stopping router capture")
+        log.info("[Attack] Stopping router capture")
         manager.exec_obj(router, "pkill -INT tcpdump")
         time.sleep(2)  # let tcpdump flush the file before download
 
-        log.info("[Router] Downloading router capture and broker log")
+        log.info("[Attack] Downloading router capture")
         download_file_from_container(
             router.api_object, "router_capture.pcap", f"{out_dir}/router_capture.pcap"
         )
+
+        log.info("[Attack] Downloading scmc capture")
         download_file_from_container(
-            semp.api_object,
-            "/var/log/mosquitto/mosquitto.log",
-            f"{out_dir}/mosquitto.log",
+            scmc.api_object, "scmc_capture.pcap", f"{out_dir}/scmc_capture.pcap"
         )
-        if args.no_mtd:
-            log.info("[SCMC] Downloading client log")
-            download_file_from_container(
-                scmc.api_object, "simple_client.log",
-                f"{out_dir}/simple_client.log",
-            )
-        else:
-            log.info("[SCMC] Downloading executor log")
-            download_file_from_container(
-                scmc.api_object, "mtd_executor.log",
-                f"{out_dir}/mtd_executor.log",
-            )
-        log.info("[Experiment] Captures saved to %s/", out_dir)
+        download_logs(scmc, semp, args, out_dir)
+        log.info("[Attack] Captures saved to %s/", out_dir)
 
     log.info("Undeploying lab")
     manager.undeploy_lab(lab=lab)

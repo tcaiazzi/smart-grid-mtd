@@ -7,11 +7,14 @@
 #   make attack       # run the model-driven attack in the lab
 #   make experiment   # full pipeline: datasets -> train -> attack
 #
-# Output structure:
-#   output/models/<variant>/              trained model + scaler
-#   output/datasets/<variant>/            train/test PCAPs
-#   output/ml-results/<scenario-slug>/    evaluate metrics (predictions, plots)
-#   output/experiment-results/<slug>/     attack captures, ranking, broker log
+# Output structure — one self-contained directory per experiment config:
+#   output/<exp-slug>/                     exp-slug = baseline-mbps<M> | mtd-<MTD_PARAMS_SLUG>
+#     datasets/                            train/test PCAPs + capture logs
+#     model/                               trained model + scaler
+#     eval/model-<src>/                    evaluate metrics (predictions, plots)
+#     attack/model-<src>/                  attack captures, ranking, broker log
+#     summary.csv + comparison plots       (from `make plots`)
+#   output/sweep/                          aggregate sweep plots (from run_sweep.sh)
 #
 # MTD vs baseline: set NO_MTD=1 for the baseline (no-MTD) variant.
 # Cross-model attack: MODEL_SRC=baseline uses the baseline model on MTD traffic.
@@ -44,7 +47,8 @@ TRAIN_TRACE ?= $(SPLIT_DIR)/$(basename $(notdir $(BG_TRACE)))_train.pcap
 TEST_TRACE  ?= $(SPLIT_DIR)/$(basename $(notdir $(BG_TRACE)))_test.pcap
 
 DATASET_DURATION ?= 120
-ATTACK_DURATION  ?= 30
+ATTACK_DURATION  ?= 40
+POST_ATTACK      ?= 40
 BG_REPLAY_MBPS   ?= 2
 
 # ── MTD parameters ─────────────────────────────────────────────────────────────
@@ -52,7 +56,7 @@ BG_REPLAY_MBPS   ?= 2
 # Shorter intervals and larger pools create more candidate flows, diluting the
 # nanogrid signal seen by the attacker.
 MTD_HOP_INTERVAL ?= 2
-MTD_IP_POOL      ?= 10.1.0.2,10.1.0.4,10.1.0.5
+MTD_IP_POOL      ?= 10.1.0.2
 MTD_PORT_POOL    ?= 8883,8884,8885,8886,8887
 MTD_PAD_BUCKETS  ?= 128,256,384,512,640,768,1024
 MTD_PAD_INTERVAL ?= 3
@@ -74,38 +78,46 @@ MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_I
 # on MTD traffic (cross-model attack).
 MODEL_SRC ?= $(VARIANT)
 
-# ── Scenario slug ─────────────────────────────────────────────────────────────
-# Identifies the (dataset-variant, model-variant, MTD-params) triple.
-# MTD params are omitted for the baseline scenario (coordinator not started).
+# ── Experiment directory ─────────────────────────────────────────────────────
+# Everything for one parameter configuration lives under output/<EXP_SLUG>/:
+#   datasets/  model/  eval/model-<src>/  attack/model-<src>/  summary.csv
+# The slug reuses the compact MTD_PARAMS_SLUG; baseline omits the MTD params
+# (the coordinator is not started) and keys on the replay rate only.
 ifeq ($(VARIANT),baseline)
-  SCENARIO_SLUG := baseline-scenario-baseline-model-mbps$(BG_REPLAY_MBPS)
-else ifeq ($(MODEL_SRC),baseline)
-  SCENARIO_SLUG := mtd-scenario-baseline-model-$(MTD_PARAMS_SLUG)
+  EXP_SLUG := baseline-mbps$(BG_REPLAY_MBPS)
 else
-  SCENARIO_SLUG := mtd-scenario-mtd-model-$(MTD_PARAMS_SLUG)
+  EXP_SLUG := mtd-$(MTD_PARAMS_SLUG)
+endif
+EXP_DIR := output/$(EXP_SLUG)
+
+# Experiment dir whose model scores this run. MODEL_SRC=baseline (cross-model)
+# reads the baseline config's model; otherwise it's this config's own model.
+ifeq ($(MODEL_SRC),baseline)
+  MODEL_EXP_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
+else
+  MODEL_EXP_DIR := $(EXP_DIR)
 endif
 
-# ── Output directories ─────────────────────────────────────────────────────────
-MODELS_DIR   := output/models
-MODEL_DIR    := $(MODELS_DIR)/$(VARIANT)
-MODEL        := $(MODEL_DIR)/model.pt
-SCALER       := $(MODEL_DIR)/scaler.pkl
+# ── Output paths (all under the experiment dir) ──────────────────────────────
+TRAIN_PCAP := $(EXP_DIR)/datasets/train.pcap
+TEST_PCAP  := $(EXP_DIR)/datasets/test.pcap
 
-ATTACK_MODEL  := $(MODELS_DIR)/$(MODEL_SRC)/model.pt
-ATTACK_SCALER := $(MODELS_DIR)/$(MODEL_SRC)/scaler.pkl
+MODEL  := $(EXP_DIR)/model/model.pt
+SCALER := $(EXP_DIR)/model/scaler.pkl
 
-DATASETS_DIR := output/datasets/$(VARIANT)
-TRAIN_PCAP   := $(DATASETS_DIR)/train.pcap
-TEST_PCAP    := $(DATASETS_DIR)/test.pcap
+ATTACK_MODEL  := $(MODEL_EXP_DIR)/model/model.pt
+ATTACK_SCALER := $(MODEL_EXP_DIR)/model/scaler.pkl
 
-EVAL_OUT_DIR   := output/ml-results/$(SCENARIO_SLUG)
-ATTACK_OUT_DIR := output/experiment-results/$(SCENARIO_SLUG)
+# Results are keyed by the scoring model's variant so the cross-model run does
+# not overwrite the own-model run.
+EVAL_OUT_DIR   := $(EXP_DIR)/eval/model-$(MODEL_SRC)
+ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
-	@echo "Scenario slug: $(SCENARIO_SLUG)"
+	@echo "Experiment dir: $(EXP_DIR)"
 	@echo ""
 	@echo "Targets:"
 	@echo "  split               Split $(BG_TRACE) into train/test traces (SPLIT_RATIO=$(SPLIT_RATIO))"
@@ -119,7 +131,8 @@ help:
 	@echo "                      -> $(EVAL_OUT_DIR)"
 	@echo "                      Cross-model: make evaluate MODEL_SRC=baseline"
 	@echo "  all-evaluate        Run all three evaluations: no-mtd/no-mtd, mtd/mtd, mtd/no-mtd"
-	@echo "  attack              Run the model-driven attack (ATTACK_DURATION=$(ATTACK_DURATION)s)"
+	@echo "  attack              Run the model-driven attack (ATTACK_DURATION=$(ATTACK_DURATION)s,"
+	@echo "                      POST_ATTACK=$(POST_ATTACK)s observed after the block)"
 	@echo "                      -> $(ATTACK_OUT_DIR)"
 	@echo "                      Cross-model: make attack MODEL_SRC=baseline"
 	@echo "  baseline            Run the attack with MTD disabled"
@@ -127,7 +140,8 @@ help:
 	@echo "  all                 Full pipeline: both datasets -> all-evaluate -> all-attack -> plots"
 	@echo "  experiment          Full pipeline with MTD: datasets -> train -> attack"
 	@echo "  experiment-baseline Full pipeline without MTD (NO_MTD=1)"
-	@echo "  plots               Compare scenarios -> output/plots/"
+	@echo "  plots               Compare scenarios -> $(EXP_DIR)/"
+	@echo "  plots-baseline      Standalone baseline figures -> output/baseline-mbps$(BG_REPLAY_MBPS)/"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
 	@echo "MTD parameters (override on the command line):"
@@ -151,39 +165,39 @@ dataset-train: $(TRAIN_PCAP)
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
 	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
-		--name train --trace $(TRAIN_TRACE) --datasets-dir $(DATASETS_DIR)
+		--name train --trace $(TRAIN_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
 	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
-		--name test --trace $(TEST_TRACE) --datasets-dir $(DATASETS_DIR)
+		--name test --trace $(TEST_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 datasets: dataset-train dataset-test
 
 # Generate datasets for both variants (baseline + mtd).
 all-datasets:
 	$(MAKE) datasets NO_MTD=1
-	$(MAKE) datasets
+	$(MAKE) datasets NO_MTD=0
 
-# Training produces model.pt + scaler.pkl in $(MODEL_DIR)
+# Training produces model.pt + scaler.pkl in $(EXP_DIR)/model
 $(MODEL):
-	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(MODEL_DIR)
+	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model
 
 train: $(MODEL)
 
 # Train both classifiers (baseline + mtd).
 all-train:
 	$(MAKE) train NO_MTD=1
-	$(MAKE) train
+	$(MAKE) train NO_MTD=0
 
 evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 	$(PYTHON) classify.py --mode evaluate --load-model --test-pcap $(TEST_PCAP) \
 		--model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --out-dir $(EVAL_OUT_DIR)
 
 attack: $(ATTACK_MODEL)
-	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 
@@ -227,7 +241,13 @@ all:
 	$(MAKE) plots
 
 plots:
-	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --bg-replay-mbps $(BG_REPLAY_MBPS)
+	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--plots-dir $(EXP_DIR)
+
+# Standalone figures for the no-MTD baseline run -> output/baseline-mbps<M>/
+plots-baseline:
+	$(PYTHON) plot_results.py --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--plots-dir output/baseline-mbps$(BG_REPLAY_MBPS)
 
 clean:
-	rm -rf output/models output/datasets output/ml-results output/experiment-results output/plots
+	rm -rf output

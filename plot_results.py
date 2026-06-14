@@ -2,15 +2,15 @@
 """
 plot_results.py — compare the experiment scenarios produced by run_experiment.py
 
-Three scenarios are compared (defaults match the output tree built by the
-Makefile targets):
+Three scenarios are compared (defaults match the per-experiment output dirs
+built by the Makefile targets — output/<exp-slug>/{eval,attack}/model-<src>/):
 
   1. Baseline           no MTD,  attacker model trained on baseline traffic
-                        -> output/baseline/
+                        -> output/baseline-mbps<M>/.../model-baseline/
   2. MTD / base model   MTD on,  attacker model trained on baseline traffic
-                        -> output/mtd/model-baseline/   (make attack MODEL_SRC=baseline)
+                        -> output/mtd-<slug>/.../model-baseline/  (make attack MODEL_SRC=baseline)
   3. MTD / MTD model    MTD on,  attacker model trained on MTD traffic
-                        -> output/mtd/
+                        -> output/mtd-<slug>/.../model-mtd/
 
 Two metrics are derived straight from the artifacts each attack run leaves on
 disk — no need to re-run the lab:
@@ -20,22 +20,29 @@ disk — no need to re-run the lab:
     and read off the nanogrid score of the real SCMC IP and whether it was the
     top-ranked (i.e. blocked) IP. Higher score / rank-1 = attacker wins.
 
-  • Availability (outcome): parse mosquitto.log for "Received PUBLISH from scmc1"
-    lines and bin them per second. When the router blackholes the SCMC the broker
-    stops receiving publishes, so the rate drops to zero — a blocked SCMC is
-    visibly cut off, a surviving one keeps publishing.
+  • Availability (outcome): match every data packet the SCMC sent (scmc_capture.pcap,
+    link A) against the packets that actually reached the SEMP segment
+    (router_capture.pcap, the router's link-B / eth1 capture). A packet counts as
+    delivered when its TCP segment — forwarded unchanged by the router — shows up in
+    the link-B capture. When the router blackholes the SCMC it keeps emitting on
+    link A but its packets never cross to link B, so the cumulative delivered curve
+    plateaus while a surviving SCMC keeps climbing. This is MTD-agnostic: it follows
+    packets by content, not by the SCMC's (hopping) broker IP/port, and needs no
+    broker log.
 
 Usage:
-  python plot_results.py                       # default 3 scenarios -> output/plots/
+  python plot_results.py                       # default 3 scenarios -> output/<exp-slug>/
   python plot_results.py --no-detection        # availability only (skip pcap scoring)
-  python plot_results.py --plots-dir output/plots --scmc-ip 10.0.0.2
+  python plot_results.py --plots-dir output/mtd-<slug> --scmc-ip 10.0.0.2
 """
 
 import argparse
+import hashlib
 import os
-import re
+import socket
 from dataclasses import dataclass, field
 
+import dpkt
 import matplotlib
 
 matplotlib.use("Agg")  # headless: write PNGs, no display needed
@@ -52,24 +59,18 @@ from classify import (
 
 DEFAULT_SCMC_IP = "10.0.0.2"   # SCMC source IP as seen on the wire (lab default)
 DETECT_THRESHOLD = 0.3         # matches classify._detect_nanogrid_ip
-PUBLISH_RE = re.compile(r"^(\d+):\s+Received PUBLISH from scmc1\b")
-CONNECT_RE = re.compile(r"New (?:connection|client connected) from (\d+\.\d+\.\d+\.\d+)")
-# Matches the telemetry line in both simple_client.log and mtd_executor.log.
-# Baseline:  [scmc1] power=  84.6 kW ...
-# MTD:       [scmc1] #1 → 10.1.0.2:8883  power=  84.6 kW ...
-SENT_RE = re.compile(r"\] (?:#\d+ → \S+\s+)?power=")
 
 
 @dataclass
 class Scenario:
     """One experiment run: where its artifacts live and which model it used."""
     label: str
-    out_dir: str                 # holds attacker_capture.pcap, mosquitto.log, ...
-    model_dir: str               # ml_results dir with model.pt + scaler.pkl
+    out_dir: str                 # holds attacker_capture.pcap, scmc/router captures, ...
+    model_dir: str               # <exp-dir>/model with model.pt + scaler.pkl
     ranking_csv: str = ""        # nanogrid_ranking.csv from attack run
     predictions_csv: str = ""    # predictions.csv from evaluate run (has label_true)
     # filled in by the analysis below
-    publish_epochs: list = field(default_factory=list)
+    delivered_epochs: list = field(default_factory=list)
     sent_count: int = 0
     delivery_ratio: float = float("nan")
     scmc_frac: float = float("nan")
@@ -79,66 +80,115 @@ class Scenario:
     ranking: pd.DataFrame = None
 
 
+def make_scenario(label: str, exp_dir: str, model_exp_dir: str, model_src: str) -> Scenario:
+    """Build a Scenario from an experiment dir and the model that scores it.
+
+    Artifacts for a config live under output/<exp-slug>/, keyed by the scoring
+    model: attack/model-<src>/ and eval/model-<src>/. The model is read from the
+    model-source config's model/ dir, so a cross-model run (MTD traffic scored by
+    the baseline model) resolves to its own distinct files.
+    """
+    attack_dir = os.path.join(exp_dir, "attack", f"model-{model_src}")
+    return Scenario(
+        label,
+        attack_dir,
+        os.path.join(model_exp_dir, "model"),
+        ranking_csv=os.path.join(attack_dir, "nanogrid_ranking.csv"),
+        predictions_csv=os.path.join(
+            exp_dir, "eval", f"model-{model_src}", "predictions.csv"
+        ),
+    )
+
+
 def default_scenarios(root: str, mtd_params_slug: str, bg_replay_mbps: int = 2) -> list:
     """The three scenarios the experiment is designed to compare."""
-    slug_b  = f"baseline-scenario-baseline-model-mbps{bg_replay_mbps}"
-    slug_mb = f"mtd-scenario-baseline-model-{mtd_params_slug}"
-    slug_mm = f"mtd-scenario-mtd-model-{mtd_params_slug}"
+    baseline_exp = os.path.join(root, f"baseline-mbps{bg_replay_mbps}")
+    mtd_exp = os.path.join(root, f"mtd-{mtd_params_slug}")
     return [
-        Scenario(
-            "Baseline\n(no MTD)",
-            os.path.join(root, "experiment-results", slug_b),
-            os.path.join(root, "models", "baseline"),
-            ranking_csv=os.path.join(root, "experiment-results", slug_b, "nanogrid_ranking.csv"),
-            predictions_csv=os.path.join(root, "ml-results", slug_b, "predictions.csv"),
-        ),
-        Scenario(
-            "MTD\n(baseline model)",
-            os.path.join(root, "experiment-results", slug_mb),
-            os.path.join(root, "models", "baseline"),
-            ranking_csv=os.path.join(root, "experiment-results", slug_mb, "nanogrid_ranking.csv"),
-            predictions_csv=os.path.join(root, "ml-results", slug_mb, "predictions.csv"),
-        ),
-        Scenario(
-            "MTD\n(MTD model)",
-            os.path.join(root, "experiment-results", slug_mm),
-            os.path.join(root, "models", "mtd"),
-            ranking_csv=os.path.join(root, "experiment-results", slug_mm, "nanogrid_ranking.csv"),
-            predictions_csv=os.path.join(root, "ml-results", slug_mm, "predictions.csv"),
-        ),
+        make_scenario("Baseline\n(no MTD)", baseline_exp, baseline_exp, "baseline"),
+        make_scenario("MTD\n(baseline model)", mtd_exp, baseline_exp, "baseline"),
+        make_scenario("MTD\n(MTD model)", mtd_exp, mtd_exp, "mtd"),
     ]
 
 
-# ── Availability: parse mosquitto.log ─────────────────────────────────────────
-
-def parse_client_sent(log_path: str) -> int:
-    """Count MQTT messages sent by the client (4 per telemetry step)."""
-    count = sum(1 for line in open(log_path, errors="replace") if SENT_RE.search(line))
-    return count * 4
+def baseline_scenarios(root: str, bg_replay_mbps: int = 2) -> list:
+    """Just the no-MTD baseline run, for standalone baseline figures."""
+    baseline_exp = os.path.join(root, f"baseline-mbps{bg_replay_mbps}")
+    return [make_scenario("Baseline\n(no MTD)", baseline_exp, baseline_exp, "baseline")]
 
 
-def parse_publish_epochs(log_path: str) -> list:
-    """Return the epoch timestamp of every PUBLISH the broker received from scmc1."""
-    epochs = []
-    with open(log_path, "r", errors="replace") as f:
-        for line in f:
-            m = PUBLISH_RE.match(line)
-            if m:
-                epochs.append(int(m.group(1)))
-    return epochs
+# ── Availability: match SCMC-sent packets against what reached the SEMP ───────
+
+def _iter_tcp(pcap_path: str):
+    """Yield (timestamp, src_ip, tcp) for every IPv4/TCP packet in a pcap.
+
+    Uses dpkt (much faster than scapy on the multi-MB link-B captures) and stops
+    cleanly on a truncated trailing record — tcpdump is killed mid-write, so the
+    last pcap record is frequently partial.
+    """
+    with open(pcap_path, "rb") as f:
+        reader = iter(dpkt.pcap.Reader(f))
+        while True:
+            try:
+                ts, buf = next(reader)
+            except StopIteration:
+                break
+            except dpkt.dpkt.NeedData:
+                break  # truncated tail record (tcpdump killed mid-write)
+            try:
+                eth = dpkt.ethernet.Ethernet(buf)
+            except dpkt.dpkt.UnpackError:
+                continue
+            ip = eth.data
+            if not isinstance(ip, dpkt.ip.IP):
+                continue
+            tcp = ip.data
+            if not isinstance(tcp, dpkt.tcp.TCP):
+                continue
+            yield ts, socket.inet_ntoa(ip.src), tcp
 
 
-def scmc_ip_from_log(log_path: str) -> str:
-    """Best-effort: the SCMC source IP the broker saw connect (fallback to default)."""
-    try:
-        with open(log_path, "r", errors="replace") as f:
-            for line in f:
-                m = CONNECT_RE.search(line)
-                if m:
-                    return m.group(1)
-    except OSError:
-        pass
-    return ""
+def _segment_key(tcp) -> bytes:
+    """Content fingerprint of a TCP segment, identical at every capture point.
+
+    The router forwards the datagram changing only the IP TTL and checksum, so the
+    TCP sequence number, source port and (TLS-encrypted) payload uniquely identify
+    the same packet on both link A (SCMC) and link B (SEMP segment).
+    """
+    return hashlib.md5(
+        tcp.seq.to_bytes(4, "big") + tcp.sport.to_bytes(2, "big") + tcp.data
+    ).digest()
+
+
+def compute_delivery(scmc_pcap: str, router_pcap: str, scmc_ip: str) -> tuple:
+    """Match SCMC-sent data packets against the packets that reached the SEMP.
+
+    Returns (delivered_epochs, sent_count):
+      • delivered_epochs — epoch timestamps of SCMC data packets (payload > 0) that
+        also appear in the router's link-B capture, i.e. were forwarded to the SEMP.
+      • sent_count       — SCMC data packets captured on link A within the router
+        capture's time window (packets emitted after the router capture stopped
+        can't be judged, so they're excluded).
+
+    A blackholed SCMC keeps emitting on link A but its packets never cross to link B,
+    so delivered_epochs stops advancing while sent_count keeps growing — the
+    cumulative availability curve plateaus at the moment of the cut-off.
+    """
+    router_keys = set()
+    router_t_max = 0.0
+    for ts, _src, tcp in _iter_tcp(router_pcap):
+        router_t_max = max(router_t_max, ts)
+        if len(tcp.data) > 0:
+            router_keys.add(_segment_key(tcp))
+
+    delivered, sent = [], 0
+    for ts, src, tcp in _iter_tcp(scmc_pcap):
+        if src != scmc_ip or len(tcp.data) == 0 or ts > router_t_max:
+            continue
+        sent += 1
+        if _segment_key(tcp) in router_keys:
+            delivered.append(ts)
+    return delivered, sent
 
 
 # ── Detection: re-score attacker_capture.pcap with the scenario's model ───────
@@ -196,28 +246,30 @@ def plot_detection(scenarios: list, out_path: str) -> None:
 
 
 def plot_availability(scenarios: list, out_path: str) -> None:
-    """Cumulative broker-received publishes over time — telemetry delivered.
+    """Cumulative SCMC packets delivered to the SEMP over time.
 
-    A surviving SCMC keeps climbing at ~4 msg/s; once the router blackholes it
-    the broker receives nothing more and the curve plateaus. Cumulative (vs a
-    per-second rate) is monotonic, so it's free of the transient one-second gaps
-    that MTD hop reconnections cause, and overlapping lines stay readable.
+    Each step is an SCMC data packet that reached the SEMP segment (matched
+    between the link-A and link-B captures). A surviving SCMC keeps climbing;
+    once the router blackholes it nothing more crosses to link B and the curve
+    plateaus. Cumulative (vs a per-second rate) is monotonic, so it's free of the
+    transient gaps that MTD hop reconnections cause, and overlapping lines stay
+    readable.
     """
-    have = [s for s in scenarios if s.publish_epochs]
+    have = [s for s in scenarios if s.delivered_epochs]
     if not have:
-        print("[plot] no publish data — skipping availability chart")
+        print("[plot] no delivery data — skipping availability chart")
         return
 
-    # Common axis: align each scenario to its own first publish, extend every
+    # Common axis: align each scenario to its own first delivery, extend every
     # curve flat to the longest run so an early plateau (cut-off) stands out.
-    spans = [max(s.publish_epochs) - min(s.publish_epochs) for s in have]
+    spans = [max(s.delivered_epochs) - min(s.delivered_epochs) for s in have]
     t_max = max(spans) + 3
     styles = ["-", "--", ":", "-."]
 
     fig, ax = plt.subplots(figsize=(9, 5))
     for i, s in enumerate(have):
-        t0 = min(s.publish_epochs)
-        rel = np.array(sorted(e - t0 for e in s.publish_epochs), dtype=float)
+        t0 = min(s.delivered_epochs)
+        rel = np.array(sorted(e - t0 for e in s.delivered_epochs), dtype=float)
         cum = np.arange(1, len(rel) + 1, dtype=float)
         # frame at 0 and hold the final value to t_max (flat tail = no telemetry)
         rel = np.concatenate(([0.0], rel, [t_max]))
@@ -225,8 +277,8 @@ def plot_availability(scenarios: list, out_path: str) -> None:
         ax.step(rel, cum, where="post", lw=2.2, alpha=0.8,
                 ls=styles[i % len(styles)], label=s.label.replace("\n", " "))
 
-    ax.set_xlabel("time since first publish (s)")
-    ax.set_ylabel("cumulative PUBLISH received by broker")
+    ax.set_xlabel("time since first delivery (s)")
+    ax.set_ylabel("cumulative SCMC packets delivered to SEMP")
     ax.set_title("SCMC availability — telemetry delivered during the attack")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(True, alpha=0.3)
@@ -298,33 +350,30 @@ def plot_topk_flows(scenarios: list, out_path: str, k: int = 5) -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
+    ip = scmc_ip or DEFAULT_SCMC_IP   # SCMC source IP on both link A and link B
     for s in scenarios:
-        log_path = os.path.join(s.out_dir, "mosquitto.log")
-        pcap_path = os.path.join(s.out_dir, "attacker_capture.pcap")
+        scmc_pcap = os.path.join(s.out_dir, "scmc_capture.pcap")
+        router_pcap = os.path.join(s.out_dir, "router_capture.pcap")
+        attacker_pcap = os.path.join(s.out_dir, "attacker_capture.pcap")
 
-        # Availability
-        if os.path.exists(log_path):
-            s.publish_epochs = parse_publish_epochs(log_path)
-            ip = scmc_ip or scmc_ip_from_log(log_path) or DEFAULT_SCMC_IP
+        # Availability: match SCMC-sent packets against what reached the SEMP
+        if os.path.exists(scmc_pcap) and os.path.exists(router_pcap):
+            print(f"[avail] {s.label!r}: matching {scmc_pcap} vs {router_pcap}")
+            s.delivered_epochs, s.sent_count = compute_delivery(
+                scmc_pcap, router_pcap, ip
+            )
+            if s.sent_count > 0:
+                s.delivery_ratio = len(s.delivered_epochs) / s.sent_count
         else:
-            print(f"[warn] {log_path} missing — no availability for '{s.label}'")
-            ip = scmc_ip or DEFAULT_SCMC_IP
-
-        # Delivery ratio: compare what the client sent vs what the broker received
-        for client_log_name in ("simple_client.log", "mtd_executor.log"):
-            client_log = os.path.join(s.out_dir, client_log_name)
-            if os.path.exists(client_log):
-                s.sent_count = parse_client_sent(client_log)
-                break
-        if s.sent_count > 0 and s.publish_epochs:
-            s.delivery_ratio = len(s.publish_epochs) / s.sent_count
+            print(f"[warn] scmc/router capture missing in {s.out_dir} — "
+                  f"no availability for '{s.label}'")
 
         # Detection
         if do_detection:
             model_ok = os.path.exists(os.path.join(s.model_dir, "model.pt"))
-            if os.path.exists(pcap_path) and model_ok:
-                print(f"[score] {s.label!r}: {pcap_path}  with model {s.model_dir}")
-                ranking = score_detection(pcap_path, s.model_dir, ip)
+            if os.path.exists(attacker_pcap) and model_ok:
+                print(f"[score] {s.label!r}: {attacker_pcap}  with model {s.model_dir}")
+                ranking = score_detection(attacker_pcap, s.model_dir, ip)
                 s.ranking = ranking
                 if not ranking.empty:
                     s.top_ip = str(ranking.index[0])
@@ -342,15 +391,15 @@ def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
 def print_summary(scenarios: list) -> None:
     rows = []
     for s in scenarios:
-        n_pub = len(s.publish_epochs)
-        span = (max(s.publish_epochs) - min(s.publish_epochs)) if n_pub else 0
+        n_deliv = len(s.delivered_epochs)
+        span = (max(s.delivered_epochs) - min(s.delivered_epochs)) if n_deliv else 0
         rows.append({
             "scenario": s.label.replace("\n", " "),
             "scmc_nanogrid_frac": round(s.scmc_frac, 3) if not np.isnan(s.scmc_frac) else None,
             "top_ip": s.top_ip,
             "scmc_blocked": s.blocked_scmc,
-            "publishes": n_pub,
-            "publish_span_s": span,
+            "publishes": n_deliv,
+            "publish_span_s": round(span, 1),
             "sent_msgs": s.sent_count if s.sent_count > 0 else None,
             "delivery_ratio": round(s.delivery_ratio, 4) if not np.isnan(s.delivery_ratio) else None,
         })
@@ -379,16 +428,28 @@ def parse_args() -> argparse.Namespace:
                         "(default: matches Makefile defaults: hop2-padint3-ports5-pads7-mbps2).")
     p.add_argument("--bg-replay-mbps", type=int, default=2, metavar="MBPS",
                    help="Background replay rate used in this run (default: 2). "
-                        "Encoded in the baseline scenario slug.")
+                        "Selects the baseline-mbps<M> experiment dir.")
+    p.add_argument("--baseline-only", action="store_true",
+                   help="Plot just the no-MTD baseline run (its own figures, into "
+                        "the baseline-mbps<M> dir) instead of the 3-scenario "
+                        "MTD comparison.")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    plots_dir = args.plots_dir or os.path.join(args.output_root, "plots")
+    # Default the outputs (summary.csv + plots) into the relevant config's
+    # experiment dir, matching the Makefile (which passes --plots-dir $(EXP_DIR)).
+    if args.baseline_only:
+        default_dir = os.path.join(args.output_root, f"baseline-mbps{args.bg_replay_mbps}")
+        scenarios = baseline_scenarios(args.output_root, args.bg_replay_mbps)
+    else:
+        default_dir = os.path.join(args.output_root, f"mtd-{args.mtd_params_slug}")
+        scenarios = default_scenarios(
+            args.output_root, args.mtd_params_slug, args.bg_replay_mbps,
+        )
+    plots_dir = args.plots_dir or default_dir
     os.makedirs(plots_dir, exist_ok=True)
-
-    scenarios = default_scenarios(args.output_root, args.mtd_params_slug, args.bg_replay_mbps)
     analyse(scenarios, args.scmc_ip, do_detection=not args.no_detection)
 
     summary = print_summary(scenarios)
