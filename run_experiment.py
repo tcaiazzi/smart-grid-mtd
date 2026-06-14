@@ -548,7 +548,11 @@ def main():
             log.warning("[Attack] No nanogrid IP detected — nothing blocked")
 
         log.info("[Attack] Observing post-attack effect for %ds", args.post_attack)
-        time.sleep(args.post_attack)
+        post_attack_stream = manager.exec_obj(
+            attacker,
+            f"timeout {args.post_attack} tcpdump -i eth0 -w post_attack_capture.pcap",
+        )
+        _drain(post_attack_stream)
 
         log.info("[Attack] Stopping router capture")
         manager.exec_obj(router, "pkill -INT tcpdump")
@@ -557,6 +561,10 @@ def main():
         log.info("[Attack] Downloading router capture")
         download_file_from_container(
             router.api_object, "router_capture.pcap", f"{out_dir}/router_capture.pcap"
+        )
+
+        download_file_from_container(
+            attacker.api_object, "post_attack_capture.pcap", f"{out_dir}/post_attack_capture.pcap"
         )
 
         log.info("[Attack] Downloading scmc capture")

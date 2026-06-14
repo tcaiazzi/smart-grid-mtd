@@ -113,7 +113,7 @@ ATTACK_SCALER := $(MODEL_EXP_DIR)/model/scaler.pkl
 EVAL_OUT_DIR   := $(EXP_DIR)/eval/model-$(MODEL_SRC)
 ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -142,6 +142,7 @@ help:
 	@echo "  experiment-baseline Full pipeline without MTD (NO_MTD=1)"
 	@echo "  plots               Compare scenarios -> $(EXP_DIR)/"
 	@echo "  plots-baseline      Standalone baseline figures -> output/baseline-mbps$(BG_REPLAY_MBPS)/"
+	@echo "  plots-all           Replot every experiment dir under output/ (NO_DETECTION=1 to skip scoring)"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
 	@echo "MTD parameters (override on the command line):"
@@ -248,6 +249,12 @@ plots:
 plots-baseline:
 	$(PYTHON) plot_results.py --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--plots-dir output/baseline-mbps$(BG_REPLAY_MBPS)
+
+# Regenerate figures + summary.csv for every experiment dir under output/.
+# Add NO_DETECTION=1 to skip the (slow) pcap re-scoring and refresh availability only.
+plots-all:
+	$(PYTHON) plot_results.py --replot-all --output-root output \
+		$(if $(filter-out 0 no false off,$(NO_DETECTION)),--no-detection,)
 
 clean:
 	rm -rf output
