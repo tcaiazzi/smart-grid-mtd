@@ -40,6 +40,7 @@ Protocol (TCP, 4-byte length-prefixed JSON):
   SCHEDULE_HOP  SEMP → SCMC   {type, seq, action, new_ip, new_port, in_messages}
   HOP_ACK       SCMC → SEMP   {type, seq, scmc_id}
   HOP_DONE      SCMC → SEMP   {type, seq, scmc_id}
+  HOP_FAILED    SCMC → SEMP   {type, seq, scmc_id}   (new broker unreachable; stayed put)
   SET_PADDING   SEMP → SCMC   {type, seq, buckets, in_messages}
   PAD_ACK       SCMC → SEMP   {type, seq, scmc_id}
   PAD_DONE      SCMC → SEMP   {type, seq, scmc_id}
@@ -104,11 +105,13 @@ class SEMPCoordinator:
                  hop_interval: float, real_port: int = 18883, no_nat: bool = False,
                  pad_buckets: list = None, pad_interval: float = 30.0,
                  scmc_ip_pool: list = None, src_hop_interval: float = 30.0,
-                 freq_pool: list = None, freq_interval: float = 30.0):
+                 freq_pool: list = None, freq_interval: float = 30.0,
+                 hop_timeout: float = 10.0):
         self.control_port = control_port
         self.ip_pool      = ip_pool
         self.port_pool    = port_pool
         self.hop_interval = hop_interval
+        self.hop_timeout  = hop_timeout
         self.real_port    = real_port
         self.no_nat       = no_nat
         self.pad_buckets  = sorted(pad_buckets or [])
@@ -127,6 +130,10 @@ class SEMPCoordinator:
         self._clients: dict  = {}         # scmc_id → socket
         self._pending_done: dict = {}     # hop seq → set of scmc_ids awaited
         self._hop_old_port: dict = {}     # hop seq → port to vacate on completion
+        self._hop_new_port: dict = {}     # hop seq → new port (vacated on rollback)
+        self._hop_deadline: dict = {}     # hop seq → time.monotonic() expiry
+        self._hop_succeeded: dict = {}    # hop seq → set of scmc_ids that sent HOP_DONE
+        self._hop_endpoints: dict = {}    # hop seq → (old_ip, old_port, new_ip, new_port)
         self._pending_pad_done: dict = {} # padding seq → set of scmc_ids awaited
         self._pending_src_done: dict = {} # src-hop seq → set of scmc_ids awaited
         self._pending_freq_done: dict = {} # freq-hop seq → set of scmc_ids awaited
@@ -185,10 +192,7 @@ class SEMPCoordinator:
             for seq in list(self._pending_done):
                 self._pending_done[seq].discard(scmc_id)
                 if not self._pending_done[seq]:
-                    del self._pending_done[seq]
-                    port = self._hop_old_port.pop(seq, None)
-                    if port is not None:
-                        vacated.append(port)
+                    vacated.extend(self._finalize_hop(seq))
             for seq in list(self._pending_pad_done):
                 self._pending_pad_done[seq].discard(scmc_id)
                 if not self._pending_pad_done[seq]:
@@ -204,6 +208,42 @@ class SEMPCoordinator:
         print(f"[coordinator] {scmc_id} disconnected", flush=True)
         for port in vacated:
             self._nat_del(port)
+
+    def _finalize_hop(self, seq: int) -> list:
+        """Reconcile NAT state for a hop whose awaited set has just emptied.
+
+        Called (under self._lock) from the HOP_DONE / HOP_FAILED handlers, the
+        watchdog, and _unregister — every path that can empty _pending_done[seq].
+        Centralizing it keeps the three outcomes consistent and stops the per-seq
+        dicts from leaking. Returns the list of pool ports to NAT-delete; the
+        caller must do so AFTER releasing the lock (iptables shell-out is slow).
+        """
+        if seq in self._pending_done and self._pending_done[seq]:
+            return []                      # still awaiting clients — nothing to do
+
+        self._pending_done.pop(seq, None)
+        old_port    = self._hop_old_port.pop(seq, None)
+        new_port    = self._hop_new_port.pop(seq, None)
+        succeeded   = self._hop_succeeded.pop(seq, set())
+        endpoints   = self._hop_endpoints.pop(seq, None)
+        self._hop_deadline.pop(seq, None)
+
+        if succeeded:
+            # At least one executor migrated → the hop stands. Vacate the old port.
+            print(f"[coordinator] hop seq={seq} complete — migrated: {sorted(succeeded)}",
+                  flush=True)
+            return [old_port] if old_port is not None else []
+
+        # Nobody migrated (all failed/timed-out): roll back to the old endpoint so
+        # the coordinator's notion of "current" matches the clients (which stayed
+        # put), and vacate the new port nobody connected to. Keep the old port open.
+        if endpoints is not None:
+            old_ip, old_pt, _new_ip, _new_pt = endpoints
+            self.current_ip   = old_ip
+            self.current_port = old_pt
+        print(f"[coordinator] hop seq={seq} rolled back — broker stays on "
+              f"{self.current_ip}:{self.current_port}", flush=True)
+        return [new_port] if new_port is not None else []
 
     def _broadcast(self, msg: dict) -> None:
         with self._lock:
@@ -238,21 +278,25 @@ class SEMPCoordinator:
                     print(f"[coordinator] HOP_ACK  seq={seq} from {scmc_id}", flush=True)
                 elif mtype == "HOP_DONE":
                     print(f"[coordinator] HOP_DONE seq={seq} from {scmc_id}", flush=True)
-                    vacated_port = None
+                    vacated = []
+                    with self._lock:
+                        if seq in self._pending_done:
+                            self._pending_done[seq].discard(scmc_id)
+                            self._hop_succeeded.setdefault(seq, set()).add(scmc_id)
+                            if not self._pending_done[seq]:
+                                vacated = self._finalize_hop(seq)
+                    for port in vacated:          # NAT shell-out outside the lock
+                        self._nat_del(port)
+                elif mtype == "HOP_FAILED":
+                    print(f"[coordinator] HOP_FAILED seq={seq} from {scmc_id}", flush=True)
+                    vacated = []
                     with self._lock:
                         if seq in self._pending_done:
                             self._pending_done[seq].discard(scmc_id)
                             if not self._pending_done[seq]:
-                                del self._pending_done[seq]
-                                vacated_port = self._hop_old_port.pop(seq, None)
-                    if vacated_port is not None:
-                        print(
-                            f"[coordinator] hop seq={seq} complete"
-                            " — all executors migrated",
-                            flush=True,
-                        )
-                        # Now that everyone is on the new port, close the old one
-                        self._nat_del(vacated_port)
+                                vacated = self._finalize_hop(seq)
+                    for port in vacated:
+                        self._nat_del(port)
                 elif mtype == "PAD_ACK":
                     print(f"[coordinator] PAD_ACK  seq={seq} from {scmc_id}", flush=True)
                 elif mtype == "PAD_DONE":
@@ -357,8 +401,14 @@ class SEMPCoordinator:
                           "port_hop")
 
                 in_messages = random.randint(5, 15)
-                self._pending_done[seq] = set(self._clients.keys())
-                self._hop_old_port[seq] = self.current_port
+                self._pending_done[seq]  = set(self._clients.keys())
+                self._hop_old_port[seq]  = self.current_port
+                self._hop_new_port[seq]  = new_port
+                self._hop_succeeded[seq] = set()
+                self._hop_endpoints[seq] = (self.current_ip, self.current_port, new_ip, new_port)
+                # Deadline must allow the executor's HOP_CONNECT_TIMEOUT + a margin
+                # for the worst-case "in N messages" countdown before it even starts.
+                self._hop_deadline[seq]  = time.monotonic() + self.hop_timeout + in_messages
 
                 self.current_ip   = new_ip
                 self.current_port = new_port
@@ -382,6 +432,33 @@ class SEMPCoordinator:
                 flush=True,
             )
             self._broadcast(msg)
+
+    # ── hop watchdog (daemon thread) ──
+
+    def _hop_watchdog_loop(self) -> None:
+        """Fail-safe for hops that never complete.
+
+        Without this, a single executor that can't reach the new broker (down or
+        attacker-blocked) leaves its seq in _pending_done forever, which both pins
+        the old NAT port open and makes _hop_loop skip every future hop. We give
+        each hop a deadline; once it passes, the still-awaited clients are treated
+        as failed and the hop is finalized (rolled back if nobody migrated).
+        """
+        while True:
+            time.sleep(1.0)
+            vacated = []
+            with self._lock:
+                now = time.monotonic()
+                for seq in list(self._pending_done):
+                    if now < self._hop_deadline.get(seq, float("inf")):
+                        continue
+                    waiting = sorted(self._pending_done[seq])
+                    print(f"[coordinator] hop seq={seq} timed out — "
+                          f"no response from {waiting}", flush=True)
+                    self._pending_done[seq].clear()
+                    vacated.extend(self._finalize_hop(seq))
+            for port in vacated:               # NAT shell-out outside the lock
+                self._nat_del(port)
 
     # ── padding decision loop (daemon thread) ──
 
@@ -517,6 +594,7 @@ class SEMPCoordinator:
         # Open the initial active port so the first executors can connect.
         self._nat_add(self.current_port)
         threading.Thread(target=self._serve, daemon=True).start()
+        threading.Thread(target=self._hop_watchdog_loop, daemon=True).start()
         threading.Thread(target=self._pad_loop, daemon=True).start()
         threading.Thread(target=self._src_hop_loop, daemon=True).start()
         threading.Thread(target=self._freq_loop, daemon=True).start()
@@ -539,6 +617,10 @@ def main():
                         help="Comma-separated broker ports available for hopping")
     parser.add_argument("--hop-interval", type=float, default=30.0,
                         help="Seconds between hops (default: 30)")
+    parser.add_argument("--hop-timeout", type=float, default=3.0,
+                        help="Seconds to await HOP_DONE before declaring a hop failed "
+                             "and rolling back (keep > executor HOP_CONNECT_TIMEOUT; "
+                             "default: 10)")
     parser.add_argument("--real-port",    type=int,   default=18883,
                         help="Fixed internal port mosquitto listens on (default: 18883)")
     parser.add_argument("--no-nat",       action="store_true",
@@ -571,6 +653,7 @@ def main():
         pad_buckets=pad_buckets, pad_interval=args.pad_interval,
         scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
         freq_pool=freq_pool, freq_interval=args.freq_interval,
+        hop_timeout=args.hop_timeout,
     ).run()
 
 

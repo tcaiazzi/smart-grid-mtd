@@ -66,6 +66,7 @@ from classify import (
     predict_packets,
     rank_nanogrid_ips,
 )
+from entropy import plot_entropy_comparison, plot_entropy_timeseries
 
 DEFAULT_SCMC_IP = "10.0.0.2"   # SCMC source IP as seen on the wire (lab default)
 DETECT_THRESHOLD = 0.3         # matches classify._detect_nanogrid_ip
@@ -83,6 +84,7 @@ class Scenario:
     label: str
     out_dir: str                 # holds attacker_capture.pcap, scmc/router captures, ...
     model_dir: str               # <exp-dir>/model with model.pt + scaler.pkl
+    exp_dir: str = ""            # per-config root (holds entropy.csv / entropy_timeseries.csv)
     ranking_csv: str = ""        # nanogrid_ranking.csv from attack run
     predictions_csv: str = ""    # predictions.csv from evaluate run (has label_true)
     # filled in by the analysis below
@@ -110,6 +112,7 @@ def make_scenario(label: str, exp_dir: str, model_exp_dir: str, model_src: str) 
         label,
         attack_dir,
         os.path.join(model_exp_dir, "model"),
+        exp_dir=exp_dir,
         ranking_csv=os.path.join(attack_dir, "nanogrid_ranking.csv"),
         predictions_csv=os.path.join(
             exp_dir, "eval", f"model-{model_src}", "predictions.csv"
@@ -418,6 +421,49 @@ def plot_topk_flows(scenarios: list, out_path: str, k: int = 5) -> None:
     print(f"[plot] top-{k} flows chart -> {out_path}")
 
 
+def plot_entropy_section(scenarios: list, plots_dir: str) -> None:
+    """Emit the entropy figures from each config's precomputed entropy CSVs.
+
+    Reuses entropy.py's plotters and the CSVs `make entropy` wrote into each
+    config dir (entropy.csv + entropy_timeseries.csv), so no pcap is re-parsed
+    here. The comparison needs both a baseline-mbps<M>/ and an mtd-<slug>/ config;
+    the timeseries comes from the MTD config (or the baseline one for baseline-only
+    runs). Missing CSVs are warn-skipped, like the top-k flows chart.
+    """
+    def _exp_dir(prefix: str):
+        return next(
+            (s.exp_dir for s in scenarios
+             if s.exp_dir and os.path.basename(s.exp_dir).startswith(prefix)),
+            None,
+        )
+
+    baseline_dir = _exp_dir("baseline-")
+    mtd_dir = _exp_dir("mtd-")
+
+    # Timeseries — the live moving target (MTD config, else the baseline run).
+    ts_dir = mtd_dir or baseline_dir
+    ts_csv = os.path.join(ts_dir, "entropy_timeseries.csv") if ts_dir else None
+    if ts_csv and os.path.exists(ts_csv):
+        plot_entropy_timeseries(ts_csv, os.path.join(plots_dir, "entropy_timeseries.pdf"))
+    else:
+        print(f"[warn] {ts_csv or '(no exp dir)'} missing — skipping entropy timeseries")
+
+    # Comparison — baseline vs MTD (needs both configs' entropy.csv).
+    if not (baseline_dir and mtd_dir):
+        print("[plot] no baseline+MTD pair — skipping entropy comparison")
+        return
+    baseline_csv = os.path.join(baseline_dir, "entropy.csv")
+    mtd_csv = os.path.join(mtd_dir, "entropy.csv")
+    if os.path.exists(baseline_csv) and os.path.exists(mtd_csv):
+        plot_entropy_comparison(
+            baseline_csv, mtd_csv, os.path.join(plots_dir, "entropy_comparison.pdf")
+        )
+    else:
+        missing = [p for p in (baseline_csv, mtd_csv) if not os.path.exists(p)]
+        print(f"[warn] {missing} missing — skipping entropy comparison "
+              f"(run `make entropy` first)")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
@@ -532,14 +578,16 @@ def generate_figures(scenarios: list, plots_dir: str, scmc_ip, do_detection: boo
         plot_detection(scenarios, os.path.join(plots_dir, "detection.pdf"))
     plot_availability(scenarios, os.path.join(plots_dir, "availability.pdf"))
     plot_topk_flows(scenarios, os.path.join(plots_dir, "topk_flows.pdf"), k=topk)
+    plot_entropy_section(scenarios, plots_dir)
 
 
 def discover_configs(root: str) -> list:
     """Find every experiment dir under root and build its (scenarios, plots_dir).
 
     Baseline dirs (baseline-mbps<M>/) get the standalone baseline figure set; MTD
-    dirs (mtd-<slug>-mbps<M>/) get the 3-scenario comparison. The replay rate and
-    MTD slug are recovered from the directory name.
+    dirs (mtd-<slug>/) get the 3-scenario comparison. The replay rate and MTD slug
+    are recovered from the directory name; mbps<M> may sit mid-slug (the slug now
+    carries trailing -freqint<I>-freqs<N>), so the rate match allows a suffix.
     """
     configs = []
     for name in sorted(os.listdir(root)):
@@ -551,7 +599,7 @@ def discover_configs(root: str) -> list:
             mbps = int(m.group(1))
             configs.append((baseline_scenarios(root, mbps), path))
             continue
-        m = re.fullmatch(r"mtd-(.+-mbps(\d+))", name)
+        m = re.fullmatch(r"mtd-(.+-mbps(\d+).*)", name)
         if m:
             slug, mbps = m.group(1), int(m.group(2))
             configs.append((default_scenarios(root, slug, mbps), path))

@@ -25,6 +25,7 @@ Protocol (TCP, 4-byte length-prefixed JSON):
   SCHEDULE_HOP  SEMP → SCMC   {type, seq, action, new_ip, new_port, in_messages}
   HOP_ACK       SCMC → SEMP   {type, seq, scmc_id}
   HOP_DONE      SCMC → SEMP   {type, seq, scmc_id}
+  HOP_FAILED    SCMC → SEMP   {type, seq, scmc_id}   (new broker unreachable; stayed put)
   SET_PADDING   SEMP → SCMC   {type, seq, buckets, in_messages}
   PAD_ACK       SCMC → SEMP   {type, seq, scmc_id}
   PAD_DONE      SCMC → SEMP   {type, seq, scmc_id}
@@ -69,6 +70,12 @@ VOLT_NOMINAL    = 230.0   # V   (line-to-neutral, EU standard)
 FREQ_DROOP      = 0.01    # Hz per kW of net imbalance  (droop coefficient)
 VOLT_DROOP      = 0.5     # V  per kW of load above nominal
 LOAD_NOMINAL    = 70.0    # kW  midpoint of our load timeseries
+
+# Bounded window for a hop's NEW broker to answer before we give up and keep
+# publishing on the old endpoint (make-before-break, see _do_hop). Short on
+# purpose: a blocked target should be abandoned fast so telemetry barely stalls.
+# Keep below the coordinator's --hop-timeout so it sees HOP_FAILED first.
+HOP_CONNECT_TIMEOUT = 3.0
 
 
 # ── Microgrid simulator ───────────────────────────────────────────────────────
@@ -255,6 +262,54 @@ class SCMCExecutor:
                 log.warning("[%s] MQTT connect failed (%s), retry in 3s", self.grid_id, e)
                 time.sleep(3)
 
+    def _try_connect(self, broker: str, port: int, deadline_s: float):
+        """Make-before-break helper: bring up a FRESH MQTT client to (broker, port)
+        without touching self._mqtt_client, so the current connection stays live.
+
+        Uses a LOCAL connect-result flag (not the shared self._mqtt_connected) so the
+        trial cannot race the still-connected old client. Retries until deadline_s of
+        wall-clock has elapsed. Returns the connected client on success, or None on
+        timeout (after stopping the trial client's network loop)."""
+        result = {"connected": False}
+
+        def _on_conn(_client, _ud, _flags, rc, _props=None):
+            result["connected"] = (rc == 0)
+
+        c = mqtt.Client(client_id=self.grid_id, protocol=mqtt.MQTTv5)
+        c.on_connect = _on_conn
+        if self.ssl:
+            c.tls_set(
+                ca_certs=self.cafile,
+                certfile=self.certfile,
+                keyfile=self.keyfile,
+            )
+
+        deadline = time.monotonic() + deadline_s
+        while time.monotonic() < deadline:
+            result["connected"] = False
+            try:
+                c.connect(broker, port, keepalive=60, bind_address=self.src_ip or "")
+                c.loop_start()
+                while time.monotonic() < deadline:    # await CONNACK within the budget
+                    if result["connected"]:
+                        return c
+                    time.sleep(0.1)
+                break                                 # budget spent without CONNACK
+            except Exception as e:
+                log.warning("[%s] MQTT connect failed (%s)", self.grid_id, e)
+                try:
+                    c.loop_stop()
+                except Exception:
+                    pass
+                # Brief backoff, but never past the deadline.
+                time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+        try:
+            c.loop_stop()
+        except Exception:
+            pass
+        return None
+
     def _pad_payload(self, obj: dict) -> bytes:
         """
         Serialize `obj` and pad it to a random bucket size via a "_pad" field.
@@ -310,9 +365,38 @@ class SCMCExecutor:
         new_port = hop["new_port"]
         log.info("[%s] hop seq=%s  %s:%s → %s:%s",
                  self.grid_id, seq, self.broker, self.mqtt_port, new_ip, new_port)
-        self.broker    = new_ip
-        self.mqtt_port = new_port
-        self._mqtt_connect()
+
+        # Make-before-break: bring up the NEW broker connection and only swap once
+        # it is confirmed live. If it never answers within HOP_CONNECT_TIMEOUT we
+        # keep publishing on the current (old) endpoint and report HOP_FAILED, so a
+        # blocked/down target can't strand us (cf. break-before-make, which wedged
+        # the publish loop forever — see the attack-scenario client.log).
+        new_client = self._try_connect(new_ip, new_port, HOP_CONNECT_TIMEOUT)
+        if new_client is None:
+            log.warning("[%s] hop seq=%s failed — staying on %s:%s",
+                        self.grid_id, seq, self.broker, self.mqtt_port)
+            self._send_ctrl({"type": "HOP_FAILED", "seq": seq, "scmc_id": self.grid_id})
+            return
+
+        # New broker is up. Swap it in, then tear down the old client. Detach the
+        # old client's disconnect callback first so its teardown doesn't clobber
+        # self._mqtt_connected after we've set it for the new one.
+        old_client = self._mqtt_client
+        new_client.on_connect    = self._on_connect
+        new_client.on_disconnect = self._on_disconnect
+        with self._lock:
+            self._mqtt_client    = new_client
+            self._mqtt_connected = True
+            self.broker          = new_ip
+            self.mqtt_port       = new_port
+        if old_client is not None:
+            old_client.on_disconnect = None
+            try:
+                old_client.loop_stop()
+                old_client.disconnect()
+            except Exception:
+                pass
+
         self._send_ctrl({"type": "HOP_DONE", "seq": seq, "scmc_id": self.grid_id})
 
         # MTD on the SEMP itself: the control channel follows the broker IP so the

@@ -127,7 +127,9 @@ ATTACK_SCALER := $(MODEL_EXP_DIR)/model/scaler.pkl
 EVAL_OUT_DIR   := $(EXP_DIR)/eval/model-$(MODEL_SRC)
 ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all clean
+BASELINE_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
+
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -157,6 +159,9 @@ help:
 	@echo "  plots               Compare scenarios -> $(EXP_DIR)/"
 	@echo "  plots-baseline      Standalone baseline figures -> output/baseline-mbps$(BG_REPLAY_MBPS)/"
 	@echo "  plots-all           Replot every experiment dir under output/ (NO_DETECTION=1 to skip scoring)"
+	@echo "  entropy             Flow/field entropy of the nanogrid traffic -> $(EXP_DIR)/entropy.csv"
+	@echo "  entropy-compare     Baseline-vs-MTD entropy figure -> $(EXP_DIR)/entropy_comparison.pdf"
+	@echo "  entropy-all         Recompute entropy + refresh ALL figures from existing results (NO_DETECTION=1 to skip scoring)"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
 	@echo "MTD parameters (override on the command line):"
@@ -266,12 +271,17 @@ all:
 	$(MAKE) all-attack
 	$(MAKE) plots
 
+# Build the entropy CSVs (baseline + current variant) first so plot_results can
+# render the comparison/timeseries figures alongside detection/availability.
 plots:
+	$(MAKE) entropy NO_MTD=1
+	$(MAKE) entropy
 	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--plots-dir $(EXP_DIR)
 
 # Standalone figures for the no-MTD baseline run -> output/baseline-mbps<M>/
 plots-baseline:
+	$(MAKE) entropy NO_MTD=1
 	$(PYTHON) plot_results.py --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--plots-dir output/baseline-mbps$(BG_REPLAY_MBPS)
 
@@ -280,6 +290,49 @@ plots-baseline:
 plots-all:
 	$(PYTHON) plot_results.py --replot-all --output-root output \
 		$(if $(filter-out 0 no false off,$(NO_DETECTION)),--no-detection,)
+
+# ── Entropy metric (model-free MTD effectiveness) ────────────────────────────
+# Flow-distribution + per-field Shannon entropy of the nanogrid traffic in the
+# test capture. Reuses the same labeling pools as classify.py so the nanogrid
+# packets match train/eval exactly.
+entropy: $(TEST_PCAP)
+	$(PYTHON) entropy.py --test-pcap $(TEST_PCAP) \
+		--scmc-ip-pool $(MTD_SCMC_IP_POOL) --semp-ip-pool $(MTD_IP_POOL) \
+		--out-dir $(EXP_DIR)
+
+# Baseline-vs-MTD comparison figure -> $(EXP_DIR)/entropy_comparison.pdf.
+# Requires both configs' entropy.csv (run `make entropy NO_MTD=1` and
+# `make entropy` first).
+entropy-compare:
+	$(PYTHON) entropy.py --compare \
+		--baseline-csv $(BASELINE_DIR)/entropy.csv \
+		--mtd-csv $(EXP_DIR)/entropy.csv \
+		--out-dir $(EXP_DIR)
+
+# Generous SEMP/broker labeling pool that brackets every config's actual pool
+# (the broker only ever uses 10.1.0.x; replayed background uses neither subnet),
+# so one fixed pool labels nanogrid correctly for any dir. Entropy is computed
+# over the *observed* values, so a superset pool gives identical results — verified
+# against the exact-pool run. Override if a config uses broker IPs outside this set.
+ENTROPY_SEMP_POOL ?= 10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8
+
+# Recompute entropy.csv for every experiment dir that already has a test capture,
+# then refresh ALL figures (entropy + detection/availability/topk) from the
+# existing results — no lab redeploy. The exact SCMC source pool comes from each
+# dir's datasets/scmc_ips.txt; the broker pool is the generous set above.
+# Add NO_DETECTION=1 to skip the slow pcap re-scoring in the figure refresh.
+entropy-all:
+	@for pcap in output/*/datasets/test.pcap; do \
+		[ -e "$$pcap" ] || continue; \
+		ddir=$$(dirname $$pcap); dir=$$(dirname $$ddir); \
+		scmc=$$(cat $$ddir/scmc_ips.txt 2>/dev/null); \
+		[ -n "$$scmc" ] || scmc=10.0.0.2; \
+		echo "=== entropy: $$dir  (scmc=$$scmc) ==="; \
+		$(PYTHON) entropy.py --test-pcap $$pcap \
+			--scmc-ip-pool $$scmc --semp-ip-pool $(ENTROPY_SEMP_POOL) \
+			--out-dir $$dir || true; \
+	done
+	$(MAKE) plots-all $(if $(filter-out 0 no false off,$(NO_DETECTION)),NO_DETECTION=1,)
 
 clean:
 	rm -rf output

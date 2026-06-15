@@ -308,6 +308,14 @@ def _parse_args() -> argparse.Namespace:
         help="Seconds between hops (default: 2).",
     )
     mtd.add_argument(
+        "--mtd-hop-timeout",
+        type=float,
+        default=10.0,
+        metavar="SECONDS",
+        help="Seconds the coordinator awaits HOP_DONE before declaring a hop "
+             "failed and rolling back (default: 10).",
+    )
+    mtd.add_argument(
         "--mtd-ip-pool",
         default="10.1.0.2,10.1.0.4,10.1.0.5",
         metavar="IPS",
@@ -509,6 +517,7 @@ def main():
             f" --ip-pool {args.mtd_ip_pool}"
             f" --port-pool {args.mtd_port_pool} --real-port 18883"
             f" --hop-interval {args.mtd_hop_interval}"
+            f" --hop-timeout {args.mtd_hop_timeout}"
             f" --pad-buckets {args.mtd_pad_buckets}"
             f" --pad-interval {args.mtd_pad_interval}"
             f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
