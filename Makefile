@@ -87,6 +87,31 @@ MTD_N_SCMC_IPS := $(words $(subst $(comma), ,$(MTD_SCMC_IP_POOL)))
 MTD_N_FREQS    := $(words $(subst $(comma), ,$(MTD_FREQ_POOL)))
 MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_IPS)-ports$(MTD_N_PORTS)-pads$(MTD_N_PADS)-srcips$(MTD_N_SCMC_IPS)-mbps$(BG_REPLAY_MBPS)-freqint$(MTD_FREQ_INTERVAL)-freqs$(MTD_N_FREQS)
 
+# ── RL coordinator ───────────────────────────────────────────────────────────
+# Set RL=1 to drive the MTD schedule with a trained RL policy (mtd_rl_coordinator)
+# instead of the fixed timers. The run uses the distinct "mtdrl-" slug prefix (set
+# by run_experiment.py) so RL artifacts sit beside the fixed-timer run's. Ignored
+# for the baseline (NO_MTD=1) variant.
+RL_DIR        ?= output/rl
+RL_POLICY     ?= $(RL_DIR)/policy.npz
+RL_TICK       ?= 1.0
+RL_TAG        ?=                   # label to separate competing RL policies (e.g. entropy)
+RL_TIMESTEPS  ?= 200000
+RL_W_SEC      ?= 1.0
+RL_W_AVAIL    ?= 1.0
+RL_REWARD_MODE ?= blend            # blend (security vs cost) | entropy (diffusion only)
+ifeq ($(filter-out 0 no false off,$(RL)),)
+  RL_FLAG    :=
+  MTD_PREFIX := mtd
+else
+  RL_FLAG    := --rl-policy $(RL_POLICY) --rl-tick $(RL_TICK)
+  MTD_PREFIX := mtdrl
+  ifneq ($(strip $(RL_TAG)),)
+    RL_FLAG    := $(RL_FLAG) --rl-tag $(RL_TAG)
+    MTD_PREFIX := mtdrl-$(RL_TAG)
+  endif
+endif
+
 # ── Attack model source ────────────────────────────────────────────────────────
 # Defaults to the run variant. Set MODEL_SRC=baseline to use the baseline model
 # on MTD traffic (cross-model attack).
@@ -100,7 +125,7 @@ MODEL_SRC ?= $(VARIANT)
 ifeq ($(VARIANT),baseline)
   EXP_SLUG := baseline-mbps$(BG_REPLAY_MBPS)
 else
-  EXP_SLUG := mtd-$(MTD_PARAMS_SLUG)
+  EXP_SLUG := $(MTD_PREFIX)-$(MTD_PARAMS_SLUG)
 endif
 EXP_DIR := output/$(EXP_SLUG)
 
@@ -129,7 +154,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl plot-tradeoff clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -162,7 +187,14 @@ help:
 	@echo "  entropy             Flow/field entropy of the nanogrid traffic -> $(EXP_DIR)/entropy.csv"
 	@echo "  entropy-compare     Baseline-vs-MTD entropy figure -> $(EXP_DIR)/entropy_comparison.pdf"
 	@echo "  entropy-all         Recompute entropy + refresh ALL figures from existing results (NO_DETECTION=1 to skip scoring)"
+	@echo "  train-rl            Train the RL coordinator policy offline -> $(RL_DIR)/policy.{zip,npz}"
+	@echo "  compare-rl          Model-free RL-vs-fixed-MTD comparison -> output/compare-<slug>/"
+	@echo "  plot-tradeoff       Security-vs-hop-cost frontier (RL vs fixed) -> $(RL_DIR)/tradeoff.pdf"
 	@echo "  clean               Remove all generated outputs"
+	@echo ""
+	@echo "RL coordinator: add RL=1 to datasets/train/attack to use the trained policy"
+	@echo "  RL_POLICY           Distilled policy used at RL=1     (default: $(RL_POLICY))"
+	@echo "  RL_TIMESTEPS        PPO training steps for train-rl   (default: $(RL_TIMESTEPS))"
 	@echo ""
 	@echo "MTD parameters (override on the command line):"
 	@echo "  MTD_HOP_INTERVAL    Seconds between hops              (default: $(MTD_HOP_INTERVAL))"
@@ -187,14 +219,14 @@ split $(TRAIN_TRACE) $(TEST_TRACE):
 dataset-train: $(TRAIN_PCAP)
 
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--name train --trace $(TRAIN_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--name test --trace $(TEST_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
@@ -228,7 +260,7 @@ evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 		$(CLASSIFY_LABEL_FLAGS)
 
 attack: $(ATTACK_MODEL)
-	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \
+	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 
@@ -333,6 +365,41 @@ entropy-all:
 			--out-dir $$dir || true; \
 	done
 	$(MAKE) plots-all $(if $(filter-out 0 no false off,$(NO_DETECTION)),NO_DETECTION=1,)
+
+# ── RL coordinator ───────────────────────────────────────────────────────────
+# Train the RL policy offline (host only — fast, no lab). Produces
+# $(RL_DIR)/policy.zip (SB3) + $(RL_DIR)/policy.npz (numpy, loaded in the lab).
+# Then run an RL experiment with RL=1, e.g.:
+#   make train-rl
+#   make datasets RL=1 && make train RL=1 && make attack RL=1
+train-rl:
+	$(PYTHON) train_rl_coordinator.py --timesteps $(RL_TIMESTEPS) \
+		--w-sec $(RL_W_SEC) --w-avail $(RL_W_AVAIL) --reward-mode $(RL_REWARD_MODE) \
+		--out-dir $(RL_DIR) --output-root output
+
+# Entropy-only RL policy: maximize diffusion using every knob, ignoring availability
+# cost -> output/rl-entropy/policy.{zip,npz}. Deploy with RL=1 RL_POLICY=output/rl-entropy/policy.npz.
+train-rl-entropy:
+	$(MAKE) train-rl RL_REWARD_MODE=entropy RL_W_AVAIL=0 RL_DIR=output/rl-entropy
+
+# Model-free comparison of the RL coordinator vs the fixed-timer one (+baseline) at
+# this parameter config. Reads each config's eval predictions.csv + entropy.csv —
+# no lab run. Needs output/mtd-<slug>/ and output/mtdrl-<slug>/ to both exist
+# (run the same config once with RL=0 and once with RL=1).
+COMPARE_DIR ?= output/compare-$(MTD_PARAMS_SLUG)
+# RL_TAGS: comma-separated extra RL policy tags to add as their own bars, e.g.
+#   make compare-rl RL_TAGS=entropy ...   -> baseline / fixed / RL blend / RL entropy
+RL_TAGS ?=
+compare-rl:
+	$(PYTHON) compare_coordinators.py --slug $(MTD_PARAMS_SLUG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root output --out-dir $(COMPARE_DIR) \
+		--rl-tags "$(RL_TAGS)"
+
+# Security vs hop-cost tradeoff (simulation): the RL policy vs the fixed-timer
+# frontier -> $(RL_DIR)/tradeoff.{pdf,csv}. This is where "lower hop cost at equal
+# security" is measurable (the lab entropy comparison has no cost axis). No lab run.
+plot-tradeoff:
+	$(PYTHON) plot_tradeoff.py --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
 
 clean:
 	rm -rf output

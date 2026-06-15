@@ -9,7 +9,8 @@
 #
 # Outputs land in the same layout as the sweep:
 #   output/baseline-mbps<M>/     when NO_MTD=1
-#   output/mtd-<slug>/           otherwise (slug derived from the params)
+#   output/mtd-<slug>/           fixed-timer MTD (slug derived from the params)
+#   output/mtdrl-<slug>/         when RL=1 (RL coordinator drives the schedule)
 #
 # After running:
 #   .venv/bin/python plot_sweep.py
@@ -24,7 +25,23 @@ EXPERIMENT="manual-run"
 # When NO_MTD=1 only MBPS below matters; the MTD params are ignored.
 NO_MTD=0
 
-HOP=4                                         # broker hop interval (s); also drives source-IP hop
+# Set RL=1 to drive the schedule with a trained RL policy (mtd_rl_coordinator.py)
+# instead of the fixed timers. The pools below still define the action space the
+# policy hops over, but the per-knob intervals (HOP/PAD_INT/FREQ_INT) are ignored —
+# the policy decides timing. Needs a trained policy (RL_POLICY); if it is missing
+# the script trains it first via `make train-rl`. Ignored when NO_MTD=1.
+RL=1
+RL_POLICY="output/rl/policy.npz"
+RL_TICK=1.0
+
+# Set RL_ENTROPY=1 (with RL=1) to run the entropy-max RL policy instead of the
+# default blend policy: it maximizes diffusion using every knob (ignoring hop cost),
+# uses output/rl-entropy/policy.npz, and lands in its own output/mtdrl-entropy-<slug>/
+# dir (so it does NOT overwrite the blend RL run). Auto-trains via
+# `make train-rl-entropy` if the policy is missing.
+RL_ENTROPY=1
+
+HOP=4                                        # broker hop interval (s); also drives source-IP hop
 IP_POOL="10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8"  # broker IP pool (comma-separated; single value = IP hop off)
 PORT_POOL="8883,8884,8885,8886,8887,8888,8889"           # broker port pool (single value = port hop off)
 SCMC_POOL="10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8" # source-IP pool (single value = source hop off)
@@ -37,6 +54,13 @@ FREQ_INT=5                                    # message-frequency mutation inter
 
 PYTHON=".venv/bin/python"
 MANIFEST="output/sweep_manifest.csv"
+
+# Entropy flag selects the entropy-max policy + its own tagged output dir.
+RL_TAG=""
+if [[ "$RL" -eq 1 && "$RL_ENTROPY" -eq 1 ]]; then
+    RL_TAG="entropy"
+    RL_POLICY="output/rl-entropy/policy.npz"
+fi
 
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
 
@@ -86,7 +110,13 @@ run_config() {
     n_pads=$(count_items  "$pad_buckets")
     n_freqs=$(count_items "$freq_pool")
     slug=$(make_slug "$hop" "$pad_interval" "$ip_pool" "$port_pool" "$scmc_pool" "$pad_buckets" "$mbps" "$freq_int" "$freq_pool")
-    local exp="mtd-$slug"
+    # RL runs use the "mtdrl-" prefix (matching the Makefile) so their artifacts
+    # sit beside the fixed-timer run's; a tag (e.g. entropy) separates competing
+    # RL policies into mtdrl-<tag>-<slug>/.
+    local prefix="mtd"
+    [[ "$RL" -eq 1 ]] && prefix="mtdrl"
+    [[ "$RL" -eq 1 && -n "$RL_TAG" ]] && prefix="mtdrl-$RL_TAG"
+    local exp="$prefix-$slug"
 
     log "  [$experiment] $exp"
 
@@ -102,6 +132,19 @@ run_config() {
         "MTD_FREQ_INTERVAL=$freq_int"
         "MTD_FREQ_POOL=$freq_pool"
     )
+    # Drive every make target (datasets/train/evaluate/entropy/attack) through the
+    # RL coordinator and the matching mtdrl- experiment dir.
+    if [[ "$RL" -eq 1 ]]; then
+        args+=( "RL=1" "RL_POLICY=$RL_POLICY" "RL_TICK=$RL_TICK" )
+        [[ -n "$RL_TAG" ]] && args+=( "RL_TAG=$RL_TAG" )
+        # entropy tag trains via train-rl-entropy; otherwise the blend policy.
+        local train_target="make train-rl"
+        [[ "$RL_TAG" == "entropy" ]] && train_target="make train-rl-entropy"
+        if [[ ! -f "$RL_POLICY" ]]; then
+            log "    RL policy $RL_POLICY missing — training it first ($train_target)"
+            run "$train_target"
+        fi
+    fi
 
     # Reuse an existing config when its datasets + model are already built.
     if [[ -f "output/$exp/datasets/train.pcap" \
@@ -118,7 +161,7 @@ run_config() {
     fi
 
     # run "make attack   ${args[*]}"
-    # run "make attack MODEL_SRC=baseline ${args[*]}"
+    run "make attack MODEL_SRC=baseline ${args[*]}"
     run "make entropy ${args[*]}"
 
     run "$PYTHON plot_results.py \

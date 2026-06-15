@@ -162,8 +162,15 @@ def experiment_slug(args) -> str:
     n_pads = len(args.mtd_pad_buckets.split(","))
     n_scmc_ips = len(args.mtd_scmc_ip_pool.split(","))
     n_freqs = len(args.mtd_freq_pool.split(","))
+    # An RL-coordinated run uses a distinct prefix so its artifacts sit beside the
+    # fixed-timer run's instead of overwriting them (enables the RL-vs-fixed compare).
+    # --rl-tag further separates competing RL policies (e.g. mtdrl-entropy-<slug>).
+    if args.rl_policy:
+        prefix = f"mtdrl-{args.rl_tag}" if args.rl_tag else "mtdrl"
+    else:
+        prefix = "mtd"
     return (
-        f"mtd-hop{args.mtd_hop_interval}-padint{args.mtd_pad_interval}"
+        f"{prefix}-hop{args.mtd_hop_interval}-padint{args.mtd_pad_interval}"
         f"-ips{n_ips}-ports{n_ports}-pads{n_pads}-srcips{n_scmc_ips}"
         f"-mbps{args.bg_replay_mbps}"
         f"-freqint{args.mtd_freq_interval}-freqs{n_freqs}"
@@ -370,6 +377,30 @@ def _parse_args() -> argparse.Namespace:
         metavar="SECONDS",
         help="Seconds between publish-frequency changes (default: 30).",
     )
+    mtd.add_argument(
+        "--rl-policy",
+        default=None,
+        metavar="NPZ",
+        help="Path to a distilled RL policy (.npz from train_rl_coordinator.py). "
+        "When set, the RL coordinator (mtd_rl_coordinator.py) decides the schedule "
+        "instead of the fixed-timer coordinator. Ignored in --no-mtd baseline mode.",
+    )
+    mtd.add_argument(
+        "--rl-tick",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="Seconds between RL policy decisions (default: 1.0). Used only with "
+        "--rl-policy.",
+    )
+    mtd.add_argument(
+        "--rl-tag",
+        default="",
+        metavar="TAG",
+        help="Optional label distinguishing competing RL policies in the output "
+        "dir name (e.g. 'entropy' -> output/mtdrl-entropy-<slug>/). Used only with "
+        "--rl-policy.",
+    )
     return p.parse_args()
 
 
@@ -410,6 +441,12 @@ def main():
     log.info("Copying asset files into machines")
     semp.create_file_from_path("assets/qkd/cert_authority.py", "/cert_authority.py")
     semp.create_file_from_path("assets/mtd_coordinator.py", "/mtd_coordinator.py")
+    if args.rl_policy and not args.no_mtd:
+        # RL coordinator + its numpy-only deps. mtd_coordinator.py (above) is the
+        # base class it subclasses; rl_policy.py is imported by both.
+        semp.create_file_from_path("assets/mtd_rl_coordinator.py", "/mtd_rl_coordinator.py")
+        semp.create_file_from_path("rl_policy.py", "/rl_policy.py")
+        semp.create_file_from_path(args.rl_policy, "/policy.npz")
     mosquitto_conf = (
         "assets/mosquitto/mosquitto_nomtd.conf"
         if args.no_mtd
@@ -510,6 +547,20 @@ def main():
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
     if args.no_mtd:
         log.info("[Baseline] MTD disabled — coordinator not started (mosquitto on 8883)")
+    elif args.rl_policy:
+        log.info("[MTD] Starting RL coordinator (policy %s, tick %ss)",
+                 args.rl_policy, args.rl_tick)
+        manager.exec_obj(
+            semp,
+            f"python3 mtd_rl_coordinator.py --policy policy.npz --tick {args.rl_tick}"
+            f" --control-port 9998"
+            f" --ip-pool {args.mtd_ip_pool}"
+            f" --port-pool {args.mtd_port_pool} --real-port 18883"
+            f" --hop-timeout {args.mtd_hop_timeout}"
+            f" --pad-buckets {args.mtd_pad_buckets}"
+            f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
+            f" --freq-pool {args.mtd_freq_pool}",
+        )
     else:
         manager.exec_obj(
             semp,
