@@ -43,6 +43,14 @@ Protocol (TCP, 4-byte length-prefixed JSON):
   SET_PADDING   SEMP → SCMC   {type, seq, buckets, in_messages}
   PAD_ACK       SCMC → SEMP   {type, seq, scmc_id}
   PAD_DONE      SCMC → SEMP   {type, seq, scmc_id}
+  SCHEDULE_SRC_HOP SEMP → SCMC {type, seq, new_src_ip, in_messages}
+  SRC_HOP_ACK   SCMC → SEMP   {type, seq, scmc_id}
+  SRC_HOP_DONE  SCMC → SEMP   {type, seq, scmc_id}
+
+Besides the broker-side port/IP hop above, the coordinator runs an independent
+source-IP hop loop (--scmc-ip-pool / --src-hop-interval): it tells executors to
+rebind their OWN local source IP across a pool, so the SCMC publisher is a moving
+target too (no iptables — the SCMC rebinds its socket source address).
 """
 
 import argparse
@@ -94,7 +102,9 @@ class SEMPCoordinator:
 
     def __init__(self, control_port: int, ip_pool: list, port_pool: list,
                  hop_interval: float, real_port: int = 18883, no_nat: bool = False,
-                 pad_buckets: list = None, pad_interval: float = 30.0):
+                 pad_buckets: list = None, pad_interval: float = 30.0,
+                 scmc_ip_pool: list = None, src_hop_interval: float = 30.0,
+                 freq_pool: list = None, freq_interval: float = 30.0):
         self.control_port = control_port
         self.ip_pool      = ip_pool
         self.port_pool    = port_pool
@@ -103,9 +113,14 @@ class SEMPCoordinator:
         self.no_nat       = no_nat
         self.pad_buckets  = sorted(pad_buckets or [])
         self.pad_interval = pad_interval
+        self.scmc_ip_pool = scmc_ip_pool or []   # SCMC source IPs (empty = no src hop)
+        self.src_hop_interval = src_hop_interval
+        self.freq_pool    = freq_pool or []      # publish intervals (≤1 entry = no freq hop)
+        self.freq_interval = freq_interval
 
         self.current_ip   = ip_pool[0]
         self.current_port = port_pool[0]
+        self.current_src_ip = self.scmc_ip_pool[0] if self.scmc_ip_pool else None
 
         self._seq          = 0            # shared across all MTD actions
         self._lock         = threading.Lock()
@@ -113,6 +128,8 @@ class SEMPCoordinator:
         self._pending_done: dict = {}     # hop seq → set of scmc_ids awaited
         self._hop_old_port: dict = {}     # hop seq → port to vacate on completion
         self._pending_pad_done: dict = {} # padding seq → set of scmc_ids awaited
+        self._pending_src_done: dict = {} # src-hop seq → set of scmc_ids awaited
+        self._pending_freq_done: dict = {} # freq-hop seq → set of scmc_ids awaited
         self._active_nat: set    = set()  # pool ports with a live REDIRECT rule
 
     # ── iptables NAT management ──
@@ -151,11 +168,20 @@ class SEMPCoordinator:
             self._clients[scmc_id] = sock
         print(f"[coordinator] {scmc_id} connected  (total={len(self._clients)})", flush=True)
 
-    def _unregister(self, scmc_id: str) -> None:
+    def _unregister(self, scmc_id: str, conn: socket.socket) -> None:
         vacated = []
         with self._lock:
+            # A make-before-break control reconnect (control-follows-hop or
+            # source-IP hop) registers a fresh socket under the same scmc_id
+            # BEFORE closing the old one. If the registered socket is no longer
+            # this one, this close is a handover, not a death: leave every pending
+            # hop/pad/src action and its NAT port untouched. Clearing them here
+            # would prematurely vacate the port the client is still using and
+            # strand it with "connection refused".
+            if self._clients.get(scmc_id) is not conn:
+                return
             self._clients.pop(scmc_id, None)
-            # Don't wait forever on a client that died mid-action
+            # Genuine disconnect — don't wait forever on a client that died mid-action.
             for seq in list(self._pending_done):
                 self._pending_done[seq].discard(scmc_id)
                 if not self._pending_done[seq]:
@@ -167,6 +193,14 @@ class SEMPCoordinator:
                 self._pending_pad_done[seq].discard(scmc_id)
                 if not self._pending_pad_done[seq]:
                     del self._pending_pad_done[seq]
+            for seq in list(self._pending_src_done):
+                self._pending_src_done[seq].discard(scmc_id)
+                if not self._pending_src_done[seq]:
+                    del self._pending_src_done[seq]
+            for seq in list(self._pending_freq_done):
+                self._pending_freq_done[seq].discard(scmc_id)
+                if not self._pending_freq_done[seq]:
+                    del self._pending_freq_done[seq]
         print(f"[coordinator] {scmc_id} disconnected", flush=True)
         for port in vacated:
             self._nat_del(port)
@@ -235,11 +269,44 @@ class SEMPCoordinator:
                             f"[coordinator] padding seq={seq} applied by all",
                             flush=True,
                         )
+                elif mtype == "SRC_HOP_ACK":
+                    print(f"[coordinator] SRC_HOP_ACK  seq={seq} from {scmc_id}", flush=True)
+                elif mtype == "SRC_HOP_DONE":
+                    print(f"[coordinator] SRC_HOP_DONE seq={seq} from {scmc_id}", flush=True)
+                    completed = False
+                    with self._lock:
+                        if seq in self._pending_src_done:
+                            self._pending_src_done[seq].discard(scmc_id)
+                            if not self._pending_src_done[seq]:
+                                del self._pending_src_done[seq]
+                                completed = True
+                    if completed:
+                        print(
+                            f"[coordinator] src hop seq={seq} complete"
+                            " — all executors rebound source",
+                            flush=True,
+                        )
+                elif mtype == "INTERVAL_ACK":
+                    print(f"[coordinator] INTERVAL_ACK  seq={seq} from {scmc_id}", flush=True)
+                elif mtype == "INTERVAL_DONE":
+                    print(f"[coordinator] INTERVAL_DONE seq={seq} from {scmc_id}", flush=True)
+                    completed = False
+                    with self._lock:
+                        if seq in self._pending_freq_done:
+                            self._pending_freq_done[seq].discard(scmc_id)
+                            if not self._pending_freq_done[seq]:
+                                del self._pending_freq_done[seq]
+                                completed = True
+                    if completed:
+                        print(
+                            f"[coordinator] freq hop seq={seq} applied by all",
+                            flush=True,
+                        )
         except (ConnectionError, OSError):
             pass
         finally:
             if scmc_id:
-                self._unregister(scmc_id)
+                self._unregister(scmc_id, conn)
             conn.close()
 
     # ── TCP accept loop ──
@@ -356,11 +423,103 @@ class SEMPCoordinator:
             )
             self._broadcast(msg)
 
+    # ── source-IP hop decision loop (daemon thread) ──
+
+    def _src_hop_loop(self) -> None:
+        """Tell executors to hop their OWN source IP across scmc_ip_pool.
+
+        Independent of the broker hop (own timer/pool) but coordinated here. No
+        iptables involved — the SCMC just rebinds its local source address, so
+        there is no old port/NAT state to tear down; we only track DONEs for
+        logging/metrics.
+        """
+        if len(self.scmc_ip_pool) < 2:
+            return    # source hopping disabled (need at least two addresses)
+        while True:
+            time.sleep(self.src_hop_interval)
+
+            with self._lock:
+                if not self._clients:
+                    print("[coordinator] no clients — skipping src hop", flush=True)
+                    continue
+                if self._pending_src_done:
+                    print("[coordinator] src hop still in progress — skipping", flush=True)
+                    continue
+
+                self._seq += 1
+                seq = self._seq
+
+                idx = (self.scmc_ip_pool.index(self.current_src_ip) + 1) % len(self.scmc_ip_pool)
+                new_src_ip = self.scmc_ip_pool[idx]
+                self.current_src_ip = new_src_ip
+
+                in_messages = random.randint(5, 15)
+                self._pending_src_done[seq] = set(self._clients.keys())
+
+            msg = {
+                "type":        "SCHEDULE_SRC_HOP",
+                "seq":         seq,
+                "new_src_ip":  new_src_ip,
+                "in_messages": in_messages,
+            }
+            print(
+                f"[coordinator] SCHEDULE_SRC_HOP seq={seq}  → src {new_src_ip}"
+                f"  in {in_messages} msgs",
+                flush=True,
+            )
+            self._broadcast(msg)
+
+    # ── publish-frequency decision loop (daemon thread) ──
+
+    def _freq_loop(self) -> None:
+        """Tell executors to change their publish interval (message frequency).
+
+        The fixed inter-arrival time is itself a fingerprint; rotating it across
+        freq_pool keeps the timing signal moving. Mirrors _pad_loop: no broker
+        state involved, executors just retime their publish loop, we only track
+        DONEs for logging/metrics.
+        """
+        if len(self.freq_pool) < 2:
+            return    # frequency hopping disabled (need at least two intervals)
+        while True:
+            time.sleep(self.freq_interval)
+
+            with self._lock:
+                if not self._clients:
+                    print("[coordinator] no clients — skipping freq hop", flush=True)
+                    continue
+                if self._pending_freq_done:
+                    print("[coordinator] freq change still in progress — skipping",
+                          flush=True)
+                    continue
+
+                self._seq += 1
+                seq = self._seq
+
+                new_interval = random.choice(self.freq_pool)
+                in_messages = random.randint(5, 15)
+                self._pending_freq_done[seq] = set(self._clients.keys())
+
+            msg = {
+                "type":        "SET_INTERVAL",
+                "seq":         seq,
+                "interval":    new_interval,
+                "in_messages": in_messages,
+            }
+            print(
+                f"[coordinator] SET_INTERVAL seq={seq}  interval={new_interval}s"
+                f"  in {in_messages} msgs",
+                flush=True,
+            )
+            self._broadcast(msg)
+
     def run(self) -> None:
         # Open the initial active port so the first executors can connect.
         self._nat_add(self.current_port)
         threading.Thread(target=self._serve, daemon=True).start()
         threading.Thread(target=self._pad_loop, daemon=True).start()
+        threading.Thread(target=self._src_hop_loop, daemon=True).start()
+        threading.Thread(target=self._freq_loop, daemon=True).start()
         try:
             self._hop_loop()
         finally:
@@ -389,15 +548,29 @@ def main():
                              "(empty disables padding)")
     parser.add_argument("--pad-interval", type=float, default=30.0,
                         help="Seconds between padding-policy changes (default: 30)")
+    parser.add_argument("--scmc-ip-pool", default="",
+                        help="Comma-separated SCMC source IPs for source-IP hopping "
+                             "(empty or single entry disables source hopping)")
+    parser.add_argument("--src-hop-interval", type=float, default=30.0,
+                        help="Seconds between SCMC source-IP hops (default: 30)")
+    parser.add_argument("--freq-pool",    default="1.0",
+                        help="Comma-separated publish intervals in seconds for "
+                             "message-frequency hopping (single entry disables it)")
+    parser.add_argument("--freq-interval", type=float, default=30.0,
+                        help="Seconds between publish-frequency changes (default: 30)")
     args = parser.parse_args()
 
-    ip_pool     = [x.strip() for x in args.ip_pool.split(",")]
-    port_pool   = [int(x.strip()) for x in args.port_pool.split(",")]
-    pad_buckets = [int(x) for x in args.pad_buckets.split(",") if x.strip()]
+    ip_pool      = [x.strip() for x in args.ip_pool.split(",")]
+    port_pool    = [int(x.strip()) for x in args.port_pool.split(",")]
+    pad_buckets  = [int(x) for x in args.pad_buckets.split(",") if x.strip()]
+    scmc_ip_pool = [x.strip() for x in args.scmc_ip_pool.split(",") if x.strip()]
+    freq_pool    = [float(x) for x in args.freq_pool.split(",") if x.strip()]
     SEMPCoordinator(
         args.control_port, ip_pool, port_pool, args.hop_interval,
         real_port=args.real_port, no_nat=args.no_nat,
         pad_buckets=pad_buckets, pad_interval=args.pad_interval,
+        scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
+        freq_pool=freq_pool, freq_interval=args.freq_interval,
     ).run()
 
 

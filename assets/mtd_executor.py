@@ -28,6 +28,15 @@ Protocol (TCP, 4-byte length-prefixed JSON):
   SET_PADDING   SEMP → SCMC   {type, seq, buckets, in_messages}
   PAD_ACK       SCMC → SEMP   {type, seq, scmc_id}
   PAD_DONE      SCMC → SEMP   {type, seq, scmc_id}
+  SCHEDULE_SRC_HOP SEMP → SCMC {type, seq, new_src_ip, in_messages}
+  SRC_HOP_ACK   SCMC → SEMP   {type, seq, scmc_id}
+  SRC_HOP_DONE  SCMC → SEMP   {type, seq, scmc_id}
+
+The executor also hops its OWN source IP (SCHEDULE_SRC_HOP): after N publishes it
+rebinds both the MQTT and control sockets to the new local source address, so the
+SCMC publisher's on-wire identity is a moving target too. The control channel
+additionally follows the broker IP on each broker hop, so the SEMP exposes no
+fixed control endpoint.
 
 Deps:   pip install paho-mqtt pymgrid
 """
@@ -167,7 +176,7 @@ class SCMCExecutor:
                  semp_ip: str, semp_port: int, interval: float = 1.0,
                  ssl: bool = False, cafile: str = None,
                  certfile: str = None, keyfile: str = None,
-                 pad_buckets: list = None):
+                 pad_buckets: list = None, src_ip: str = None):
         self.grid_id   = grid_id
         self.broker    = broker
         self.mqtt_port = mqtt_port
@@ -179,11 +188,17 @@ class SCMCExecutor:
         self.certfile  = certfile
         self.keyfile   = keyfile
         self.pad_buckets = list(pad_buckets or [])   # active padding policy
+        # Local source IP both connections (MQTT + control) bind to. Hopped on
+        # SCHEDULE_SRC_HOP so the SCMC's own on-wire identity is also a moving
+        # target. None → let the kernel pick the default source.
+        self.src_ip    = src_ip
 
         self._lock           = threading.Lock()
         self._pub_seq        = 0       # monotonic publish counter (never reset)
         self._pending_hop    = None    # {..hop.., fire_at}, or None
         self._pending_pad    = None    # {buckets, seq, fire_at}, or None
+        self._pending_src_hop = None   # {new_src_ip, seq, fire_at}, or None
+        self._pending_freq   = None    # {interval, seq, fire_at}, or None
         self._ctrl_sock      = None    # TCP socket to coordinator
         self._mqtt_client    = None
         self._mqtt_connected = False
@@ -225,7 +240,10 @@ class SCMCExecutor:
 
         while True:
             try:
-                c.connect(self.broker, self.mqtt_port, keepalive=60)
+                # bind_address pins the local source IP so MQTT rides the
+                # current src_ip (hopped on SCHEDULE_SRC_HOP). "" = kernel default.
+                c.connect(self.broker, self.mqtt_port, keepalive=60,
+                          bind_address=self.src_ip or "")
                 c.loop_start()
                 for _ in range(20):          # wait up to 4 s for CONNACK
                     with self._lock:
@@ -297,6 +315,28 @@ class SCMCExecutor:
         self._mqtt_connect()
         self._send_ctrl({"type": "HOP_DONE", "seq": seq, "scmc_id": self.grid_id})
 
+        # MTD on the SEMP itself: the control channel follows the broker IP so the
+        # coordinator exposes no fixed endpoint on :9998. The reconnect is
+        # make-before-break so the coordinator never sees a gap (see _reconnect_ctrl).
+        if new_ip != self.semp_ip:
+            log.info("[%s] ctrl follows hop → %s:%s", self.grid_id, new_ip, self.semp_port)
+            self.semp_ip = new_ip
+            self._reconnect_ctrl()
+
+    def _do_src_hop(self, hop: dict) -> None:
+        """Hop the SCMC's own source IP: rebind both MQTT and the control channel
+        to the new local address so the publisher is a moving target too."""
+        seq        = hop["seq"]
+        new_src_ip = hop["new_src_ip"]
+        log.info("[%s] src hop seq=%s  %s → %s",
+                 self.grid_id, seq, self.src_ip, new_src_ip)
+        # DONE goes out on the OLD control socket (old source still valid) before
+        # we rebind; then MQTT and the control channel move to the new source.
+        self._send_ctrl({"type": "SRC_HOP_DONE", "seq": seq, "scmc_id": self.grid_id})
+        self.src_ip = new_src_ip
+        self._mqtt_connect()                 # reconnect MQTT bound to the new source
+        self._reconnect_ctrl()               # control channel rebinds to the new source
+
     # ── control channel ──
 
     def _send_ctrl(self, msg: dict) -> None:
@@ -305,11 +345,42 @@ class SCMCExecutor:
         except OSError as e:
             log.warning("[%s] ctrl send error: %s", self.grid_id, e)
 
+    def _reconnect_ctrl(self) -> None:
+        """Make-before-break control reconnect.
+
+        Open a fresh control socket bound to the current (src_ip → semp_ip) and
+        HELLO it, THEN tear down the old one. Because the new socket registers
+        before the old closes, the coordinator sees one continuous client and
+        never mistakes the swap for a disconnect — which would otherwise tear
+        down an unrelated in-flight hop's NAT port and strand the client.
+
+        _ctrl_reader is blocked in recv() on the old socket. We must wake it so
+        it re-reads self._ctrl_sock and resumes on the new socket. close() alone
+        does NOT do this: closing a socket from another thread does not interrupt
+        a recv() already blocked on it (the fd is dropped but the in-kernel wait
+        is not woken), so the reader would hang forever on the dead socket and
+        silently stop receiving commands. shutdown(SHUT_RDWR) reliably forces the
+        blocked recv() to return EOF; the reader then sees sock is not
+        self._ctrl_sock and continues on the new socket instead of reconnecting.
+        """
+        old = self._ctrl_sock
+        self._ctrl_connect()                 # opens new, HELLO, sets self._ctrl_sock
+        if old is not None and old is not self._ctrl_sock:
+            try:
+                old.shutdown(socket.SHUT_RDWR)   # wake reader blocked in recv()
+            except OSError:
+                pass
+            try:
+                old.close()
+            except OSError:
+                pass
+
     def _ctrl_reader(self) -> None:
         """Daemon thread: receives MTD action commands from the coordinator."""
         while True:
+            sock = self._ctrl_sock           # snapshot: may be swapped by _reconnect_ctrl
             try:
-                msg   = _recv_msg(self._ctrl_sock)
+                msg   = _recv_msg(sock)
                 mtype = msg.get("type")
                 seq   = msg.get("seq")
                 in_m  = msg.get("in_messages", 0)
@@ -332,15 +403,44 @@ class SCMCExecutor:
                             "fire_at": self._pub_seq + in_m,
                         }
                     self._send_ctrl({"type": "PAD_ACK", "seq": seq, "scmc_id": self.grid_id})
+
+                elif mtype == "SCHEDULE_SRC_HOP":
+                    new_src_ip = msg["new_src_ip"]
+                    log.info("[%s] SCHEDULE_SRC_HOP seq=%s  → src %s  in %d msgs",
+                             self.grid_id, seq, new_src_ip, in_m)
+                    with self._lock:
+                        self._pending_src_hop = {
+                            "new_src_ip": new_src_ip, "seq": seq,
+                            "fire_at": self._pub_seq + in_m,
+                        }
+                    self._send_ctrl({"type": "SRC_HOP_ACK", "seq": seq, "scmc_id": self.grid_id})
+
+                elif mtype == "SET_INTERVAL":
+                    new_interval = msg.get("interval")
+                    log.info("[%s] SET_INTERVAL seq=%s  interval=%ss  in %d msgs",
+                             self.grid_id, seq, new_interval, in_m)
+                    with self._lock:
+                        self._pending_freq = {
+                            "interval": new_interval, "seq": seq,
+                            "fire_at": self._pub_seq + in_m,
+                        }
+                    self._send_ctrl({"type": "INTERVAL_ACK", "seq": seq, "scmc_id": self.grid_id})
             except (ConnectionError, OSError) as e:
+                # A make-before-break swap (_reconnect_ctrl) already installed a new
+                # socket — just resume reading from it, don't reconnect a second time.
+                if sock is not self._ctrl_sock:
+                    continue
                 log.warning("[%s] ctrl lost (%s), reconnecting...", self.grid_id, e)
                 self._ctrl_connect()
 
     def _ctrl_connect(self) -> None:
         while True:
             try:
+                # source_address pins the local source IP so the control channel
+                # rides the current src_ip too (hopped on SCHEDULE_SRC_HOP).
                 sock = socket.create_connection(
-                    (self.semp_ip, self.semp_port), timeout=5
+                    (self.semp_ip, self.semp_port), timeout=5,
+                    source_address=(self.src_ip, 0) if self.src_ip else None,
                 )
                 sock.settimeout(None)
                 self._ctrl_sock = sock
@@ -382,6 +482,32 @@ class SCMCExecutor:
                         log.info("[%s] padding policy → %s", self.grid_id, pad["buckets"])
                         self._send_ctrl({"type": "PAD_DONE", "seq": pad["seq"],
                                          "scmc_id": self.grid_id})
+
+                    # Apply scheduled publish-frequency change (independent countdown).
+                    # New interval takes effect at the time.sleep below.
+                    with self._lock:
+                        freq = self._pending_freq
+                        if freq and seq_num >= freq["fire_at"]:
+                            self._pending_freq = None
+                        else:
+                            freq = None
+                    if freq:
+                        self.interval = freq["interval"]
+                        print(f"[{self.grid_id}] publish interval → {freq['interval']}s", flush=True)
+                        log.info("[%s] publish interval → %ss", self.grid_id, freq["interval"])
+                        self._send_ctrl({"type": "INTERVAL_DONE", "seq": freq["seq"],
+                                         "scmc_id": self.grid_id})
+
+                    # Apply scheduled source-IP hop (independent countdown). Comes
+                    # before the broker hop; both reconnect MQTT.
+                    with self._lock:
+                        src_hop = self._pending_src_hop
+                        if src_hop and seq_num >= src_hop["fire_at"]:
+                            self._pending_src_hop = None
+                        else:
+                            src_hop = None
+                    if src_hop:
+                        self._do_src_hop(src_hop)
 
                     # Apply scheduled hop (must come last: it reconnects MQTT)
                     with self._lock:
@@ -428,6 +554,12 @@ def main():
     parser.add_argument("--pad-buckets", default="",
                         help="Initial padding bucket sizes, comma-separated "
                              "(default: empty = no padding until coordinator sets it)")
+    parser.add_argument("--scmc-ip-pool", default="",
+                        help="Comma-separated local source IP pool for source-IP "
+                             "hopping. The first entry is the initial source bound by "
+                             "MQTT and the control channel; the coordinator announces "
+                             "the rest via SCHEDULE_SRC_HOP (default: empty = no "
+                             "source hop, kernel-chosen source).")
     parser.add_argument("--log-file", default="mtd_executor.log",
                         help="File to write the message-exchange log "
                              "(default: mtd_executor.log in the working directory)")
@@ -452,6 +584,8 @@ def main():
         args.mqtt_port = 8883 if args.ssl else 1883
 
     pad_buckets = [int(x) for x in args.pad_buckets.split(",") if x.strip()]
+    scmc_ip_pool = [x.strip() for x in args.scmc_ip_pool.split(",") if x.strip()]
+    src_ip = scmc_ip_pool[0] if scmc_ip_pool else None
 
     SCMCExecutor(
         grid_id     = args.grid_id,
@@ -465,6 +599,7 @@ def main():
         certfile    = args.certfile,
         keyfile     = args.keyfile,
         pad_buckets = pad_buckets,
+        src_ip      = src_ip,
     ).run()
 
 

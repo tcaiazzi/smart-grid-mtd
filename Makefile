@@ -60,18 +60,32 @@ MTD_IP_POOL      ?= 10.1.0.2
 MTD_PORT_POOL    ?= 8883,8884,8885,8886,8887
 MTD_PAD_BUCKETS  ?= 128,256,384,512,640,768,1024
 MTD_PAD_INTERVAL ?= 3
+# SCMC source-IP hopping (publisher side). Single entry disables it (mirrors the
+# MTD_IP_POOL default); set e.g. 10.0.0.2,10.0.0.4,10.0.0.5 to enable.
+MTD_SCMC_IP_POOL   ?= 10.0.0.2
+MTD_SRC_HOP_INTERVAL ?= 2
+# Message-frequency hopping: rotate the SCMC publish interval across a pool so the
+# inter-arrival timing is also a moving target. Single-entry pool disables it.
+MTD_FREQ_POOL    ?= 1.0
+MTD_FREQ_INTERVAL ?= 30
 MTD_PARAMS_FLAG  := --mtd-hop-interval $(MTD_HOP_INTERVAL) \
                     --mtd-ip-pool $(MTD_IP_POOL) \
                     --mtd-port-pool $(MTD_PORT_POOL) \
                     --mtd-pad-buckets $(MTD_PAD_BUCKETS) \
-                    --mtd-pad-interval $(MTD_PAD_INTERVAL)
+                    --mtd-pad-interval $(MTD_PAD_INTERVAL) \
+                    --mtd-scmc-ip-pool $(MTD_SCMC_IP_POOL) \
+                    --mtd-src-hop-interval $(MTD_SRC_HOP_INTERVAL) \
+                    --mtd-freq-pool $(MTD_FREQ_POOL) \
+                    --mtd-freq-interval $(MTD_FREQ_INTERVAL)
 
 # Compact slug encoding the active MTD parameters (used in output dir names).
-comma        := ,
-MTD_N_IPS    := $(words $(subst $(comma), ,$(MTD_IP_POOL)))
-MTD_N_PORTS  := $(words $(subst $(comma), ,$(MTD_PORT_POOL)))
-MTD_N_PADS   := $(words $(subst $(comma), ,$(MTD_PAD_BUCKETS)))
-MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_IPS)-ports$(MTD_N_PORTS)-pads$(MTD_N_PADS)-mbps$(BG_REPLAY_MBPS)
+comma          := ,
+MTD_N_IPS      := $(words $(subst $(comma), ,$(MTD_IP_POOL)))
+MTD_N_PORTS    := $(words $(subst $(comma), ,$(MTD_PORT_POOL)))
+MTD_N_PADS     := $(words $(subst $(comma), ,$(MTD_PAD_BUCKETS)))
+MTD_N_SCMC_IPS := $(words $(subst $(comma), ,$(MTD_SCMC_IP_POOL)))
+MTD_N_FREQS    := $(words $(subst $(comma), ,$(MTD_FREQ_POOL)))
+MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_IPS)-ports$(MTD_N_PORTS)-pads$(MTD_N_PADS)-srcips$(MTD_N_SCMC_IPS)-mbps$(BG_REPLAY_MBPS)-freqint$(MTD_FREQ_INTERVAL)-freqs$(MTD_N_FREQS)
 
 # ── Attack model source ────────────────────────────────────────────────────────
 # Defaults to the run variant. Set MODEL_SRC=baseline to use the baseline model
@@ -151,6 +165,10 @@ help:
 	@echo "  MTD_PORT_POOL       Broker port pool (port hopping)   (default: $(MTD_PORT_POOL))"
 	@echo "  MTD_PAD_BUCKETS     Payload padding bucket sizes      (default: $(MTD_PAD_BUCKETS))"
 	@echo "  MTD_PAD_INTERVAL    Seconds between padding rotations (default: $(MTD_PAD_INTERVAL))"
+	@echo "  MTD_SCMC_IP_POOL    SCMC source IP pool (src hopping) (default: $(MTD_SCMC_IP_POOL))"
+	@echo "  MTD_SRC_HOP_INTERVAL Seconds between source-IP hops   (default: $(MTD_SRC_HOP_INTERVAL))"
+	@echo "  MTD_FREQ_POOL       Publish-interval pool (freq hop)  (default: $(MTD_FREQ_POOL))"
+	@echo "  MTD_FREQ_INTERVAL   Seconds between freq changes      (default: $(MTD_FREQ_INTERVAL))"
 	@echo ""
 	@echo "Replay parameters:"
 	@echo "  BG_REPLAY_MBPS      Background trace replay rate Mbit/s (default: $(BG_REPLAY_MBPS))"
@@ -182,9 +200,15 @@ all-datasets:
 	$(MAKE) datasets NO_MTD=1
 	$(MAKE) datasets NO_MTD=0
 
+# Ground-truth labeling pools for classify.py: nanogrid = traffic between the
+# SCMC source-IP pool and the SEMP broker-IP pool (port-agnostic). Must match the
+# pools the lab actually hops across, or train/eval labels (and the metric) are wrong.
+CLASSIFY_LABEL_FLAGS := --scmc-ip-pool $(MTD_SCMC_IP_POOL) --semp-ip-pool $(MTD_IP_POOL)
+
 # Training produces model.pt + scaler.pkl in $(EXP_DIR)/model
 $(MODEL):
-	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model
+	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model \
+		$(CLASSIFY_LABEL_FLAGS)
 
 train: $(MODEL)
 
@@ -195,7 +219,8 @@ all-train:
 
 evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 	$(PYTHON) classify.py --mode evaluate --load-model --test-pcap $(TEST_PCAP) \
-		--model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --out-dir $(EVAL_OUT_DIR)
+		--model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --out-dir $(EVAL_OUT_DIR) \
+		$(CLASSIFY_LABEL_FLAGS)
 
 attack: $(ATTACK_MODEL)
 	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) \

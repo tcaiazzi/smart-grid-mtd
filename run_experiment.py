@@ -142,7 +142,8 @@ def scmc_client_command(args, duration=None):
         prefix
         + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
         "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
-        "--semp-control-ip 10.1.0.2 --semp-control-port 9998 --log-file mtd_executor.log"
+        "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
+        f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
     )
 
 
@@ -159,10 +160,31 @@ def experiment_slug(args) -> str:
     n_ips = len(args.mtd_ip_pool.split(","))
     n_ports = len(args.mtd_port_pool.split(","))
     n_pads = len(args.mtd_pad_buckets.split(","))
+    n_scmc_ips = len(args.mtd_scmc_ip_pool.split(","))
+    n_freqs = len(args.mtd_freq_pool.split(","))
     return (
         f"mtd-hop{args.mtd_hop_interval}-padint{args.mtd_pad_interval}"
-        f"-ips{n_ips}-ports{n_ports}-pads{n_pads}-mbps{args.bg_replay_mbps}"
+        f"-ips{n_ips}-ports{n_ports}-pads{n_pads}-srcips{n_scmc_ips}"
+        f"-mbps{args.bg_replay_mbps}"
+        f"-freqint{args.mtd_freq_interval}-freqs{n_freqs}"
     )
+
+
+def scmc_ips(args) -> str:
+    """Comma-separated SCMC source IPs used this run.
+
+    Baseline uses the single static SCMC address; MTD hops across the pool.
+    Downstream tooling (classify.py, plot_results.py) reads this back to know
+    which source IPs belong to the SCMC.
+    """
+    return "10.0.0.2" if args.no_mtd else args.mtd_scmc_ip_pool
+
+
+def write_scmc_ips(args, dst_dir):
+    """Record the SCMC source IPs used this run into <dst_dir>/scmc_ips.txt."""
+    os.makedirs(dst_dir, exist_ok=True)
+    with open(f"{dst_dir}/scmc_ips.txt", "w") as f:
+        f.write(scmc_ips(args) + "\n")
 
 
 def download_logs(scmc, semp, args, dst_dir, prefix=""):
@@ -310,6 +332,36 @@ def _parse_args() -> argparse.Namespace:
         metavar="SECONDS",
         help="Seconds between padding-scheme rotations (default: 3).",
     )
+    mtd.add_argument(
+        "--mtd-scmc-ip-pool",
+        default="10.0.0.2,10.0.0.4,10.0.0.5",
+        metavar="IPS",
+        help="Comma-separated SCMC source IP pool for source-IP hopping. The first "
+        "is the initial source; the SCMC is assigned all of them as aliases and "
+        "rebinds across them (default: 10.0.0.2,10.0.0.4,10.0.0.5). A single entry "
+        "disables source hopping.",
+    )
+    mtd.add_argument(
+        "--mtd-src-hop-interval",
+        type=int,
+        default=2,
+        metavar="SECONDS",
+        help="Seconds between SCMC source-IP hops (default: 2).",
+    )
+    mtd.add_argument(
+        "--mtd-freq-pool",
+        default="1.0",
+        metavar="SECONDS",
+        help="Comma-separated publish intervals (seconds) for message-frequency "
+        "hopping. A single entry disables it (default: 1.0).",
+    )
+    mtd.add_argument(
+        "--mtd-freq-interval",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="Seconds between publish-frequency changes (default: 30).",
+    )
     return p.parse_args()
 
 
@@ -379,13 +431,17 @@ def main():
     router.create_file_from_path(trace_path, "traccia.pcap")
 
     log.info("Creating startup files")
-    lab.create_startup_file_from_list(
-        scmc,
-        [
-            "ip address add 10.0.0.2/24 dev eth0",
-            "ip route add default via 10.0.0.1 dev eth0",
-        ],
-    )
+    scmc_startup = [
+        "ip address add 10.0.0.2/24 dev eth0",
+        "ip route add default via 10.0.0.1 dev eth0",
+    ]
+    if not args.no_mtd:
+        # Extra source IPs the executor hops across (bound as local source on its
+        # MQTT + control sockets). Must be assigned before it can bind to them.
+        scmc_pool = [x.strip() for x in args.mtd_scmc_ip_pool.split(",")]
+        for extra_ip in scmc_pool[1:]:
+            scmc_startup.append(f"ip address add {extra_ip}/24 dev eth0")
+    lab.create_startup_file_from_list(scmc, scmc_startup)
 
     semp_startup = [
         "ip address add 10.1.0.2/24 dev eth0",
@@ -422,7 +478,7 @@ def main():
     log.info("Executing certification authority server")
     manager.exec_obj(
         semp,
-        f"python3 cert_authority.py --shared-key {shared_key} --host 0.0.0.0 --port 9999 --out-dir /etc/mosquitto/certs/ --server-cn semp --server-ip {args.mtd_ip_pool}",
+        f"python3 cert_authority.py --shared-key {shared_key} --host 0.0.0.0 --port 9999 --out-dir /etc/mosquitto/certs/ --server-cn semp --server-ip {args.mtd_ip_pool} --client-ip {args.mtd_scmc_ip_pool}",
         wait=False,
     )
 
@@ -454,7 +510,11 @@ def main():
             f" --port-pool {args.mtd_port_pool} --real-port 18883"
             f" --hop-interval {args.mtd_hop_interval}"
             f" --pad-buckets {args.mtd_pad_buckets}"
-            f" --pad-interval {args.mtd_pad_interval}",
+            f" --pad-interval {args.mtd_pad_interval}"
+            f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
+            f" --src-hop-interval {args.mtd_src_hop_interval}"
+            f" --freq-pool {args.mtd_freq_pool}"
+            f" --freq-interval {args.mtd_freq_interval}",
         )
 
     if args.generate_dataset is not None:
@@ -494,6 +554,7 @@ def main():
         log.info("[Dataset] Dataset saved to %s", local_path)
 
         download_logs(scmc, semp, args, datasets_dir, prefix=f"{args.name}.")
+        write_scmc_ips(args, datasets_dir)
 
     elif args.attack is not None:
         sniff_duration = args.attack
@@ -572,6 +633,7 @@ def main():
             scmc.api_object, "scmc_capture.pcap", f"{out_dir}/scmc_capture.pcap"
         )
         download_logs(scmc, semp, args, out_dir)
+        write_scmc_ips(args, out_dir)
         log.info("[Attack] Captures saved to %s/", out_dir)
 
     log.info("Undeploying lab")

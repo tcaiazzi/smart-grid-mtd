@@ -53,17 +53,28 @@ def _flow_key_str(fk: tuple) -> str:
 
 def extract_features(
     pcap_path: str,
-    scmc_ip: Optional[str] = None,
-    semp_ip: Optional[str] = None,
-    broker_port: int = 8883,
+    scmc_ips: Optional[list] = None,
+    semp_ips: Optional[list] = None,
     force_label: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Parse a PCAP and return a DataFrame with one row per IP/TCP packet.
-    Labels packets as nanogrid when they belong to the SCMC↔broker connection.
-    IAT and burst_flag are computed intra-flow (per 4-tuple).
+
+    A packet is labeled nanogrid when it travels between the SCMC source-IP pool
+    (`scmc_ips`) and the SEMP broker-IP pool (`semp_ips`), in either direction.
+    This is pool- and port-agnostic on purpose: under MTD the SCMC hops its source
+    IP, the broker hops its IP and port, and the control channel follows the broker
+    — so any address/port match would otherwise mislabel hopped nanogrid packets as
+    background. All SCMC↔SEMP traffic (MQTT telemetry + control channel) is the
+    nanogrid signal the attacker must locate; everything else (replayed background)
+    is not. Pass both pools to label; pass neither (the attacker's view) to leave
+    the data unlabeled. IAT and burst_flag are computed intra-flow (per 4-tuple).
     """
     packets = rdpcap(str(pcap_path))
+
+    scmc_set = set(scmc_ips) if scmc_ips else None
+    semp_set = set(semp_ips) if semp_ips else None
+    label_by_pools = scmc_set is not None and semp_set is not None
 
     flow_prev_time: dict[tuple, float] = {}
     rows = []
@@ -110,12 +121,10 @@ def extract_features(
 
         if force_label is not None:
             row["is_nanogrid"] = force_label
-        elif scmc_ip and semp_ip:
+        elif label_by_pools:
             row["is_nanogrid"] = int(
-                (ip.src == scmc_ip and tcp.dport == broker_port)
-                or (ip.dst == scmc_ip and tcp.sport == broker_port)
-                or (ip.src == semp_ip and tcp.sport == broker_port)
-                or (ip.dst == semp_ip and tcp.dport == broker_port)
+                (ip.src in scmc_set and ip.dst in semp_set)
+                or (ip.src in semp_set and ip.dst in scmc_set)
             )
 
         rows.append(row)
@@ -499,9 +508,18 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--train-pcap", metavar="PCAP", default=None)
     p.add_argument("--test-pcap", metavar="PCAP", default=None)
-    p.add_argument("--scmc-ip", default="10.0.0.2")
-    p.add_argument("--semp-ip", default="10.1.0.2")
-    p.add_argument("--broker-port", type=int, default=8883)
+    p.add_argument(
+        "--scmc-ip-pool", default="10.0.0.2,10.0.0.4,10.0.0.5",
+        help="Comma-separated SCMC source-IP pool. A packet is labeled nanogrid "
+             "iff it is between this pool and --semp-ip-pool (either direction), "
+             "so MTD source-IP/port hopping and the control channel are covered "
+             "(default: 10.0.0.2,10.0.0.4,10.0.0.5).",
+    )
+    p.add_argument(
+        "--semp-ip-pool", default="10.1.0.2,10.1.0.4,10.1.0.5",
+        help="Comma-separated SEMP broker-IP pool — the other end of the nanogrid "
+             "connection (default: 10.1.0.2,10.1.0.4,10.1.0.5).",
+    )
     p.add_argument("--model", default="output/model.pt")
     p.add_argument("--scaler", default="output/scaler.pkl")
     p.add_argument("--out-dir", default="output")
@@ -523,15 +541,17 @@ def main() -> None:
     out_dir = Path(args.out_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    scmc_ips = [x.strip() for x in args.scmc_ip_pool.split(",") if x.strip()]
+    semp_ips = [x.strip() for x in args.semp_ip_pool.split(",") if x.strip()]
+
     if args.mode == "train":
         if not args.train_pcap:
             sys.exit("[ERROR] --train-pcap required for train mode")
         print(f"[main] Extracting features from {args.train_pcap}")
         train_df = extract_features(
             args.train_pcap,
-            scmc_ip=args.scmc_ip,
-            semp_ip=args.semp_ip,
-            broker_port=args.broker_port,
+            scmc_ips=scmc_ips,
+            semp_ips=semp_ips,
         )
         print(
             f"[main] Train packets: {len(train_df)}  "
@@ -566,9 +586,8 @@ def main() -> None:
             print(f"[main] Extracting train features from {args.train_pcap}")
             train_df = extract_features(
                 args.train_pcap,
-                scmc_ip=args.scmc_ip,
-                semp_ip=args.semp_ip,
-                broker_port=args.broker_port,
+                scmc_ips=scmc_ips,
+                semp_ips=semp_ips,
             )
             print(
                 f"[main] Train packets: {len(train_df)}  "
@@ -589,9 +608,8 @@ def main() -> None:
         print(f"[main] Extracting test features from {args.test_pcap}")
         test_df = extract_features(
             args.test_pcap,
-            scmc_ip=args.scmc_ip,
-            semp_ip=args.semp_ip,
-            broker_port=args.broker_port,
+            scmc_ips=scmc_ips,
+            semp_ips=semp_ips,
         )
         print(
             f"[main] Test packets: {len(test_df)}  "

@@ -7,6 +7,7 @@ Reads:   output/sweep_manifest.csv            (slug column = experiment dir name
 Writes:  output/sweep/e1_address_diversity.pdf
          output/sweep/e2_hop_interval.pdf
          output/sweep/e3_bg_noise.pdf
+         output/sweep/e4_freq_mutation.pdf
          output/sweep/sweep_results.csv
 
 Usage:
@@ -102,13 +103,14 @@ def _label_bar(ax, bar, v):
 # ── E1 — address-space diversity ──────────────────────────────────────────────
 
 def plot_e1(df: pd.DataFrame, out_path: str) -> None:
-    """Grouped bar: 2x2 factorial of IP hop x port hop."""
-    # (label, experiment tag, n_ips x n_ports description)
+    """Grouped bar: each hop mechanism isolated vs no-hop and all-on."""
+    # (label, experiment tag) — number is the address-space size ips×ports×src
     configs = [
-        ("No hop\n(1 × 1 = 1)",    "E1-no-hop"),
-        ("Port only\n(1 × 5 = 5)",  "E1-port-only"),
-        ("IP only\n(3 × 1 = 3)",    "E1-ip-only"),
-        ("Both\n(3 × 5 = 15)",      "E0-default"),
+        ("No hop\n(1×1×1=1)",       "E1-no-hop"),
+        ("Port only\n(1×5×1=5)",    "E1-port-only"),
+        ("IP only\n(3×1×1=3)",      "E1-ip-only"),
+        ("Src-IP only\n(1×1×3=3)",  "E1-src-only"),
+        ("All\n(3×5×3=45)",         "E0-default"),
     ]
     labels        = [c[0] for c in configs]
     mtd_scores    = [score(df, LABEL_MTD_MODEL,  experiment=c[1]) for c in configs]
@@ -128,7 +130,7 @@ def plot_e1(df: pd.DataFrame, out_path: str) -> None:
     _threshold(ax)
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-    _finish(ax, "E1 — Address-space diversity: IP hop × port hop")
+    _finish(ax, "E1 — Address-space diversity: IP × port × source-IP hop")
 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -231,6 +233,73 @@ def plot_e2_delivery(df: pd.DataFrame, out_path: str) -> None:
     print(f"[sweep] {out_path}")
 
 
+# ── E4 — message-frequency mutation sweep ─────────────────────────────────────
+
+def plot_e4(df: pd.DataFrame, out_path: str, base_ref: float) -> None:
+    """Line plot: detection score vs message-frequency mutation interval (log x).
+
+    The fixed publish cadence is a timing fingerprint; rotating it across a pool
+    every `freq_interval` seconds keeps the inter-arrival signal moving. Shorter
+    intervals mutate more often. E0-default is the 30 s reference point.
+    """
+    e4 = df[df["experiment"].str.startswith("E4-") | (df["experiment"] == "E0-default")]
+    freq_vals = sorted(e4["freq_interval"].dropna().unique())
+
+    mtd_scores    = [score(e4, LABEL_MTD_MODEL,  freq_interval=f) for f in freq_vals]
+    xmodel_scores = [score(e4, LABEL_BASE_MODEL, freq_interval=f) for f in freq_vals]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(freq_vals, mtd_scores,    "o-",  color=COLOR_MTD,    lw=2,
+            label="MTD-trained model",      zorder=3)
+    ax.plot(freq_vals, xmodel_scores, "s--", color=COLOR_XMODEL, lw=2,
+            label="Baseline-trained model", zorder=3)
+
+    if not np.isnan(base_ref):
+        ax.axhline(base_ref, ls="--", color=COLOR_BASE, lw=1.5, zorder=2,
+                   label=f"no-MTD baseline ({base_ref:.2f})")
+
+    _threshold(ax)
+    ax.set_xscale("log")
+    ax.set_xticks(freq_vals)
+    ax.set_xticklabels([str(int(f)) for f in freq_vals])
+    _finish(ax, "E4 — Message-frequency mutation interval",
+            xlabel="frequency mutation interval (s)")
+
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[sweep] {out_path}")
+
+
+def plot_e4_delivery(df: pd.DataFrame, out_path: str) -> None:
+    """Line plot: MQTT delivery ratio vs frequency mutation interval."""
+    e4 = df[df["experiment"].str.startswith("E4-") | (df["experiment"] == "E0-default")]
+    freq_vals = sorted(e4["freq_interval"].dropna().unique())
+
+    mtd_delivery    = [delivery(e4, LABEL_MTD_MODEL,  freq_interval=f) for f in freq_vals]
+    xmodel_delivery = [delivery(e4, LABEL_BASE_MODEL, freq_interval=f) for f in freq_vals]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(freq_vals, mtd_delivery,    "o-",  color=COLOR_MTD,    lw=2,
+            label="MTD-trained model",      zorder=3)
+    ax.plot(freq_vals, xmodel_delivery, "s--", color=COLOR_XMODEL, lw=2,
+            label="Baseline-trained model", zorder=3)
+
+    ax.set_xscale("log")
+    ax.set_xticks(freq_vals)
+    ax.set_xticklabels([str(int(f)) for f in freq_vals])
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("frequency mutation interval (s)")
+    ax.set_ylabel("delivery ratio  (broker received / client sent)")
+    ax.set_title("E4 — Message-frequency mutation: MQTT delivery ratio")
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3, zorder=1)
+    ax.figure.tight_layout()
+
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[sweep] {out_path}")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -255,6 +324,8 @@ def main() -> None:
     plot_e2(df, os.path.join(args.out_dir, "e2_hop_interval.pdf"), base_ref)
     plot_e2_delivery(df, os.path.join(args.out_dir, "e2_delivery_ratio.pdf"))
     plot_e3(df, os.path.join(args.out_dir, "e3_bg_noise.pdf"))
+    plot_e4(df, os.path.join(args.out_dir, "e4_freq_mutation.pdf"), base_ref)
+    plot_e4_delivery(df, os.path.join(args.out_dir, "e4_delivery_ratio.pdf"))
 
     out_csv = os.path.join(args.out_dir, "sweep_results.csv")
     df.to_csv(out_csv, index=False)
