@@ -154,7 +154,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl plot-tradeoff clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -308,8 +308,8 @@ all:
 plots:
 	$(MAKE) entropy NO_MTD=1
 	$(MAKE) entropy
-	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --bg-replay-mbps $(BG_REPLAY_MBPS) \
-		--plots-dir $(EXP_DIR)
+	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --mtd-prefix $(MTD_PREFIX) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) --plots-dir $(EXP_DIR)
 
 # Standalone figures for the no-MTD baseline run -> output/baseline-mbps<M>/
 plots-baseline:
@@ -394,6 +394,20 @@ compare-rl:
 	$(PYTHON) compare_coordinators.py --slug $(MTD_PARAMS_SLUG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root output --out-dir $(COMPARE_DIR) \
 		--rl-tags "$(RL_TAGS)"
+
+# Run compare-rl for every config with data: discover each output/mtd-<slug>/ dir,
+# recover its background rate from the mbps<M> embedded in the slug, and regenerate
+# that config's comparison into output/compare-<slug>/. No lab run; pass RL_TAGS=... as
+# usual. Idempotent — re-reads the existing artifacts for every config it finds.
+compare-rl-all:
+	@set -e; for d in output/mtd-*/; do \
+		slug=$$(basename "$$d" | sed 's/^mtd-//'); \
+		mbps=$$(echo "$$slug" | sed -E 's/.*-mbps([0-9]+).*/\1/'); \
+		echo "######## $$slug (mbps$$mbps) ########"; \
+		$(PYTHON) compare_coordinators.py --slug "$$slug" \
+			--bg-replay-mbps "$$mbps" --output-root output \
+			--out-dir "output/compare-$$slug" --rl-tags "$(RL_TAGS)"; \
+	done
 
 # Security vs hop-cost tradeoff (simulation): the RL policy vs the fixed-timer
 # frontier -> $(RL_DIR)/tradeoff.{pdf,csv}. This is where "lower hop cost at equal

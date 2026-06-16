@@ -22,10 +22,18 @@ needed (it reads the held-out eval + entropy artifacts, never re-runs the lab):
     Shows WHICH wire fields each coordinator moves (src_ip / dst_ip / dst_port /
     packet_len / tcp_payload_len / iat) and by how much.
 
+  • Availability (↑ better): cumulative SCMC telemetry that reached the SEMP during
+    the attack run, matched between the link-A and link-B captures in each config's
+    attack/model-baseline/ dir (the one signal that DOES need the attack captures).
+    Surviving telemetry climbs to the end of the run; a severed SCMC plateaus.
+
 Outputs (default output/compare-<slug>/):
-    comparison.csv            the full metric table
-    security_comparison.pdf   AUC + recall per coordinator
-    entropy_comparison.pdf    flow + per-field entropy, grouped by coordinator
+    comparison.csv               the full metric table
+    security_comparison.pdf      AUC + recall per coordinator
+    entropy_comparison.pdf       flow + per-field entropy, grouped by coordinator
+    detection_comparison.pdf     avg attacker nanogrid_frac over the nanogrid IPs
+    availability_comparison.pdf  cumulative telemetry delivered, per coordinator
+    availability_cost_comparison.pdf  cumulative hop cost paid over time (mtd_env weights)
 
 Usage:
   .venv/bin/python compare_coordinators.py \\
@@ -34,7 +42,10 @@ Usage:
 """
 
 import argparse
+import datetime
+import glob
 import os
+import re
 
 import matplotlib
 
@@ -45,6 +56,21 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 
 from entropy import FIELD_ORDER
+from mtd_env import Calibration
+from plot_results import (
+    DEFAULT_SCMC_IP,
+    DETECT_THRESHOLD,
+    compute_delivery,
+    load_scmc_pool,
+    ranking_nanogrid_detection,
+)
+from rl_policy import KNOBS
+
+# Per-knob availability cost, the SAME weights the RL reward charges in
+# mtd_env (Calibration.cost, [port, ip, src, pad, freq]). Keyed by knob name so the
+# log parser can charge each actuation it sees. Single source of truth — importing it
+# keeps this figure in lockstep with whatever the env was trained against.
+COST = dict(zip(KNOBS, Calibration().cost))
 
 # One bar group per coordinator. model_src picks which eval model scored it: each
 # MTD config is judged by its own matched model; the baseline by the baseline model.
@@ -119,6 +145,144 @@ def load_timeseries(ts_csv: str):
     return pd.read_csv(ts_csv)
 
 
+def _attack_capture_dir(exp_dir: str):
+    """The attack run dir holding the delivery captures, or None.
+
+    run_single.sh runs the attack as MODEL_SRC=baseline, so prefer
+    attack/model-baseline/; fall back to any attack/model-*/ that has both captures.
+    """
+    preferred = os.path.join(exp_dir, "attack", "model-baseline")
+    candidates = [preferred] + sorted(glob.glob(os.path.join(exp_dir, "attack", "model-*")))
+    for d in candidates:
+        if (os.path.exists(os.path.join(d, "scmc_capture.pcap"))
+                and os.path.exists(os.path.join(d, "router_capture.pcap"))):
+            return d
+    return None
+
+
+def load_availability(exp_dir: str) -> dict:
+    """Delivery curve for a coordinator from its attack captures, or {}.
+
+    Matches SCMC-sent data packets (over the whole source-IP pool, so MTD hops are
+    counted) against what crossed to the SEMP, reusing plot_results.compute_delivery.
+    Times are returned relative to the router-capture start so curves share an axis.
+    """
+    attack_dir = _attack_capture_dir(exp_dir)
+    if attack_dir is None:
+        print(f"[warn] no attack captures under {exp_dir}/attack — no availability")
+        return {}
+    pool = load_scmc_pool(exp_dir, DEFAULT_SCMC_IP)
+    delivered, sent, t_min, t_max = compute_delivery(
+        os.path.join(attack_dir, "scmc_capture.pcap"),
+        os.path.join(attack_dir, "router_capture.pcap"),
+        pool,
+    )
+    return {
+        "rel_delivered": sorted(max(e - t_min, 0.0) for e in delivered),
+        "window_s": t_max - t_min,
+        "n_delivered": len(delivered),
+        "n_sent": sent,
+        "delivery_ratio": (len(delivered) / sent) if sent else float("nan"),
+    }
+
+
+# Knob-actuation event lines the SCMC executor writes to client.log. Each carries an
+# ISO wall-clock timestamp and maps to a costed knob (see COST). The broker hop line
+# carries both endpoints so we can tell an ip hop (0.30) from a port-only hop (0.15).
+_LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)")
+_BROKER_HOP_RE = re.compile(
+    r"\] hop seq=\d+\s+(\d{1,3}(?:\.\d{1,3}){3}):(\d+)\s+→\s+"
+    r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)")
+_SRC_HOP_RE = re.compile(r"\] src hop seq=\d+")
+_PAD_RE = re.compile(r"\] padding policy →")
+_FREQ_RE = re.compile(r"\] publish interval →")
+
+
+def _client_log(exp_dir: str):
+    """The attack-run SCMC executor log holding the knob-actuation events, or None."""
+    attack_dir = _attack_capture_dir(exp_dir)
+    if attack_dir is None:
+        return None
+    path = os.path.join(attack_dir, "client.log")
+    return path if os.path.exists(path) else None
+
+
+def load_availability_cost(exp_dir: str) -> dict:
+    """Cumulative availability cost a coordinator pays to hop, over the run, or {}.
+
+    Parses the attack-run client.log: every knob actuation the SCMC executor logs is
+    charged the SAME per-knob weight the RL reward uses (COST, from mtd_env). A broker
+    hop is costed per field that actually changed — ip (0.30) and/or port (0.15) — so a
+    port-only NAT swap is cheap while a full ip+port hop is dear, mirroring the env's
+    independent knobs. src hops cost 0.30; padding/frequency retimes 0.01 each. The
+    baseline (no MTD) emits none of these lines, so its cost stays flat at 0.
+
+    Times are anchored to the first log line so the curve starts at run start. Returns
+    {"rel_events": [(rel_t, cost), ...] sorted, "total_cost": float, "window_s": float}.
+    """
+    log_path = _client_log(exp_dir)
+    if log_path is None:
+        print(f"[warn] no attack client.log under {exp_dir}/attack — no cost curve")
+        return {}
+
+    def _ts(line: str):
+        m = _LOG_TS_RE.match(line)
+        return (datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp()
+                if m else None)
+
+    t0, events = None, []
+    with open(log_path, errors="replace") as f:
+        for line in f:
+            ts = _ts(line)
+            if ts is None:
+                continue
+            if t0 is None:
+                t0 = ts
+            cost = 0.0
+            m = _BROKER_HOP_RE.search(line)
+            if m:
+                old_ip, old_port, new_ip, new_port = m.group(1), m.group(2), m.group(3), m.group(4)
+                if new_ip != old_ip:
+                    cost += COST["ip"]
+                if new_port != old_port:
+                    cost += COST["port"]
+            elif _SRC_HOP_RE.search(line):
+                cost = COST["src"]
+            elif _PAD_RE.search(line):
+                cost = COST["pad"]
+            elif _FREQ_RE.search(line):
+                cost = COST["freq"]
+            if cost > 0.0:
+                events.append((ts - t0, cost))
+
+    events.sort()
+    return {
+        "rel_events": events,
+        "total_cost": float(sum(c for _, c in events)),
+        "window_s": events[-1][0] if events else 0.0,
+    }
+
+
+def load_detection(exp_dir: str) -> dict:
+    """Attacker fingerprinting of the nanogrid for a coordinator, or {}.
+
+    Averages the attack run's nanogrid_ranking.csv nanogrid_frac over the src_ips
+    that belong to the nanogrid in this experiment (SCMC pool + SEMP subnet), reusing
+    plot_results.ranking_nanogrid_detection. Lower = the attacker is less sure which
+    IPs are the nanogrid, i.e. the coordinator diffuses the signal better.
+    """
+    attack_dir = _attack_capture_dir(exp_dir)
+    ranking_csv = (os.path.join(attack_dir, "nanogrid_ranking.csv")
+                   if attack_dir else os.path.join(exp_dir, "attack", "model-baseline",
+                                                   "nanogrid_ranking.csv"))
+    pool = load_scmc_pool(exp_dir, DEFAULT_SCMC_IP)
+    frac, n_ips = ranking_nanogrid_detection(ranking_csv, pool)
+    if np.isnan(frac):
+        print(f"[warn] no usable nanogrid ranking under {exp_dir}/attack — no detection")
+        return {}
+    return {"nanogrid_detect": frac, "n_nanogrid_ips": n_ips}
+
+
 # ── Plots ──────────────────────────────────────────────────────────────────────
 
 def plot_security(coords: list, out_path: str) -> None:
@@ -184,6 +348,43 @@ def plot_entropy(coords: list, out_path: str) -> None:
     print(f"[plot] entropy comparison -> {out_path}")
 
 
+def plot_detection(coords: list, out_path: str) -> None:
+    """One bar per coordinator: avg attacker nanogrid_frac over the nanogrid IPs.
+
+    The same model-free fingerprinting signal as the per-config detection figure, but
+    across all coordinators at once — how confidently the attacker flags the genuine
+    nanogrid IPs under each defense. Lower = better diffusion (↓ = better defense)."""
+    have = [c for c in coords if c.get("detect", {}).get("nanogrid_detect") is not None]
+    if not have:
+        print("[plot] no detection data — skipping detection comparison")
+        return
+    x = np.arange(len(have))
+    vals = [c["detect"]["nanogrid_detect"] for c in have]
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bars = ax.bar(x, vals, width=0.6, edgecolor="black",
+                  color=[c["color"] for c in have])
+    ax.axhline(DETECT_THRESHOLD, ls="--", color="gray",
+               label=f"detection threshold ({DETECT_THRESHOLD})")
+
+    for bar, c in zip(bars, have):
+        ax.annotate(f"{c['detect']['nanogrid_detect']:.2f}\n({c['detect']['n_nanogrid_ips']} IPs)",
+                    (bar.get_x() + bar.get_width() / 2, c["detect"]["nanogrid_detect"]),
+                    ha="center", va="bottom", fontsize=9)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([c["label"].replace("\n", " ") for c in have])
+    ax.set_ylabel("avg attacker nanogrid_frac over the nanogrid IPs  (↓ = better defense)")
+    ax.set_ylim(0, 1.05)
+    ax.set_title("Attacker fingerprinting of the nanogrid — RL vs fixed MTD")
+    ax.legend(fontsize=9)
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[plot] detection comparison -> {out_path}")
+
+
 def plot_timeseries(coords: list, out_path: str) -> None:
     """Overlay the headline flow-entropy over time for every coordinator.
 
@@ -240,6 +441,80 @@ def plot_timeseries_fields(coords: list, out_path: str) -> None:
     print(f"[plot] per-field entropy timeseries -> {out_path}")
 
 
+def plot_availability(coords: list, out_path: str) -> None:
+    """Overlay cumulative SCMC telemetry delivered to the SEMP, per coordinator.
+
+    Each curve steps once per SCMC data packet that reached the SEMP, anchored to
+    its router-capture start and held flat to the longest run — so a coordinator
+    whose telemetry survives the attack keeps climbing while a severed one plateaus.
+    """
+    have = [c for c in coords if c.get("avail", {}).get("rel_delivered")]
+    if not have:
+        print("[plot] no availability data — skipping availability comparison")
+        return
+    t_max = max(c["avail"]["window_s"] for c in have)
+    styles = ["-", "--", ":", "-."]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for i, c in enumerate(have):
+        rel = np.array(c["avail"]["rel_delivered"], dtype=float)
+        cum = np.arange(1, len(rel) + 1, dtype=float)
+        rel = np.concatenate(([0.0], rel, [t_max]))
+        cum = np.concatenate(([0.0], cum, [cum[-1]]))
+        ratio = c["avail"]["delivery_ratio"]
+        label = f"{c['label'].replace(chr(10), ' ')}  ({ratio:.0%} delivered)"
+        ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
+                ls=styles[i % len(styles)], label=label)
+
+    ax.set_xlabel("time since router capture start (s)")
+    ax.set_ylabel("cumulative SCMC packets delivered to SEMP")
+    ax.set_title("SCMC availability under attack — RL vs fixed MTD")
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[plot] availability comparison -> {out_path}")
+
+
+def plot_availability_cost(coords: list, out_path: str) -> None:
+    """Overlay the cumulative availability cost each coordinator pays to hop, over time.
+
+    Each curve steps up by the per-knob cost (COST, the RL reward's weights) at every
+    knob actuation in that coordinator's attack client.log, held flat to the longest
+    run. A fixed-timer coordinator hops blindly and climbs steeply; an RL policy that
+    learns to favour cheap knobs (or hop less) ends lower; the baseline stays at 0.
+    """
+    have = [c for c in coords if c.get("cost")]
+    if not have:
+        print("[plot] no cost data — skipping availability-cost comparison")
+        return
+    t_max = max(c["cost"]["window_s"] for c in have) or 1.0
+    styles = ["-", "--", ":", "-."]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    for i, c in enumerate(have):
+        events = c["cost"]["rel_events"]
+        rel = np.array([t for t, _ in events], dtype=float)
+        cum = np.cumsum([cost for _, cost in events]) if events else np.array([])
+        # frame at (0, 0) and hold the final total flat to the longest run
+        rel = np.concatenate(([0.0], rel, [t_max]))
+        cum = np.concatenate(([0.0], cum, [cum[-1] if len(cum) else 0.0]))
+        label = f"{c['label'].replace(chr(10), ' ')}  (cost {c['cost']['total_cost']:.2f})"
+        ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
+                ls=styles[i % len(styles)], label=label)
+
+    ax.set_xlabel("time since run start (s)")
+    ax.set_ylabel("cumulative availability cost")
+    ax.set_title("Availability cost of hopping — RL vs fixed MTD")
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[plot] availability-cost comparison -> {out_path}")
+
+
 def build_table(coords: list) -> pd.DataFrame:
     rows = []
     for c in coords:
@@ -247,6 +522,12 @@ def build_table(coords: list) -> pd.DataFrame:
         row["fingerprint_auc"] = c.get("auc")
         row["nanogrid_recall"] = c.get("nanogrid_recall")
         row["n_nanogrid_pkts"] = c.get("n_nanogrid")
+        row["nanogrid_detect_frac"] = c.get("detect", {}).get("nanogrid_detect")
+        row["n_nanogrid_ips"] = c.get("detect", {}).get("n_nanogrid_ips")
+        row["delivery_ratio"] = c.get("avail", {}).get("delivery_ratio")
+        row["n_delivered"] = c.get("avail", {}).get("n_delivered")
+        row["n_sent"] = c.get("avail", {}).get("n_sent")
+        row["availability_cost"] = c.get("cost", {}).get("total_cost")
         for m in ENTROPY_METRICS:
             row[f"H_{m}"] = c.get("entropy", {}).get(m)
         rows.append(row)
@@ -281,6 +562,9 @@ def main() -> None:
         c.update(load_security(c["pred_csv"]))
         c["entropy"] = load_entropy(c["entropy_csv"])
         c["ts"] = load_timeseries(c["ts_csv"])
+        c["avail"] = load_availability(c["exp_dir"])
+        c["cost"] = load_availability_cost(c["exp_dir"])
+        c["detect"] = load_detection(c["exp_dir"])
 
     table = build_table(coords)
     print("\n=== Comparison ===")
@@ -291,6 +575,9 @@ def main() -> None:
 
     plot_security(coords, os.path.join(out_dir, "security_comparison.pdf"))
     plot_entropy(coords, os.path.join(out_dir, "entropy_comparison.pdf"))
+    plot_detection(coords, os.path.join(out_dir, "detection_comparison.pdf"))
+    plot_availability(coords, os.path.join(out_dir, "availability_comparison.pdf"))
+    plot_availability_cost(coords, os.path.join(out_dir, "availability_cost_comparison.pdf"))
     plot_timeseries(coords, os.path.join(out_dir, "entropy_timeseries_comparison.pdf"))
     plot_timeseries_fields(coords, os.path.join(out_dir, "entropy_timeseries_fields.pdf"))
 
