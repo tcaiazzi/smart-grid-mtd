@@ -124,11 +124,13 @@ def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str) -> tup
     return str(ranking.index[0]), ranking
 
 
-def scmc_client_command(args, duration=None):
+def scmc_client_command(args, duration=None, shared_key=None):
     """Build the SCMC publisher command for the active variant.
 
     Baseline (--no-mtd) runs the plain simple_client; otherwise the MTD executor.
     When `duration` is set the command is wrapped in `timeout` so it self-terminates.
+    `shared_key` (QKD-simulated) encrypts the MTD control channel; passed only to
+    the executor (the baseline simple_client has no control channel).
     """
     prefix = f"timeout {duration} " if duration is not None else ""
     if args.no_mtd:
@@ -138,12 +140,14 @@ def scmc_client_command(args, duration=None):
             "--cafile certs/ca.crt --certfile certs/client.crt "
             "--keyfile certs/client.key --log-file simple_client.log"
         )
+    shared_key_arg = f" --shared-key {shared_key}" if shared_key else ""
     return (
         prefix
         + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
         "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
         "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
         f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
+        f"{shared_key_arg}"
     )
 
 
@@ -559,7 +563,8 @@ def main():
             f" --hop-timeout {args.mtd_hop_timeout}"
             f" --pad-buckets {args.mtd_pad_buckets}"
             f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
-            f" --freq-pool {args.mtd_freq_pool}",
+            f" --freq-pool {args.mtd_freq_pool}"
+            f" --shared-key {shared_key}",
         )
     else:
         manager.exec_obj(
@@ -574,7 +579,8 @@ def main():
             f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
             f" --src-hop-interval {args.mtd_src_hop_interval}"
             f" --freq-pool {args.mtd_freq_pool}"
-            f" --freq-interval {args.mtd_freq_interval}",
+            f" --freq-interval {args.mtd_freq_interval}"
+            f" --shared-key {shared_key}",
         )
 
     if args.generate_dataset is not None:
@@ -591,7 +597,7 @@ def main():
             f"timeout {duration} bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0",
         )
         log.info("[Dataset] Starting SCMC client in parallel with the replay")
-        agent_stream = manager.exec_obj(scmc, scmc_client_command(args))
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key))
         # _drain(agent_stream, to_print=True)
 
         # manager.connect_tty_obj(scmc)
@@ -626,7 +632,7 @@ def main():
         manager.exec_obj(router, f"bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0")
 
         log.info("[Attack] Starting scmc client")
-        agent_stream = manager.exec_obj(scmc, scmc_client_command(args))
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key))
         # _drain(agent_stream, to_print=True)
 
         log.info("[Attack] Starting router capture (before + after attack)")

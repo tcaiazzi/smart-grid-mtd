@@ -45,12 +45,15 @@ Deps:   pip install paho-mqtt pymgrid
 import argparse
 import json
 import logging
+import os
 import random
 import socket
 import struct
 import threading
 import time
 import warnings
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +149,19 @@ def step_microgrid(mg: Microgrid, scmc_id: str) -> dict:
     }
 
 
+# ── Crypto helpers (AES-256-GCM under the QKD shared key) ──────────────────────
+# Same construction as the cert-exchange protocol (assets/qkd/cert_client.py),
+# so the control channel rides the same QKD-simulated key.
+
+def encrypt_payload(data: bytes, key: bytes) -> bytes:
+    nonce = os.urandom(12)
+    return nonce + AESGCM(key).encrypt(nonce, data, None)
+
+
+def decrypt_payload(data: bytes, key: bytes) -> bytes:
+    return AESGCM(key).decrypt(data[:12], data[12:], None)
+
+
 # ── Framing helpers ───────────────────────────────────────────────────────────
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -158,14 +174,19 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
-def _send_msg(sock: socket.socket, obj: dict) -> None:
+def _send_msg(sock: socket.socket, obj: dict, key: bytes = None) -> None:
     payload = json.dumps(obj).encode()
+    if key is not None:
+        payload = encrypt_payload(payload, key)
     sock.sendall(struct.pack(">I", len(payload)) + payload)
 
 
-def _recv_msg(sock: socket.socket) -> dict:
+def _recv_msg(sock: socket.socket, key: bytes = None) -> dict:
     length = struct.unpack(">I", _recv_exact(sock, 4))[0]
-    return json.loads(_recv_exact(sock, length))
+    payload = _recv_exact(sock, length)
+    if key is not None:
+        payload = decrypt_payload(payload, key)
+    return json.loads(payload)
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -183,8 +204,11 @@ class SCMCExecutor:
                  semp_ip: str, semp_port: int, interval: float = 1.0,
                  ssl: bool = False, cafile: str = None,
                  certfile: str = None, keyfile: str = None,
-                 pad_buckets: list = None, src_ip: str = None):
+                 pad_buckets: list = None, src_ip: str = None,
+                 shared_key: str = None):
         self.grid_id   = grid_id
+        # QKD-simulated shared key for control-channel encryption (None = plaintext).
+        self._key      = bytes.fromhex(shared_key) if shared_key else None
         self.broker    = broker
         self.mqtt_port = mqtt_port
         self.semp_ip   = semp_ip
@@ -425,7 +449,7 @@ class SCMCExecutor:
 
     def _send_ctrl(self, msg: dict) -> None:
         try:
-            _send_msg(self._ctrl_sock, msg)
+            _send_msg(self._ctrl_sock, msg, self._key)
         except OSError as e:
             log.warning("[%s] ctrl send error: %s", self.grid_id, e)
 
@@ -464,7 +488,7 @@ class SCMCExecutor:
         while True:
             sock = self._ctrl_sock           # snapshot: may be swapped by _reconnect_ctrl
             try:
-                msg   = _recv_msg(sock)
+                msg   = _recv_msg(sock, self._key)
                 mtype = msg.get("type")
                 seq   = msg.get("seq")
                 in_m  = msg.get("in_messages", 0)
@@ -528,7 +552,7 @@ class SCMCExecutor:
                 )
                 sock.settimeout(None)
                 self._ctrl_sock = sock
-                _send_msg(sock, {"type": "HELLO", "scmc_id": self.grid_id})
+                _send_msg(sock, {"type": "HELLO", "scmc_id": self.grid_id}, self._key)
                 log.info("[%s] ctrl → %s:%s", self.grid_id, self.semp_ip, self.semp_port)
                 return
             except OSError as e:
@@ -647,7 +671,13 @@ def main():
     parser.add_argument("--log-file", default="mtd_executor.log",
                         help="File to write the message-exchange log "
                              "(default: mtd_executor.log in the working directory)")
+    parser.add_argument("--shared-key", default=None,
+                        help="64-char hex QKD shared key for control-channel "
+                             "AES-256-GCM encryption (omit = plaintext)")
     args = parser.parse_args()
+
+    if args.shared_key is not None and len(args.shared_key) != 64:
+        parser.error("--shared-key must be exactly 64 hex chars (32 bytes)")
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     if args.log_file:
@@ -684,6 +714,7 @@ def main():
         keyfile     = args.keyfile,
         pad_buckets = pad_buckets,
         src_ip      = src_ip,
+        shared_key  = args.shared_key,
     ).run()
 
 

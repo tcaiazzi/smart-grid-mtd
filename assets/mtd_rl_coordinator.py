@@ -255,7 +255,13 @@ def main():
     parser.add_argument("--pad-interval", type=float, default=30.0)
     parser.add_argument("--src-hop-interval", type=float, default=30.0)
     parser.add_argument("--freq-interval", type=float, default=30.0)
+    parser.add_argument("--shared-key", default=None,
+                        help="64-char hex QKD shared key for control-channel "
+                             "AES-256-GCM encryption (omit = plaintext)")
     args = parser.parse_args()
+
+    if args.shared_key is not None and len(args.shared_key) != 64:
+        parser.error("--shared-key must be exactly 64 hex chars (32 bytes)")
 
     ip_pool = [x.strip() for x in args.ip_pool.split(",") if x.strip()]
     port_pool = [int(x.strip()) for x in args.port_pool.split(",") if x.strip()]
@@ -269,7 +275,7 @@ def main():
         pad_buckets=pad_buckets, pad_interval=args.pad_interval,
         scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
         freq_pool=freq_pool, freq_interval=args.freq_interval,
-        hop_timeout=args.hop_timeout,
+        hop_timeout=args.hop_timeout, shared_key=args.shared_key,
         policy_path=args.policy, tick_interval=args.tick,
     ).run()
 

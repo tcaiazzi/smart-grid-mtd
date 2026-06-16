@@ -56,12 +56,28 @@ target too (no iptables — the SCMC rebinds its socket source address).
 
 import argparse
 import json
+import os
 import random
 import socket
 import struct
 import subprocess
 import threading
 import time
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+
+# ── Crypto helpers (AES-256-GCM under the QKD shared key) ──────────────────────
+# Same construction as the cert-exchange protocol (assets/qkd/cert_authority.py),
+# so the control channel rides the same QKD-simulated key.
+
+def encrypt_payload(data: bytes, key: bytes) -> bytes:
+    nonce = os.urandom(12)
+    return nonce + AESGCM(key).encrypt(nonce, data, None)
+
+
+def decrypt_payload(data: bytes, key: bytes) -> bytes:
+    return AESGCM(key).decrypt(data[:12], data[12:], None)
 
 
 # ── Framing helpers ───────────────────────────────────────────────────────────
@@ -76,14 +92,19 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
     return buf
 
 
-def _send_msg(sock: socket.socket, obj: dict) -> None:
+def _send_msg(sock: socket.socket, obj: dict, key: bytes = None) -> None:
     payload = json.dumps(obj).encode()
+    if key is not None:
+        payload = encrypt_payload(payload, key)
     sock.sendall(struct.pack(">I", len(payload)) + payload)
 
 
-def _recv_msg(sock: socket.socket) -> dict:
+def _recv_msg(sock: socket.socket, key: bytes = None) -> dict:
     length = struct.unpack(">I", _recv_exact(sock, 4))[0]
-    return json.loads(_recv_exact(sock, length))
+    payload = _recv_exact(sock, length)
+    if key is not None:
+        payload = decrypt_payload(payload, key)
+    return json.loads(payload)
 
 
 # ── Coordinator ───────────────────────────────────────────────────────────────
@@ -106,8 +127,10 @@ class SEMPCoordinator:
                  pad_buckets: list = None, pad_interval: float = 30.0,
                  scmc_ip_pool: list = None, src_hop_interval: float = 30.0,
                  freq_pool: list = None, freq_interval: float = 30.0,
-                 hop_timeout: float = 10.0):
+                 hop_timeout: float = 10.0, shared_key: str = None):
         self.control_port = control_port
+        # QKD-simulated shared key for control-channel encryption (None = plaintext).
+        self._key = bytes.fromhex(shared_key) if shared_key else None
         self.ip_pool      = ip_pool
         self.port_pool    = port_pool
         self.hop_interval = hop_interval
@@ -251,7 +274,7 @@ class SEMPCoordinator:
         dead = []
         for scmc_id, sock in snapshot:
             try:
-                _send_msg(sock, msg)
+                _send_msg(sock, msg, self._key)
             except OSError:
                 dead.append(scmc_id)
         if dead:
@@ -265,13 +288,13 @@ class SEMPCoordinator:
     def _handle_client(self, conn: socket.socket, addr) -> None:
         scmc_id = None
         try:
-            hello = _recv_msg(conn)
+            hello = _recv_msg(conn, self._key)
             if hello.get("type") != "HELLO":
                 return
             scmc_id = hello["scmc_id"]
             self._register(scmc_id, conn)
             while True:
-                msg   = _recv_msg(conn)
+                msg   = _recv_msg(conn, self._key)
                 mtype = msg.get("type")
                 seq   = msg.get("seq")
                 if mtype == "HOP_ACK":
@@ -640,7 +663,13 @@ def main():
                              "message-frequency hopping (single entry disables it)")
     parser.add_argument("--freq-interval", type=float, default=30.0,
                         help="Seconds between publish-frequency changes (default: 30)")
+    parser.add_argument("--shared-key", default=None,
+                        help="64-char hex QKD shared key for control-channel "
+                             "AES-256-GCM encryption (omit = plaintext)")
     args = parser.parse_args()
+
+    if args.shared_key is not None and len(args.shared_key) != 64:
+        parser.error("--shared-key must be exactly 64 hex chars (32 bytes)")
 
     ip_pool      = [x.strip() for x in args.ip_pool.split(",")]
     port_pool    = [int(x.strip()) for x in args.port_pool.split(",")]
@@ -653,7 +682,7 @@ def main():
         pad_buckets=pad_buckets, pad_interval=args.pad_interval,
         scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
         freq_pool=freq_pool, freq_interval=args.freq_interval,
-        hop_timeout=args.hop_timeout,
+        hop_timeout=args.hop_timeout, shared_key=args.shared_key,
     ).run()
 
 
