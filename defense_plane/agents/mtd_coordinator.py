@@ -55,56 +55,16 @@ target too (no iptables — the SCMC rebinds its socket source address).
 """
 
 import argparse
-import json
-import os
 import random
 import socket
-import struct
 import subprocess
 import threading
 import time
 
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-
-# ── Crypto helpers (AES-256-GCM under the QKD shared key) ──────────────────────
-# Same construction as the cert-exchange protocol (assets/qkd/cert_authority.py),
-# so the control channel rides the same QKD-simulated key.
-
-def encrypt_payload(data: bytes, key: bytes) -> bytes:
-    nonce = os.urandom(12)
-    return nonce + AESGCM(key).encrypt(nonce, data, None)
-
-
-def decrypt_payload(data: bytes, key: bytes) -> bytes:
-    return AESGCM(key).decrypt(data[:12], data[12:], None)
-
-
-# ── Framing helpers ───────────────────────────────────────────────────────────
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("socket closed")
-        buf += chunk
-    return buf
-
-
-def _send_msg(sock: socket.socket, obj: dict, key: bytes = None) -> None:
-    payload = json.dumps(obj).encode()
-    if key is not None:
-        payload = encrypt_payload(payload, key)
-    sock.sendall(struct.pack(">I", len(payload)) + payload)
-
-
-def _recv_msg(sock: socket.socket, key: bytes = None) -> dict:
-    length = struct.unpack(">I", _recv_exact(sock, 4))[0]
-    payload = _recv_exact(sock, length)
-    if key is not None:
-        payload = decrypt_payload(payload, key)
-    return json.loads(payload)
+# Crypto (AES-256-GCM under the QKD shared key) and wire framing are shared
+# with mtd_executor.py, cert_authority.py and cert_client.py — see
+# mtd_crypto.py / mtd_wire.py, copied alongside this file on every machine.
+from mtd_wire import send_msg as _send_msg, recv_msg as _recv_msg
 
 
 # ── Coordinator ───────────────────────────────────────────────────────────────

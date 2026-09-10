@@ -2,6 +2,45 @@
 
 AI-driven Moving Target Defense (MTD) for MQTT communications in a smart grid, emulated with [Kathará](https://github.com/KatharaFramework/Kathara).
 
+The source is organized into the platform's four functional planes plus the
+network scenario they surround (see the paper, Fig. 1):
+
+| Package | Plane |
+|---|---|
+| `network_scenario/` | Kathará lab (topology, machines, deploy/exec lifecycle) |
+| `defense_plane/` | MTD coordinators (fixed-timer + RL), the QKD-simulated cert bootstrap |
+| `attack_plane/` | The 1D-CNN fingerprinting classifier + attack actuation |
+| `traffic_generator/` | Background trace replay + the nanogrid MQTT publishers |
+| `monitor/` | Run-artifact collection, defender/attacker analysis, all figures |
+
+Files under a plane's `agents/` (and `defense_plane/qkd/`) are deployment data:
+they are copied flat into the Kathará containers and run there directly, so
+they cannot use package-relative imports — see the module docstring in
+`network_scenario/guest_files.py`. Everything else is a normal importable
+package. The nine Python entrypoints the `Makefile` invokes by path
+(`run_experiment.py`, `classify.py`, `entropy.py`, `plot_results.py`,
+`compare_coordinators.py`, `train_rl_coordinator.py`, `plot_tradeoff.py`,
+`plot_sweep.py`, `split_trace.py`) stay at the repo root as thin shims into
+their package, so the `Makefile` and the `run_*.sh` scripts below work
+unchanged.
+
+**To reproduce the paper's evaluation (Fig. 2/3) end to end in one command:**
+
+```bash
+.venv/bin/python main.py              # all four configs + the paper figures
+.venv/bin/python main.py --dry-run    # print every command without running it
+.venv/bin/python main.py --mbps 5     # same, at a different replay rate
+```
+
+`main.py` runs the four configurations compared in §VI-G — baseline, fixed-timer
+MTD, RL-cost, RL-entropy (training both RL policies first if missing) — at the
+replay rate (`MBPS=2`) the paper's reported numbers were generated at, then
+runs `compare_coordinators.py` to produce `availability_comparison.pdf` (Fig. 2a),
+`detection_comparison.pdf` (Fig. 2b), `availability_cost_comparison.pdf` (Fig. 2c)
+and `entropy_comparison.pdf` (Fig. 3) under `output/compare-<slug>/`. It shells
+out to the same `make` targets `run_single.sh` does, so the two stay in
+lockstep — see `tests/` for the checks that enforce that.
+
 ---
 
 ## Installation
