@@ -58,6 +58,10 @@ import matplotlib
 matplotlib.use("Agg")  # headless: write PNGs, no display needed
 import matplotlib.pyplot as plt
 import numpy as np
+
+plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
+plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
+plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 import pandas as pd
 
 from classify import (
@@ -355,13 +359,11 @@ def plot_detection(scenarios: list, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(7, 5))
     bars = ax.bar(x, vals, color=colors, width=0.55, edgecolor="black")
 
-    ax.axhline(DETECT_THRESHOLD, ls="--", color="gray",
-               label=f"detection threshold ({DETECT_THRESHOLD})")
+    
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Avg attacker accuracy on nanogrid IPs")
     ax.set_ylim(0, 1.05)
-    ax.set_title("Attacker fingerprinting of the nanogrid — baseline vs MTD")
 
     for bar, s in zip(bars, have):
         ax.annotate(f"{s.nanogrid_detect:.2f}\n({s.n_nanogrid_ips} IPs)",
@@ -408,10 +410,9 @@ def plot_availability(scenarios: list, out_path: str) -> None:
         ax.step(rel, cum, where="post", lw=2.2, alpha=0.8,
                 ls=styles[i % len(styles)], label=s.label.replace("\n", " "))
 
-    ax.set_xlabel("time since router capture start (s)")
-    ax.set_ylabel("cumulative SCMC packets delivered to SEMP")
-    ax.set_title("SCMC availability — telemetry delivered during the attack")
-    ax.legend(loc="upper left", fontsize=9)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Cumulative Updates Delivered")
+    ax.legend(loc="upper left", fontsize=12)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130)

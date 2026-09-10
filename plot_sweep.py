@@ -22,6 +22,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
+plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
+plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 import pandas as pd
 
 DETECT_THRESHOLD  = 0.3

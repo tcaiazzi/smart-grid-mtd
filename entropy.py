@@ -53,6 +53,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
+plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
+plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
+
 from classify import extract_features
 
 # Continuous fields are histogram-binned before counting; discrete ones use the
@@ -63,7 +67,7 @@ CONT_BINS = 32
 # Fields whose marginal entropy is reported, in plot order. Continuous fields are
 # binned; the rest use value counts. dst_* are parsed from flow_key.
 DISCRETE_FIELDS = ["src_ip", "dst_ip", "dst_port"]
-CONTINUOUS_FIELDS = ["packet_len", "tcp_payload_len", "iat"]
+CONTINUOUS_FIELDS = ["packet_len", "iat"]
 FIELD_ORDER = DISCRETE_FIELDS + CONTINUOUS_FIELDS
 
 
@@ -249,7 +253,6 @@ def plot_entropy_comparison(baseline_csv: str, mtd_csv: str, out_path: str) -> N
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", "\n") for m in metrics])
     ax.set_ylabel("Shannon entropy (bits)")
-    ax.set_title("MTD raises the entropy of the nanogrid traffic the attacker sees")
     ax.legend()
     ax.grid(True, axis="y", alpha=0.3)
 
@@ -275,9 +278,8 @@ def plot_entropy_timeseries(ts_csv: str, out_path: str) -> None:
         if col in df.columns:
             ax.plot(df["t"], df[col], lw=1.3, alpha=0.8, label=field)
 
-    ax.set_xlabel("time since first nanogrid packet (s)")
+    ax.set_xlabel("Time (s)")
     ax.set_ylabel("windowed Shannon entropy (bits)")
-    ax.set_title("Entropy over time — the moving target during the run")
     ax.legend(fontsize=8, ncol=2)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()

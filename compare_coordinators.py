@@ -52,6 +52,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+
+
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
@@ -75,9 +77,9 @@ COST = dict(zip(KNOBS, Calibration().cost))
 # One bar group per coordinator. model_src picks which eval model scored it: each
 # MTD config is judged by its own matched model; the baseline by the baseline model.
 COORDINATORS = [
-    ("Baseline\n(no MTD)", "baseline", "baseline", "#7f8c8d"),
-    ("MTD\n(fixed timers)", "mtd", "mtd", "#2980b9"),
-    ("MTD\n(RL blend)", "mtdrl", "mtd", "#27ae60"),
+    ("Baseline", "baseline", "baseline", "#7f8c8d"),
+    ("MTD-fixed-timers", "mtd", "mtd", "#2980b9"),
+    ("MTD-RL-cost", "mtdrl", "mtd", "#27ae60"),
 ]
 # Colours for extra tagged RL policies (--rl-tags), e.g. the entropy-max policy.
 TAG_COLORS = ["#8e44ad", "#e67e22", "#16a085", "#c0392b"]
@@ -91,7 +93,7 @@ def resolve(root: str, slug: str, mbps: int, rl_tags=()) -> list:
     tag in rl_tags (dir prefix mtdrl-<tag>, e.g. the entropy-max policy)."""
     specs = list(COORDINATORS)
     for i, tag in enumerate(rl_tags):
-        specs.append((f"MTD\n(RL {tag})", f"mtdrl-{tag}", "mtd",
+        specs.append((f"MTD-RL-{tag}", f"mtdrl-{tag}", "mtd",
                       TAG_COLORS[i % len(TAG_COLORS)]))
     coords = []
     for label, prefix, model_src, color in specs:
@@ -315,7 +317,7 @@ def plot_security(coords: list, out_path: str) -> None:
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] security comparison -> {out_path}")
 
@@ -329,7 +331,7 @@ def plot_entropy(coords: list, out_path: str) -> None:
     x = np.arange(len(ENTROPY_METRICS))
     w = 0.8 / len(have)
 
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=(11, 4))
     for i, c in enumerate(have):
         vals = [c["entropy"].get(m, float("nan")) for m in ENTROPY_METRICS]
         ax.bar(x + (i - (len(have) - 1) / 2) * w, vals, w,
@@ -337,13 +339,15 @@ def plot_entropy(coords: list, out_path: str) -> None:
                label=c["label"].replace("\n", " "))
 
     ax.set_xticks(x)
-    ax.set_xticklabels([m.replace("_", "\n") for m in ENTROPY_METRICS])
-    ax.set_ylabel("Shannon entropy (bits)  (↑ = harder to fingerprint)")
-    ax.set_title("Traffic entropy the attacker sees — RL vs fixed MTD")
-    ax.legend(fontsize=9)
+    ax.set_xticklabels([m.replace("_", "-") for m in ENTROPY_METRICS])
+    ax.set_ylabel("Shannon entropy (bits)", fontsize=20)
+    ax.tick_params(axis="x", labelsize=20)  
+    ax.tick_params(axis="y", labelsize=20)  
+
+    ax.legend(fontsize=14)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] entropy comparison -> {out_path}")
 
@@ -364,23 +368,22 @@ def plot_detection(coords: list, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     bars = ax.bar(x, vals, width=0.6, edgecolor="black",
                   color=[c["color"] for c in have])
-    ax.axhline(DETECT_THRESHOLD, ls="--", color="gray",
-               label=f"detection threshold ({DETECT_THRESHOLD})")
 
     for bar, c in zip(bars, have):
-        ax.annotate(f"{c['detect']['nanogrid_detect']:.2f}\n({c['detect']['n_nanogrid_ips']} IPs)",
+        ax.annotate(f"({c['detect']['n_nanogrid_ips']} IPs)",
                     (bar.get_x() + bar.get_width() / 2, c["detect"]["nanogrid_detect"]),
-                    ha="center", va="bottom", fontsize=9)
+                    ha="center", va="bottom", fontsize=16)
 
     ax.set_xticks(x)
     ax.set_xticklabels([c["label"].replace("\n", " ") for c in have])
-    ax.set_ylabel("avg attacker nanogrid_frac over the nanogrid IPs  (↓ = better defense)")
+    ax.set_ylabel("Avg attacker confidence over smart grid IPs", fontsize=15)
+    ax.tick_params(axis="x", labelsize=15)
+    ax.tick_params(axis="y", labelsize=20)
     ax.set_ylim(0, 1.05)
-    ax.set_title("Attacker fingerprinting of the nanogrid — RL vs fixed MTD")
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=18)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] detection comparison -> {out_path}")
 
@@ -406,7 +409,7 @@ def plot_timeseries(coords: list, out_path: str) -> None:
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] entropy timeseries comparison -> {out_path}")
 
@@ -455,24 +458,25 @@ def plot_availability(coords: list, out_path: str) -> None:
     t_max = max(c["avail"]["window_s"] for c in have)
     styles = ["-", "--", ":", "-."]
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
     for i, c in enumerate(have):
         rel = np.array(c["avail"]["rel_delivered"], dtype=float)
         cum = np.arange(1, len(rel) + 1, dtype=float)
         rel = np.concatenate(([0.0], rel, [t_max]))
         cum = np.concatenate(([0.0], cum, [cum[-1]]))
         ratio = c["avail"]["delivery_ratio"]
-        label = f"{c['label'].replace(chr(10), ' ')}  ({ratio:.0%} delivered)"
+        label = f"{c['label'].replace(chr(10), ' ')}"
         ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
                 ls=styles[i % len(styles)], label=label)
 
-    ax.set_xlabel("time since router capture start (s)")
-    ax.set_ylabel("cumulative SCMC packets delivered to SEMP")
-    ax.set_title("SCMC availability under attack — RL vs fixed MTD")
-    ax.legend(loc="upper left", fontsize=9)
+    ax.set_xlabel("Time (s)", fontsize=20)
+    ax.set_ylabel("Cumulative Updates Delivered", fontsize=20)
+    ax.tick_params(axis="x", labelsize=20)
+    ax.tick_params(axis="y", labelsize=20)
+    ax.legend(loc="upper left", fontsize=18)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] availability comparison -> {out_path}")
 
@@ -492,7 +496,7 @@ def plot_availability_cost(coords: list, out_path: str) -> None:
     t_max = max(c["cost"]["window_s"] for c in have) or 1.0
     styles = ["-", "--", ":", "-."]
 
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
     for i, c in enumerate(have):
         events = c["cost"]["rel_events"]
         rel = np.array([t for t, _ in events], dtype=float)
@@ -504,13 +508,14 @@ def plot_availability_cost(coords: list, out_path: str) -> None:
         ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
                 ls=styles[i % len(styles)], label=label)
 
-    ax.set_xlabel("time since run start (s)")
-    ax.set_ylabel("cumulative availability cost")
-    ax.set_title("Availability cost of hopping — RL vs fixed MTD")
-    ax.legend(loc="upper left", fontsize=9)
+    ax.set_xlabel("Time (s)", fontsize=20)
+    ax.set_ylabel("Cumulative Availability Cost", fontsize=20)
+    ax.tick_params(axis="x", labelsize=20)
+    ax.tick_params(axis="y", labelsize=20)
+    ax.legend(loc="upper left", fontsize=18)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"[plot] availability-cost comparison -> {out_path}")
 
