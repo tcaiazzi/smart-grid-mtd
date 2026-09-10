@@ -212,21 +212,21 @@ help:
 
 split $(TRAIN_TRACE) $(TEST_TRACE):
 	@mkdir -p $(SPLIT_DIR)
-	$(PYTHON) split_trace.py $(BG_TRACE) --train-ratio $(SPLIT_RATIO) --train-out $(TRAIN_TRACE) --test-out $(TEST_TRACE)
+	$(PYTHON) -m traffic_generator.split_trace $(BG_TRACE) --train-ratio $(SPLIT_RATIO) --train-out $(TRAIN_TRACE) --test-out $(TEST_TRACE)
 
 # Order-only prerequisites (|): build what is missing, but skip generation
 # entirely when the output already exists, regardless of timestamps.
 dataset-train: $(TRAIN_PCAP)
 
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
+	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--name train --trace $(TRAIN_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
-	$(PYTHON) run_experiment.py --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
+	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--name test --trace $(TEST_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
@@ -244,7 +244,7 @@ CLASSIFY_LABEL_FLAGS := --scmc-ip-pool $(MTD_SCMC_IP_POOL) --semp-ip-pool $(MTD_
 
 # Training produces model.pt + scaler.pkl in $(EXP_DIR)/model
 $(MODEL):
-	$(PYTHON) classify.py --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model \
+	$(PYTHON) -m attack_plane.classify --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model \
 		$(CLASSIFY_LABEL_FLAGS)
 
 train: $(MODEL)
@@ -255,12 +255,12 @@ all-train:
 	$(MAKE) train NO_MTD=0
 
 evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
-	$(PYTHON) classify.py --mode evaluate --load-model --test-pcap $(TEST_PCAP) \
+	$(PYTHON) -m attack_plane.classify --mode evaluate --load-model --test-pcap $(TEST_PCAP) \
 		--model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --out-dir $(EVAL_OUT_DIR) \
 		$(CLASSIFY_LABEL_FLAGS)
 
 attack: $(ATTACK_MODEL)
-	$(PYTHON) run_experiment.py --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
+	$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 
@@ -276,7 +276,7 @@ baseline:
 	$(MAKE) attack NO_MTD=1
 
 demo:
-	$(PYTHON) run_experiment.py
+	$(PYTHON) -m network_scenario.run_experiment
 
 experiment: datasets train attack
 
@@ -308,19 +308,19 @@ all:
 plots:
 	$(MAKE) entropy NO_MTD=1
 	$(MAKE) entropy
-	$(PYTHON) plot_results.py --mtd-params-slug $(MTD_PARAMS_SLUG) --mtd-prefix $(MTD_PREFIX) \
+	$(PYTHON) -m monitor.plot_results --mtd-params-slug $(MTD_PARAMS_SLUG) --mtd-prefix $(MTD_PREFIX) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) --plots-dir $(EXP_DIR)
 
 # Standalone figures for the no-MTD baseline run -> output/baseline-mbps<M>/
 plots-baseline:
 	$(MAKE) entropy NO_MTD=1
-	$(PYTHON) plot_results.py --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
+	$(PYTHON) -m monitor.plot_results --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--plots-dir output/baseline-mbps$(BG_REPLAY_MBPS)
 
 # Regenerate figures + summary.csv for every experiment dir under output/.
 # Add NO_DETECTION=1 to skip the (slow) pcap re-scoring and refresh availability only.
 plots-all:
-	$(PYTHON) plot_results.py --replot-all --output-root output \
+	$(PYTHON) -m monitor.plot_results --replot-all --output-root output \
 		$(if $(filter-out 0 no false off,$(NO_DETECTION)),--no-detection,)
 
 # ── Entropy metric (model-free MTD effectiveness) ────────────────────────────
@@ -328,7 +328,7 @@ plots-all:
 # test capture. Reuses the same labeling pools as classify.py so the nanogrid
 # packets match train/eval exactly.
 entropy: $(TEST_PCAP)
-	$(PYTHON) entropy.py --test-pcap $(TEST_PCAP) \
+	$(PYTHON) -m monitor.entropy --test-pcap $(TEST_PCAP) \
 		--scmc-ip-pool $(MTD_SCMC_IP_POOL) --semp-ip-pool $(MTD_IP_POOL) \
 		--out-dir $(EXP_DIR)
 
@@ -336,7 +336,7 @@ entropy: $(TEST_PCAP)
 # Requires both configs' entropy.csv (run `make entropy NO_MTD=1` and
 # `make entropy` first).
 entropy-compare:
-	$(PYTHON) entropy.py --compare \
+	$(PYTHON) -m monitor.entropy --compare \
 		--baseline-csv $(BASELINE_DIR)/entropy.csv \
 		--mtd-csv $(EXP_DIR)/entropy.csv \
 		--out-dir $(EXP_DIR)
@@ -360,7 +360,7 @@ entropy-all:
 		scmc=$$(cat $$ddir/scmc_ips.txt 2>/dev/null); \
 		[ -n "$$scmc" ] || scmc=10.0.0.2; \
 		echo "=== entropy: $$dir  (scmc=$$scmc) ==="; \
-		$(PYTHON) entropy.py --test-pcap $$pcap \
+		$(PYTHON) -m monitor.entropy --test-pcap $$pcap \
 			--scmc-ip-pool $$scmc --semp-ip-pool $(ENTROPY_SEMP_POOL) \
 			--out-dir $$dir || true; \
 	done
@@ -373,7 +373,7 @@ entropy-all:
 #   make train-rl
 #   make datasets RL=1 && make train RL=1 && make attack RL=1
 train-rl:
-	$(PYTHON) train_rl_coordinator.py --timesteps $(RL_TIMESTEPS) \
+	$(PYTHON) -m defense_plane.train_rl_coordinator --timesteps $(RL_TIMESTEPS) \
 		--w-sec $(RL_W_SEC) --w-avail $(RL_W_AVAIL) --reward-mode $(RL_REWARD_MODE) \
 		--out-dir $(RL_DIR) --output-root output
 
@@ -391,7 +391,7 @@ COMPARE_DIR ?= output/compare-$(MTD_PARAMS_SLUG)
 #   make compare-rl RL_TAGS=entropy ...   -> baseline / fixed / RL blend / RL entropy
 RL_TAGS ?=
 compare-rl:
-	$(PYTHON) compare_coordinators.py --slug $(MTD_PARAMS_SLUG) \
+	$(PYTHON) -m monitor.compare_coordinators --slug $(MTD_PARAMS_SLUG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root output --out-dir $(COMPARE_DIR) \
 		--rl-tags "$(RL_TAGS)"
 
@@ -404,7 +404,7 @@ compare-rl-all:
 		slug=$$(basename "$$d" | sed 's/^mtd-//'); \
 		mbps=$$(echo "$$slug" | sed -E 's/.*-mbps([0-9]+).*/\1/'); \
 		echo "######## $$slug (mbps$$mbps) ########"; \
-		$(PYTHON) compare_coordinators.py --slug "$$slug" \
+		$(PYTHON) -m monitor.compare_coordinators --slug "$$slug" \
 			--bg-replay-mbps "$$mbps" --output-root output \
 			--out-dir "output/compare-$$slug" --rl-tags "$(RL_TAGS)"; \
 	done
@@ -413,7 +413,7 @@ compare-rl-all:
 # frontier -> $(RL_DIR)/tradeoff.{pdf,csv}. This is where "lower hop cost at equal
 # security" is measurable (the lab entropy comparison has no cost axis). No lab run.
 plot-tradeoff:
-	$(PYTHON) plot_tradeoff.py --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
+	$(PYTHON) -m defense_plane.plot_tradeoff --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
 
 clean:
 	rm -rf output

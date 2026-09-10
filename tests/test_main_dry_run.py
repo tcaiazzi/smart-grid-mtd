@@ -65,8 +65,8 @@ class MainDryRun(unittest.TestCase):
             self.assertFalse(slug.startswith(("mtd-", "mtdrl-")), f"--mtd-params-slug is prefixed: {slug!r}")
 
     def test_compare_coordinators_slug_has_no_prefix(self) -> None:
-        m = re.search(r"compare_coordinators\.py --slug (\S+)", self.stdout)
-        self.assertIsNotNone(m, "compare_coordinators.py --slug not found in dry-run output")
+        m = re.search(r"monitor\.compare_coordinators --slug (\S+)", self.stdout)
+        self.assertIsNotNone(m, "monitor.compare_coordinators --slug not found in dry-run output")
         slug = m.group(1)
         self.assertTrue(slug.startswith("hop"))
         self.assertFalse(slug.startswith(("mtd-", "mtdrl-")))

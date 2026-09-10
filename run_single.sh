@@ -13,7 +13,7 @@
 #   output/mtdrl-<slug>/         when RL=1 (RL coordinator drives the schedule)
 #
 # After running:
-#   .venv/bin/python plot_sweep.py
+#   .venv/bin/python -m monitor.plot_sweep
 
 set -euo pipefail
 
@@ -93,7 +93,7 @@ run_baseline() {
     run "make evaluate NO_MTD=1 BG_REPLAY_MBPS=$mbps"
     run "make attack   NO_MTD=1 BG_REPLAY_MBPS=$mbps"
 
-    run "$PYTHON plot_results.py --baseline-only \
+    run "$PYTHON -m monitor.plot_results --baseline-only \
         --bg-replay-mbps $mbps \
         --plots-dir output/baseline-mbps$mbps"
 }
@@ -164,7 +164,7 @@ run_config() {
     run "make attack MODEL_SRC=baseline ${args[*]}"
     run "make entropy ${args[*]}"
 
-    run "$PYTHON plot_results.py \
+    run "$PYTHON -m monitor.plot_results \
         --mtd-params-slug '$slug' \
         --mtd-prefix '$prefix' \
         --bg-replay-mbps $mbps \

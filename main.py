@@ -91,7 +91,7 @@ def run_baseline(mbps: int, dry_run: bool) -> None:
     run(["make", "evaluate", *base_vars], dry_run)
     run(["make", "attack", *base_vars], dry_run)
     run([
-        PYTHON, "plot_results.py", "--baseline-only",
+        PYTHON, "-m", "monitor.plot_results", "--baseline-only",
         "--bg-replay-mbps", str(mbps),
         "--plots-dir", f"output/baseline-mbps{mbps}",
     ], dry_run)
@@ -158,7 +158,7 @@ def run_config(experiment: str, mbps: int, rl_policy: str = None, rl_tag: str = 
     run(["make", "attack", "MODEL_SRC=baseline", *args], dry_run)
     run(["make", "entropy", *args], dry_run)
     run([
-        PYTHON, "plot_results.py",
+        PYTHON, "-m", "monitor.plot_results",
         "--mtd-params-slug", slug,
         "--mtd-prefix", prefix,
         "--bg-replay-mbps", str(mbps),
@@ -200,7 +200,7 @@ def run_compare(mbps: int, dry_run: bool) -> list:
     slug = full[len("mtd-"):]
     out_dir = f"output/compare-{slug}"
     run([
-        PYTHON, "compare_coordinators.py",
+        PYTHON, "-m", "monitor.compare_coordinators",
         "--slug", slug,
         "--bg-replay-mbps", str(mbps),
         "--output-root", "output",

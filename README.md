@@ -17,12 +17,10 @@ Files under a plane's `agents/` (and `defense_plane/qkd/`) are deployment data:
 they are copied flat into the Kathará containers and run there directly, so
 they cannot use package-relative imports — see the module docstring in
 `network_scenario/guest_files.py`. Everything else is a normal importable
-package. The nine Python entrypoints the `Makefile` invokes by path
-(`run_experiment.py`, `classify.py`, `entropy.py`, `plot_results.py`,
-`compare_coordinators.py`, `train_rl_coordinator.py`, `plot_tradeoff.py`,
-`plot_sweep.py`, `split_trace.py`) stay at the repo root as thin shims into
-their package, so the `Makefile` and the `run_*.sh` scripts below work
-unchanged.
+package, invoked as a module rather than by path — e.g.
+`.venv/bin/python -m network_scenario.run_experiment`, `-m attack_plane.classify`,
+`-m monitor.plot_results` — which is how the `Makefile` and the `run_*.sh`
+scripts below run every host-side stage.
 
 **To reproduce the paper's evaluation (Fig. 2/3) end to end in one command:**
 
