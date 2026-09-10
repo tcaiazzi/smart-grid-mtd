@@ -16,7 +16,7 @@ Usage:
     python3 cert_authority.py --shared-key <hex64>
                               [--host 0.0.0.0] [--port 9999]
                               [--out-dir /etc/mosquitto/certs/]
-                              [--server-cn semp] [--server-ip 10.1.0.2]
+                              [--server-cn semp] [--server-ip 10.1.0.2,10.1.0.4,...]
 """
 
 import argparse
@@ -80,15 +80,23 @@ def generate_ca(out_dir: str):
 
 
 def generate_server_cert(ca_key, ca_cert, cn: str, ip: str, out_dir: str):
-    """Generate server key + certificate signed by the CA. Save to out_dir."""
+    """Generate server key + certificate signed by the CA. Save to out_dir.
+
+    `ip` may be a comma-separated list of addresses (the MTD IP-hop pool); each
+    valid address is added as its own SAN IP entry so the single broker cert is
+    valid on every address it can appear on after a hop.
+    """
     srv_key = generate_key()
 
     san_entries = [x509.DNSName(cn)]
-    if ip:
+    for entry in (ip or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
         try:
-            san_entries.append(x509.IPAddress(ipaddress.ip_address(ip)))
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(entry)))
         except ValueError:
-            print(f"[CA] Warning: invalid server IP '{ip}', skipping SAN IP entry")
+            print(f"[CA] Warning: invalid server IP '{entry}', skipping SAN IP entry")
 
     srv_cert = (
         x509.CertificateBuilder()
@@ -112,16 +120,24 @@ def generate_server_cert(ca_key, ca_cert, cn: str, ip: str, out_dir: str):
     print(f"[CA] Server cert → {out_dir}/server.crt")
 
 
-def generate_client_cert(ca_key, ca_cert, cn: str, client_ip: str):
-    """Generate a client key + certificate. Returns (key_pem, cert_pem)."""
+def generate_client_cert(ca_key, ca_cert, cn: str, client_ips):
+    """Generate a client key + certificate. Returns (key_pem, cert_pem).
+
+    `client_ips` is a list of source addresses to add as SAN IP entries (the SCMC
+    source-IP hop pool), so the single client cert stays valid whichever source
+    address the client binds to after a source-IP hop.
+    """
     cli_key = generate_key()
 
     san_entries = [x509.DNSName(cn)]
-    if client_ip:
+    for entry in client_ips or []:
+        entry = (entry or "").strip()
+        if not entry:
+            continue
         try:
-            san_entries.append(x509.IPAddress(ipaddress.ip_address(client_ip)))
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(entry)))
         except ValueError:
-            pass
+            print(f"[CA] Warning: invalid client IP '{entry}', skipping SAN IP entry")
 
     cli_cert = (
         x509.CertificateBuilder()
@@ -187,7 +203,7 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes:
 
 def handle_client(conn: socket.socket, addr,
                   ca_key, ca_cert, ca_cert_pem: bytes,
-                  shared_key: bytes):
+                  shared_key: bytes, client_ips=None):
     client_ip = addr[0]
     print(f"[CA] Connection from {client_ip}:{addr[1]}")
     try:
@@ -196,8 +212,11 @@ def handle_client(conn: socket.socket, addr,
         cn = decrypt_payload(enc_cn, shared_key).decode()
         print(f"[CA] Generating certificate for CN='{cn}'...")
 
-        # Generate client key + cert
-        key_pem, cert_pem = generate_client_cert(ca_key, ca_cert, cn, client_ip)
+        # Put the whole SCMC source-IP pool in the cert SAN (so it survives source
+        # hops); fall back to just the connecting address when no pool is given.
+        key_pem, cert_pem = generate_client_cert(
+            ca_key, ca_cert, cn, client_ips or [client_ip]
+        )
 
         # Bundle: 4-byte key_len | key_pem | 4-byte cert_len | cert_pem | ca_cert_pem
         bundle = (
@@ -230,8 +249,13 @@ def main():
     parser.add_argument("--server-cn", default="semp",
                         help="CN for the broker certificate (default: semp)")
     parser.add_argument("--server-ip", default="",
-                        help="IP to include in the broker certificate SAN")
+                        help="IP(s) to include in the broker certificate SAN; "
+                             "comma-separated to cover an MTD IP-hop pool")
+    parser.add_argument("--client-ip", default="",
+                        help="IP(s) to include in every client certificate SAN; "
+                             "comma-separated to cover the SCMC source-IP hop pool")
     args = parser.parse_args()
+    client_ips = [x.strip() for x in args.client_ip.split(",") if x.strip()]
 
     if len(args.shared_key) != 64:
         print("[!] --shared-key must be exactly 64 hex chars (32 bytes)")
@@ -253,7 +277,7 @@ def main():
     try:
         while True:
             conn, addr = srv.accept()
-            handle_client(conn, addr, ca_key, ca_cert, ca_cert_pem, shared_key)
+            handle_client(conn, addr, ca_key, ca_cert, ca_cert_pem, shared_key, client_ips)
     except KeyboardInterrupt:
         print("\n[CA] Shutting down.")
     finally:

@@ -12,9 +12,12 @@ Deps:   pip install paho-mqtt pymgrid
 
 import argparse
 import json
+import logging
 import sys
 import time
 import warnings
+
+log = logging.getLogger(__name__)
 import numpy as np
 import paho.mqtt.client as mqtt
 
@@ -111,14 +114,14 @@ def on_connect(_client, userdata, _flags, rc, _properties=None):
     global connected
     if rc == 0:
         connected = True
-        print(f"[{userdata}] Connected to broker")
+        log.info("[%s] Connected to broker", userdata)
     else:
-        print(f"[{userdata}] Connection failed rc={rc}")
+        log.warning("[%s] Connection failed rc=%s", userdata, rc)
 
 def on_disconnect(_client, userdata, rc, _properties=None):
     global connected
     connected = False
-    print(f"[{userdata}] Disconnected (rc={rc})")
+    log.info("[%s] Disconnected (rc=%s)", userdata, rc)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -136,6 +139,9 @@ def parse_args():
                         help="Client certificate for mutual TLS (optional)")
     parser.add_argument("--keyfile",  default=None,
                         help="Client private key for mutual TLS (optional)")
+    parser.add_argument("--log-file", default="simple_client.log",
+                        help="File to write the message-exchange log "
+                             "(default: simple_client.log in the working directory)")
     args = parser.parse_args()
 
     if args.ssl and args.cafile is None:
@@ -153,11 +159,21 @@ def main():
     args    = parse_args()
     scmc_id = args.scmc_id
 
-    print(f"[{scmc_id}] Building microgrid simulator...")
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if args.log_file:
+        handlers.append(logging.FileHandler(args.log_file))
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+        handlers=handlers,
+    )
+
+    log.info("[%s] Building microgrid simulator...", scmc_id)
     mg = build_microgrid()
 
     tls_label = f"TLS  cafile={args.cafile}" if args.ssl else "plain"
-    print(f"[{scmc_id}] Ready — broker={args.broker}:{args.port}  ({tls_label})")
+    log.info("[%s] Ready — broker=%s:%s  (%s)", scmc_id, args.broker, args.port, tls_label)
 
     client = mqtt.Client(client_id=scmc_id, protocol=mqtt.MQTTv5, userdata=scmc_id)
     client.on_connect    = on_connect
@@ -179,11 +195,11 @@ def main():
         time.sleep(0.5)
 
     if not connected:
-        print(f"[{scmc_id}] Could not connect — exiting")
+        log.warning("[%s] Could not connect — exiting", scmc_id)
         sys.exit(1)
 
     topic_base = f"grid/{scmc_id}"
-    print(f"[{scmc_id}] Publishing every {INTERVAL}s  →  {topic_base}/#\n")
+    log.info("[%s] Publishing every %ss  →  %s/#", scmc_id, INTERVAL, topic_base)
 
     try:
         while True:
@@ -202,17 +218,13 @@ def main():
 
             client.publish(f"{topic_base}/snapshot", json.dumps(r), qos=0)
 
-            print(
-                f"[{scmc_id}] "
-                f"power={r['power_kw']:6.1f} kW  "
-                f"freq={r['frequency']:.4f} Hz  "
-                f"volt={r['voltage']:.2f} V"
-            )
+            log.info("[%s] power=%6.1f kW  freq=%.4f Hz  volt=%.2f V",
+                     scmc_id, r["power_kw"], r["frequency"], r["voltage"])
 
             time.sleep(INTERVAL)
 
     except KeyboardInterrupt:
-        print(f"\n[{scmc_id}] Stopped")
+        log.info("[%s] Stopped", scmc_id)
     finally:
         client.loop_stop()
         client.disconnect()
