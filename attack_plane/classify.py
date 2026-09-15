@@ -25,6 +25,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
+from attack_plane.thresholds import DETECT_THRESHOLD
+
 FEATURE_COLS = [
     "packet_len",
     "tcp_payload_len",
@@ -480,7 +482,7 @@ def rank_nanogrid_ips(pkt_preds: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def _detect_nanogrid_ip(pkt_preds: pd.DataFrame, threshold: float = 0.3) -> str:
+def _detect_nanogrid_ip(pkt_preds: pd.DataFrame, threshold: float = DETECT_THRESHOLD) -> str:
     """Return the src_ip with the highest nanogrid-packet fraction."""
     ranking = rank_nanogrid_ips(pkt_preds)
     if ranking.empty:

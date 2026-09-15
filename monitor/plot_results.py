@@ -64,16 +64,16 @@ plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 import pandas as pd
 
-from classify import (
+from attack_plane.classify import (
     extract_features,
     load_artifacts,
     predict_packets,
     rank_nanogrid_ips,
 )
-from entropy import plot_entropy_comparison, plot_entropy_timeseries
+from monitor.entropy import plot_entropy_comparison, plot_entropy_timeseries
+from attack_plane.thresholds import DETECT_THRESHOLD
 
 DEFAULT_SCMC_IP = "10.0.0.2"   # SCMC source IP as seen on the wire (lab default)
-DETECT_THRESHOLD = 0.3         # matches classify._detect_nanogrid_ip
 CUTOFF_GAP_S = 8.0             # silence after which a surviving SCMC is deemed cut off
 
 # Markers left by run_experiment.py in the attack run.log.

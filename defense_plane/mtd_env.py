@@ -41,11 +41,12 @@ import numpy as np
 import pandas as pd
 from gymnasium import spaces
 
-from rl_policy import (
+from defense_plane.rl_policy import (
     ACTION_DIMS,
     DWELL_INIT,
     EWMA_ALPHA,
     K_PAD,
+    KNOB_COST,
     N_KNOBS,
     N_RECONNECT,
     OBS_DIM,
@@ -74,8 +75,10 @@ class Calibration:
     # rotates the publish interval (timing variety), so it earns a real weight.
     sec_weight: tuple = (1.0, 1.0, 1.2, 0.5, 0.8)  # port, ip, src, pad, freq
     gamma: float = 2.5                # detection suppression strength
-    # availability cost per actuation (reconnecting knobs only)
-    cost: tuple = (0.15, 0.30, 0.30, 0.01, 0.01)   # port, ip, src, pad, freq
+    # availability cost per actuation (reconnecting knobs only). Single source
+    # of truth: rl_policy.KNOB_COST (also read by monitor.compare_coordinators
+    # to bill the actuations observed in a live run against the same weights).
+    cost: tuple = KNOB_COST
 
 
 def load_calibration(output_root: str = "output") -> Calibration:

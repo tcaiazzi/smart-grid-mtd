@@ -18,7 +18,7 @@
 #   exp-dir = baseline-mbps<M> | mtd-<slug>
 #
 # After the sweep:
-#   .venv/bin/python plot_sweep.py
+#   .venv/bin/python -m monitor.plot_sweep
 #
 # Usage:
 #   ./run_sweep.sh              # full sweep (~3 h)
@@ -79,7 +79,7 @@ run_baseline() {
     run "make attack   NO_MTD=1 BG_REPLAY_MBPS=$mbps"
 
     # Standalone baseline figures (availability + detection) in its own dir.
-    run "$PYTHON plot_results.py --baseline-only \
+    run "$PYTHON -m monitor.plot_results --baseline-only \
         --bg-replay-mbps $mbps \
         --plots-dir output/baseline-mbps$mbps"
 }
@@ -141,7 +141,7 @@ run_config() {
     run "make attack MODEL_SRC=baseline ${args[*]}"
 
     # Per-config summary.csv (lands in output/$exp/) for plot_sweep.py to collect
-    run "$PYTHON plot_results.py \
+    run "$PYTHON -m monitor.plot_results \
         --mtd-params-slug '$slug' \
         --bg-replay-mbps $mbps \
         --plots-dir output/$exp"
@@ -222,4 +222,4 @@ done
 # ─────────────────────────────────────────────────────────────────────────────
 log "=== Sweep complete ==="
 log "Manifest : $MANIFEST"
-log "Next     : $PYTHON plot_sweep.py"
+log "Next     : $PYTHON -m monitor.plot_sweep"

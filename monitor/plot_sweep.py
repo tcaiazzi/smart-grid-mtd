@@ -28,7 +28,8 @@ plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 import pandas as pd
 
-DETECT_THRESHOLD  = 0.3
+from attack_plane.thresholds import DETECT_THRESHOLD
+
 LABEL_MTD_MODEL   = "MTD (MTD model)"
 LABEL_BASE_MODEL  = "MTD (baseline model)"
 LABEL_BASELINE    = "Baseline (no MTD)"

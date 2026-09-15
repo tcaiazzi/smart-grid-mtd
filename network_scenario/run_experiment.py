@@ -11,13 +11,20 @@ from Kathara.manager.Kathara import Kathara
 from Kathara.setting.Setting import Setting
 from Kathara.model.Lab import Lab
 
-from classify import (
+from attack_plane.classify import (
     extract_features,
     load_artifacts,
     predict_packets,
     rank_nanogrid_ips,
 )
-from split_trace import split_trace
+from traffic_generator.split_trace import split_trace
+from network_scenario.guest_files import (
+    ROUTER_FILES,
+    SCMC_FILES,
+    SEMP_FILES,
+    SEMP_RL_FILES,
+)
+from network_scenario.slug import experiment_slug
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -148,36 +155,6 @@ def scmc_client_command(args, duration=None, shared_key=None):
         "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
         f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
         f"{shared_key_arg}"
-    )
-
-
-def experiment_slug(args) -> str:
-    """Compact directory name for one parameter configuration.
-
-    Mirrors the Makefile's EXP_SLUG / MTD_PARAMS_SLUG exactly so a standalone run
-    lands in the same output/<slug>/ directory the Makefile expects:
-        baseline -> baseline-mbps<M>
-        mtd      -> mtd-hop<H>-padint<PI>-ips<NI>-ports<NP>-pads<NB>-mbps<M>
-    """
-    if args.no_mtd:
-        return f"baseline-mbps{args.bg_replay_mbps}"
-    n_ips = len(args.mtd_ip_pool.split(","))
-    n_ports = len(args.mtd_port_pool.split(","))
-    n_pads = len(args.mtd_pad_buckets.split(","))
-    n_scmc_ips = len(args.mtd_scmc_ip_pool.split(","))
-    n_freqs = len(args.mtd_freq_pool.split(","))
-    # An RL-coordinated run uses a distinct prefix so its artifacts sit beside the
-    # fixed-timer run's instead of overwriting them (enables the RL-vs-fixed compare).
-    # --rl-tag further separates competing RL policies (e.g. mtdrl-entropy-<slug>).
-    if args.rl_policy:
-        prefix = f"mtdrl-{args.rl_tag}" if args.rl_tag else "mtdrl"
-    else:
-        prefix = "mtd"
-    return (
-        f"{prefix}-hop{args.mtd_hop_interval}-padint{args.mtd_pad_interval}"
-        f"-ips{n_ips}-ports{n_ports}-pads{n_pads}-srcips{n_scmc_ips}"
-        f"-mbps{args.bg_replay_mbps}"
-        f"-freqint{args.mtd_freq_interval}-freqs{n_freqs}"
     )
 
 
@@ -443,13 +420,13 @@ def main():
     lab.connect_machine_obj_to_link(attacker, "B")
 
     log.info("Copying asset files into machines")
-    semp.create_file_from_path("assets/qkd/cert_authority.py", "/cert_authority.py")
-    semp.create_file_from_path("assets/mtd_coordinator.py", "/mtd_coordinator.py")
+    for host_path, guest_path in SEMP_FILES:
+        semp.create_file_from_path(host_path, guest_path)
     if args.rl_policy and not args.no_mtd:
         # RL coordinator + its numpy-only deps. mtd_coordinator.py (above) is the
         # base class it subclasses; rl_policy.py is imported by both.
-        semp.create_file_from_path("assets/mtd_rl_coordinator.py", "/mtd_rl_coordinator.py")
-        semp.create_file_from_path("rl_policy.py", "/rl_policy.py")
+        for host_path, guest_path in SEMP_RL_FILES:
+            semp.create_file_from_path(host_path, guest_path)
         semp.create_file_from_path(args.rl_policy, "/policy.npz")
     mosquitto_conf = (
         "assets/mosquitto/mosquitto_nomtd.conf"
@@ -457,10 +434,10 @@ def main():
         else "assets/mosquitto/mosquitto.conf"
     )
     semp.create_file_from_path(mosquitto_conf, "/etc/mosquitto/mosquitto.conf")
-    scmc.create_file_from_path("assets/mtd_executor.py", "mtd_executor.py")
-    scmc.create_file_from_path("assets/simple_client.py", "simple_client.py")
-    scmc.create_file_from_path("assets/qkd/cert_client.py", "/cert_client.py")
-    router.create_file_from_path("assets/replay_background.sh", "replay_background.sh")
+    for host_path, guest_path in SCMC_FILES:
+        scmc.create_file_from_path(host_path, guest_path)
+    for host_path, guest_path in ROUTER_FILES:
+        router.create_file_from_path(host_path, guest_path)
 
     logging.info("Background trace: %s", args.trace)
     trace_path = args.trace

@@ -57,22 +57,21 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from entropy import FIELD_ORDER
-from mtd_env import Calibration
-from plot_results import (
+from monitor.entropy import FIELD_ORDER
+from monitor.plot_results import (
     DEFAULT_SCMC_IP,
-    DETECT_THRESHOLD,
     compute_delivery,
     load_scmc_pool,
     ranking_nanogrid_detection,
 )
-from rl_policy import KNOBS
+from defense_plane.rl_policy import KNOB_COST, KNOBS
 
 # Per-knob availability cost, the SAME weights the RL reward charges in
-# mtd_env (Calibration.cost, [port, ip, src, pad, freq]). Keyed by knob name so the
-# log parser can charge each actuation it sees. Single source of truth — importing it
-# keeps this figure in lockstep with whatever the env was trained against.
-COST = dict(zip(KNOBS, Calibration().cost))
+# mtd_env (Calibration.cost is itself rl_policy.KNOB_COST). Keyed by knob name so
+# the log parser can charge each actuation it sees. Single source of truth —
+# importing it keeps this figure in lockstep with whatever the env was trained
+# against, without dragging mtd_env's gymnasium/pandas dependency in for five floats.
+COST = dict(zip(KNOBS, KNOB_COST))
 
 # One bar group per coordinator. model_src picks which eval model scored it: each
 # MTD config is judged by its own matched model; the baseline by the baseline model.

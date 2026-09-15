@@ -31,6 +31,15 @@ N_RECONNECT = 3                       # port, ip, src
 PAD_IDX = KNOBS.index("pad")
 FREQ_IDX = KNOBS.index("freq")
 
+# Availability cost charged per actuation, same order as KNOBS: the fraction of
+# publishes disrupted by that knob firing (port/ip/src force a TCP reconnect;
+# pad/freq are essentially free). Single source of truth for two consumers:
+# mtd_env.Calibration.cost charges it in the RL reward, and monitor's
+# compare_coordinators bills the *observed* actuations against it — both need
+# the same five floats, and this module (numpy-only, host- and guest-importable)
+# is where KNOBS itself already lives.
+KNOB_COST = (0.15, 0.30, 0.30, 0.01, 0.01)   # port, ip, src, pad, freq
+
 # Padding is a "regime" knob: sub-action 0 = keep the current regime, 1..K_PAD-1
 # select a diversity level (more buckets = wider packet-size spread).
 K_PAD = 4

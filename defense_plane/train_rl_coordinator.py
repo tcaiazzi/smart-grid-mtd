@@ -27,8 +27,8 @@ import os
 
 import numpy as np
 
-from mtd_env import MTDCoordinatorEnv, load_calibration
-from rl_policy import (
+from defense_plane.mtd_env import MTDCoordinatorEnv, load_calibration
+from defense_plane.rl_policy import (
     K_FREQ,
     K_PAD,
     KNOBS,

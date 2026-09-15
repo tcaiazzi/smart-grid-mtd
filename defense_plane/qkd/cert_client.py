@@ -18,39 +18,12 @@ import struct
 import sys
 
 from cryptography import x509
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-
-# ---------------------------------------------------------------------------
-# Encrypted transport  (must match cert_authority.py)
-# ---------------------------------------------------------------------------
-
-def encrypt_payload(data: bytes, key: bytes) -> bytes:
-    nonce = os.urandom(12)
-    return nonce + AESGCM(key).encrypt(nonce, data, None)
-
-
-def decrypt_payload(data: bytes, key: bytes) -> bytes:
-    return AESGCM(key).decrypt(data[:12], data[12:], None)
-
-
-def recv_msg(sock: socket.socket) -> bytes:
-    length = struct.unpack(">I", _recv_exact(sock, 4))[0]
-    return _recv_exact(sock, length)
-
-
-def send_msg(sock: socket.socket, data: bytes):
-    sock.sendall(struct.pack(">I", len(data)) + data)
-
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("Connection closed")
-        buf += chunk
-    return buf
+# Crypto (AES-256-GCM under the QKD shared key) and wire framing are shared
+# with cert_authority.py, mtd_coordinator.py and mtd_executor.py — see
+# mtd_crypto.py / mtd_wire.py, copied alongside this file on every machine.
+from mtd_crypto import encrypt_payload, decrypt_payload
+from mtd_wire import send_bytes as send_msg, recv_bytes as recv_msg
 
 
 # ---------------------------------------------------------------------------

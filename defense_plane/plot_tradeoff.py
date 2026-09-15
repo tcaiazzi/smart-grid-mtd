@@ -37,9 +37,9 @@ plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 import pandas as pd
 
-from mtd_env import MTDCoordinatorEnv, load_calibration
-from rl_policy import NumpyMLPPolicy
-from train_rl_coordinator import evaluate, fixed_timer_action
+from defense_plane.mtd_env import MTDCoordinatorEnv, load_calibration
+from defense_plane.rl_policy import NumpyMLPPolicy
+from defense_plane.train_rl_coordinator import evaluate, fixed_timer_action
 
 
 def parse_args() -> argparse.Namespace:

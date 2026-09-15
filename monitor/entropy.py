@@ -57,7 +57,7 @@ plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
 plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 
-from classify import extract_features
+from attack_plane.classify import extract_features
 
 # Continuous fields are histogram-binned before counting; discrete ones use the
 # raw category counts. 32 bins is plenty to resolve the padding buckets / publish
