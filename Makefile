@@ -49,6 +49,11 @@ TEST_TRACE  ?= $(SPLIT_DIR)/$(basename $(notdir $(BG_TRACE)))_test.pcap
 DATASET_DURATION ?= 120
 ATTACK_DURATION  ?= 40
 POST_ATTACK      ?= 40
+# Attacker block decision: top1 (always block the top-ranked IP — the workshop
+# paper's behaviour) or threshold (only if its nanogrid_frac >= BLOCK_THRESHOLD;
+# unset = attack_plane/thresholds.py DETECT_THRESHOLD).
+BLOCK_POLICY     ?= top1
+BLOCK_THRESHOLD  ?=
 BG_REPLAY_MBPS   ?= 2
 
 # ── MTD parameters ─────────────────────────────────────────────────────────────
@@ -173,7 +178,8 @@ help:
 	@echo "                      Cross-model: make evaluate MODEL_SRC=baseline"
 	@echo "  all-evaluate        Run all three evaluations: no-mtd/no-mtd, mtd/mtd, mtd/no-mtd"
 	@echo "  attack              Run the model-driven attack (ATTACK_DURATION=$(ATTACK_DURATION)s,"
-	@echo "                      POST_ATTACK=$(POST_ATTACK)s observed after the block)"
+	@echo "                      POST_ATTACK=$(POST_ATTACK)s observed after the block,"
+	@echo "                      BLOCK_POLICY=$(BLOCK_POLICY), BLOCK_THRESHOLD=$(or $(BLOCK_THRESHOLD),default))"
 	@echo "                      -> $(ATTACK_OUT_DIR)"
 	@echo "                      Cross-model: make attack MODEL_SRC=baseline"
 	@echo "  baseline            Run the attack with MTD disabled"
@@ -260,7 +266,8 @@ evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 		$(CLASSIFY_LABEL_FLAGS)
 
 attack: $(ATTACK_MODEL)
-	$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
+	$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) \
+		--block-policy $(BLOCK_POLICY) $(if $(BLOCK_THRESHOLD),--block-threshold $(BLOCK_THRESHOLD)) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 

@@ -17,6 +17,7 @@ from attack_plane.classify import (
     predict_packets,
     rank_nanogrid_ips,
 )
+from attack_plane.thresholds import DETECT_THRESHOLD
 from traffic_generator.split_trace import split_trace
 from network_scenario.guest_files import (
     ROUTER_FILES,
@@ -113,20 +114,32 @@ def _drain(exec_stream, to_print=False, log_path=None):
         pass
 
 
-def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str) -> tuple:
+BLOCK_POLICIES = ("top1", "threshold")
+
+
+def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str,
+                       block_policy: str = "top1",
+                       threshold: float = DETECT_THRESHOLD) -> tuple:
     """
     Score a captured PCAP with the trained model and rank source IPs by how
-    nanogrid-like their traffic is.
+    nanogrid-like their traffic is, then pick the IP to block.
+
+    block_policy decides whether the attacker acts:
+      top1       always block the top-ranked IP, whatever its score (the
+                 behaviour the workshop paper's results were produced with);
+      threshold  block it only if its nanogrid_frac >= threshold.
 
     Returns (top_ip, ranking) where ranking is the per-IP DataFrame from
     rank_nanogrid_ips (indexed by src_ip, sorted by nanogrid_frac desc).
-    Returns ("", empty) if nothing could be scored.
+    top_ip is "" if nothing could be scored or the policy declines to block.
     """
     df = extract_features(pcap_path)  # unlabeled — attacker has no ground truth
     model, scaler = load_artifacts(model_path, scaler_path)
-    pkt_preds = predict_packets(df, model, scaler)
+    pkt_preds = predict_packets(df, model, scaler, window_size=model.window_size)
     ranking = rank_nanogrid_ips(pkt_preds)
     if ranking.empty:
+        return "", ranking
+    if block_policy == "threshold" and ranking.iloc[0]["nanogrid_frac"] < threshold:
         return "", ranking
     return str(ranking.index[0]), ranking
 
@@ -267,6 +280,22 @@ def _parse_args() -> argparse.Namespace:
         metavar="SECONDS",
         help="Seconds to keep the router capture running after the block, to "
         "record the post-attack effect (default: 15).",
+    )
+    p.add_argument(
+        "--block-policy",
+        choices=BLOCK_POLICIES,
+        default="top1",
+        help="When the attacker blocks: 'top1' always blocks the top-ranked IP "
+        "(default, the workshop-paper behaviour); 'threshold' blocks it only if "
+        "its nanogrid_frac >= --block-threshold.",
+    )
+    p.add_argument(
+        "--block-threshold",
+        type=float,
+        default=DETECT_THRESHOLD,
+        metavar="FRAC",
+        help=f"nanogrid_frac cutoff for --block-policy threshold "
+        f"(default: {DETECT_THRESHOLD}).",
     )
     p.add_argument(
         "--bg-replay-mbps",
@@ -634,8 +663,11 @@ def main():
         )
 
         log.info("[Attack] Scoring capture with the trained model")
+        log.info("[Attack] Block policy: %s (threshold %.2f)",
+                 args.block_policy, args.block_threshold)
         detected_ip, ranking = detect_nanogrid_ip(
-            attacker_cap, args.model, args.scaler
+            attacker_cap, args.model, args.scaler,
+            block_policy=args.block_policy, threshold=args.block_threshold,
         )
         log.info("[Attack] Per-IP nanogrid ranking:\n%s", ranking.to_string())
 

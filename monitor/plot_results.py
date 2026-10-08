@@ -17,8 +17,9 @@ disk — no need to re-run the lab:
 
   • Detection (security): re-score the scenario's attacker_capture.pcap with the
     model that scenario used (same code path as run_experiment.detect_nanogrid_ip)
-    and read off the nanogrid score of the real SCMC IP and its rank. Higher score
-    / rank-1 = the attacker's fingerprinting succeeds.
+    and read off the nanogrid score of the SCMC (pooled over its whole source-IP
+    pool, see scmc_pool_detection) and the top-ranked IP. Higher score / SCMC
+    rank-1 = the attacker's fingerprinting succeeds.
 
   • scmc_blocked (outcome): did the attacker's drop rule actually cut the SCMC off?
     True iff delivery to the SEMP falls silent and stays silent until the capture
@@ -99,7 +100,7 @@ class Scenario:
     n_nanogrid_ips: int = 0
     sent_count: int = 0
     delivery_ratio: float = float("nan")
-    scmc_frac: float = float("nan")
+    scmc_frac: float = float("nan")      # attacker score pooled over the SCMC IP pool
     top_ip: str = ""
     top_frac: float = float("nan")
     blocked_scmc: bool = False
@@ -293,14 +294,27 @@ def scmc_cut_off(delivered_epochs: list, router_t_max: float,
 
 # ── Detection: re-score attacker_capture.pcap with the scenario's model ───────
 
-def score_detection(pcap_path: str, model_dir: str, scmc_ip: str) -> pd.DataFrame:
+def score_detection(pcap_path: str, model_dir: str) -> pd.DataFrame:
     """Replicate run_experiment.detect_nanogrid_ip: rank source IPs by nanogrid frac."""
     model_path = os.path.join(model_dir, "model.pt")
     scaler_path = os.path.join(model_dir, "scaler.pkl")
     df = extract_features(pcap_path)  # unlabeled, like the attacker sees it
     model, scaler = load_artifacts(model_path, scaler_path)
-    preds = predict_packets(df, model, scaler)
+    preds = predict_packets(df, model, scaler, window_size=model.window_size)
     return rank_nanogrid_ips(preds)
+
+
+def scmc_pool_detection(ranking: pd.DataFrame, scmc_pool) -> float:
+    """Fraction of the SCMC's packets the attacker flagged, over its whole IP pool.
+
+    Under source-IP hopping the SCMC speaks from every address in its pool, so the
+    score is pooled across all of them — positive_count / n_packets summed over the
+    pool IPs present in the ranking (packet-weighted, so a pool of one reduces to
+    that IP's nanogrid_frac). NaN when no pool IP appears in the capture.
+    """
+    rows = ranking[ranking.index.isin(scmc_pool)]
+    n = rows["n_packets"].sum() if not rows.empty else 0
+    return float(rows["positive_count"].sum() / n) if n else float("nan")
 
 
 # Lab subnets that carry the nanogrid: 10.0.0.x = SCMC side, 10.1.0.x = SEMP side.
@@ -582,13 +596,12 @@ def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
             model_ok = os.path.exists(os.path.join(s.model_dir, "model.pt"))
             if os.path.exists(attacker_pcap) and model_ok:
                 print(f"[score] {s.label!r}: {attacker_pcap}  with model {s.model_dir}")
-                ranking = score_detection(attacker_pcap, s.model_dir, ip)
+                ranking = score_detection(attacker_pcap, s.model_dir)
                 s.ranking = ranking
                 if not ranking.empty:
                     s.top_ip = str(ranking.index[0])
                     s.top_frac = float(ranking.iloc[0]["nanogrid_frac"])
-                    if ip in ranking.index:
-                        s.scmc_frac = float(ranking.loc[ip, "nanogrid_frac"])
+                    s.scmc_frac = scmc_pool_detection(ranking, scmc_pool)
             else:
                 print(f"[warn] cannot score '{s.label}' "
                       f"(pcap or model missing) — skipping detection")

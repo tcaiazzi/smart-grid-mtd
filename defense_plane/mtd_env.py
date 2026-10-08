@@ -88,6 +88,11 @@ def load_calibration(output_root: str = "output") -> Calibration:
     scores to set detection_max/min. Silent fallback to the dataclass defaults
     (anchored to the runs present at design time) when nothing is found — so
     training never depends on a sweep having been run.
+
+    Rows are bucketed by the scenario's leading word (monitor.plot_results labels:
+    "Baseline (no MTD)", "MTD (baseline model)", "MTD (MTD model)"), not by a
+    substring match — "MTD (baseline model)" is an MTD run scored by the
+    baseline-trained attacker, so it belongs with the MTD scores.
     """
     cal = Calibration()
     try:
@@ -100,9 +105,11 @@ def load_calibration(output_root: str = "output") -> Calibration:
                 frac = row.get("scmc_nanogrid_frac")
                 if pd.isna(frac):
                     continue
-                label = str(row.get("scenario", "")).lower()
-                (fracs_static if "baseline" in label or "no mtd" in label
-                 else fracs_mtd).append(float(frac))
+                label = str(row.get("scenario", "")).strip().lower()
+                if label.startswith("baseline"):
+                    fracs_static.append(float(frac))
+                elif label.startswith("mtd"):
+                    fracs_mtd.append(float(frac))
         if fracs_static:
             cal.detection_max = max(fracs_static)
         if fracs_mtd:
