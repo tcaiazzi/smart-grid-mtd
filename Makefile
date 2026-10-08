@@ -58,6 +58,9 @@ BG_REPLAY_MBPS   ?= 2
 # Experiment seed (empty = unseeded). Passed to the lab runs (each derives a
 # per-role seed: train/test/attack) and to the CNN training.
 SEED             ?=
+# Root of the per-config experiment dirs. RL policies (RL_DIR) stay under
+# output/ regardless: they are shared by every run.
+OUTPUT_ROOT      ?= output
 SEED_FLAG        := $(if $(SEED),--seed $(SEED))
 
 # ── MTD parameters ─────────────────────────────────────────────────────────────
@@ -127,7 +130,8 @@ endif
 MODEL_SRC ?= $(VARIANT)
 
 # ── Experiment directory ─────────────────────────────────────────────────────
-# Everything for one parameter configuration lives under output/<EXP_SLUG>/:
+# Everything for one parameter configuration lives under $(OUTPUT_ROOT)/<EXP_SLUG>/
+# (OUTPUT_ROOT=output by default; main.py --runs N uses output/run-<i>/ per run):
 #   datasets/  model/  eval/model-<src>/  attack/model-<src>/  summary.csv
 # The slug reuses the compact MTD_PARAMS_SLUG; baseline omits the MTD params
 # (the coordinator is not started) and keys on the replay rate only.
@@ -136,12 +140,12 @@ ifeq ($(VARIANT),baseline)
 else
   EXP_SLUG := $(MTD_PREFIX)-$(MTD_PARAMS_SLUG)
 endif
-EXP_DIR := output/$(EXP_SLUG)
+EXP_DIR := $(OUTPUT_ROOT)/$(EXP_SLUG)
 
 # Experiment dir whose model scores this run. MODEL_SRC=baseline (cross-model)
 # reads the baseline config's model; otherwise it's this config's own model.
 ifeq ($(MODEL_SRC),baseline)
-  MODEL_EXP_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
+  MODEL_EXP_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 else
   MODEL_EXP_DIR := $(EXP_DIR)
 endif
@@ -161,7 +165,7 @@ ATTACK_SCALER := $(MODEL_EXP_DIR)/model/scaler.pkl
 EVAL_OUT_DIR   := $(EXP_DIR)/eval/model-$(MODEL_SRC)
 ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
-BASELINE_DIR := output/baseline-mbps$(BG_REPLAY_MBPS)
+BASELINE_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
 .PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff clean
 
@@ -192,13 +196,13 @@ help:
 	@echo "  experiment          Full pipeline with MTD: datasets -> train -> attack"
 	@echo "  experiment-baseline Full pipeline without MTD (NO_MTD=1)"
 	@echo "  plots               Compare scenarios -> $(EXP_DIR)/"
-	@echo "  plots-baseline      Standalone baseline figures -> output/baseline-mbps$(BG_REPLAY_MBPS)/"
-	@echo "  plots-all           Replot every experiment dir under output/ (NO_DETECTION=1 to skip scoring)"
+	@echo "  plots-baseline      Standalone baseline figures -> $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)/"
+	@echo "  plots-all           Replot every experiment dir under $(OUTPUT_ROOT)/ (NO_DETECTION=1 to skip scoring)"
 	@echo "  entropy             Flow/field entropy of the nanogrid traffic -> $(EXP_DIR)/entropy.csv"
 	@echo "  entropy-compare     Baseline-vs-MTD entropy figure -> $(EXP_DIR)/entropy_comparison.pdf"
 	@echo "  entropy-all         Recompute entropy + refresh ALL figures from existing results (NO_DETECTION=1 to skip scoring)"
 	@echo "  train-rl            Train the RL coordinator policy offline -> $(RL_DIR)/policy.{zip,npz}"
-	@echo "  compare-rl          Model-free RL-vs-fixed-MTD comparison -> output/compare-<slug>/"
+	@echo "  compare-rl          Model-free RL-vs-fixed-MTD comparison -> $(OUTPUT_ROOT)/compare-<slug>/"
 	@echo "  plot-tradeoff       Security-vs-hop-cost frontier (RL vs fixed) -> $(RL_DIR)/tradeoff.pdf"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
@@ -326,12 +330,12 @@ plots:
 plots-baseline:
 	$(MAKE) entropy NO_MTD=1
 	$(PYTHON) -m monitor.plot_results --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
-		--plots-dir output/baseline-mbps$(BG_REPLAY_MBPS)
+		--plots-dir $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
 # Regenerate figures + summary.csv for every experiment dir under output/.
 # Add NO_DETECTION=1 to skip the (slow) pcap re-scoring and refresh availability only.
 plots-all:
-	$(PYTHON) -m monitor.plot_results --replot-all --output-root output \
+	$(PYTHON) -m monitor.plot_results --replot-all --output-root $(OUTPUT_ROOT) \
 		$(if $(filter-out 0 no false off,$(NO_DETECTION)),--no-detection,)
 
 # ── Entropy metric (model-free MTD effectiveness) ────────────────────────────
@@ -365,7 +369,7 @@ ENTROPY_SEMP_POOL ?= 10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8
 # dir's datasets/scmc_ips.txt; the broker pool is the generous set above.
 # Add NO_DETECTION=1 to skip the slow pcap re-scoring in the figure refresh.
 entropy-all:
-	@for pcap in output/*/datasets/test.pcap; do \
+	@for pcap in $(OUTPUT_ROOT)/*/datasets/test.pcap; do \
 		[ -e "$$pcap" ] || continue; \
 		ddir=$$(dirname $$pcap); dir=$$(dirname $$ddir); \
 		scmc=$$(cat $$ddir/scmc_ips.txt 2>/dev/null); \
@@ -397,13 +401,13 @@ train-rl-entropy:
 # this parameter config. Reads each config's eval predictions.csv + entropy.csv —
 # no lab run. Needs output/mtd-<slug>/ and output/mtdrl-<slug>/ to both exist
 # (run the same config once with RL=0 and once with RL=1).
-COMPARE_DIR ?= output/compare-$(MTD_PARAMS_SLUG)
+COMPARE_DIR ?= $(OUTPUT_ROOT)/compare-$(MTD_PARAMS_SLUG)
 # RL_TAGS: comma-separated extra RL policy tags to add as their own bars, e.g.
 #   make compare-rl RL_TAGS=entropy ...   -> baseline / fixed / RL blend / RL entropy
 RL_TAGS ?=
 compare-rl:
 	$(PYTHON) -m monitor.compare_coordinators --slug $(MTD_PARAMS_SLUG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root output --out-dir $(COMPARE_DIR) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root $(OUTPUT_ROOT) --out-dir $(COMPARE_DIR) \
 		--rl-tags "$(RL_TAGS)"
 
 # Run compare-rl for every config with data: discover each output/mtd-<slug>/ dir,
@@ -411,13 +415,13 @@ compare-rl:
 # that config's comparison into output/compare-<slug>/. No lab run; pass RL_TAGS=... as
 # usual. Idempotent — re-reads the existing artifacts for every config it finds.
 compare-rl-all:
-	@set -e; for d in output/mtd-*/; do \
+	@set -e; for d in $(OUTPUT_ROOT)/mtd-*/; do \
 		slug=$$(basename "$$d" | sed 's/^mtd-//'); \
 		mbps=$$(echo "$$slug" | sed -E 's/.*-mbps([0-9]+).*/\1/'); \
 		echo "######## $$slug (mbps$$mbps) ########"; \
 		$(PYTHON) -m monitor.compare_coordinators --slug "$$slug" \
-			--bg-replay-mbps "$$mbps" --output-root output \
-			--out-dir "output/compare-$$slug" --rl-tags "$(RL_TAGS)"; \
+			--bg-replay-mbps "$$mbps" --output-root $(OUTPUT_ROOT) \
+			--out-dir "$(OUTPUT_ROOT)/compare-$$slug" --rl-tags "$(RL_TAGS)"; \
 	done
 
 # Security vs hop-cost tradeoff (simulation): the RL policy vs the fixed-timer

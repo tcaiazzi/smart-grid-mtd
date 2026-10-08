@@ -5,6 +5,7 @@ import sys
 import tarfile
 import io
 import os
+import re
 import time
 import zlib
 
@@ -85,6 +86,56 @@ def role_seed(seed, role: str):
 def seed_arg(seed) -> str:
     """` --seed N` for a guest agent's command line, or "" when unseeded."""
     return "" if seed is None else f" --seed {seed}"
+
+
+def with_console_log(cmd: str, log_name: str) -> str:
+    """Run a guest agent under bash with its stdout+stderr captured to `log_name`.
+
+    The agents' own log files only hold what they log on purpose; a crash
+    traceback (or the coordinator's stdout, its only log) would otherwise be
+    lost with the unread exec stream. Unbuffered so the file is current even
+    when the lab is torn down under the agent.
+    """
+    return f'bash -c "PYTHONUNBUFFERED=1 {cmd} > {log_name} 2>&1"'
+
+
+# A line the SCMC publisher logs per publish: mtd_executor "#<n> → ip:port",
+# simple_client "power=...".
+PUBLISH_RE = re.compile(r"\] (?:#\d+ →|power=)")
+EXIT_NO_PUBLISH = 3   # run_experiment exit code: the SCMC never published
+
+
+def count_publishes(client_log: str) -> int:
+    """Publishes recorded in a downloaded SCMC client log (0 if it is missing)."""
+    if not os.path.exists(client_log):
+        return 0
+    with open(client_log, errors="replace") as f:
+        return sum(1 for line in f if PUBLISH_RE.search(line))
+
+
+CERT_ATTEMPTS = 5      # cert_client tries before the run is declared failed
+
+
+def bootstrap_client_cert(manager, scmc, shared_key: str) -> None:
+    """Fetch the SCMC's mTLS bundle from the SEMP CA, retrying until it lands.
+
+    One failed fetch used to go unnoticed (the exec result was ignored): right
+    after deploy the SCMC can still be unconfigured ("Network is unreachable") or
+    the CA not yet listening, and the publisher then died in tls_set() on the
+    missing certs/ — a run with no nanogrid traffic at all. wait=True holds the
+    exec until the machine's startup (interface/route setup) has run.
+    """
+    cmd = (f"python3 cert_client.py --shared-key {shared_key} --ca-host 10.1.0.2 "
+           "--cn scmc1 --out-dir certs/")
+    for attempt in range(1, CERT_ATTEMPTS + 1):
+        out, err, rc = manager.exec_obj(scmc, cmd, wait=True, stream=False)
+        if rc == 0:
+            return
+        detail = (err or out or b"").decode(errors="replace").strip().splitlines()
+        log.warning("cert client attempt %d/%d failed (rc=%s): %s", attempt,
+                    CERT_ATTEMPTS, rc, detail[-1] if detail else "no output")
+        time.sleep(2)
+    raise RuntimeError("SCMC could not obtain its client certificate from the CA")
 
 
 def generate_shared_key(n_bytes: int = 32) -> str:
@@ -174,22 +225,24 @@ def scmc_client_command(args, duration=None, shared_key=None, seed=None):
     """
     prefix = f"timeout {duration} " if duration is not None else ""
     if args.no_mtd:
-        return (
+        cmd = (
             prefix
             + "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl "
             "--cafile certs/ca.crt --certfile certs/client.crt "
             "--keyfile certs/client.key --log-file simple_client.log"
             + seed_arg(seed)
         )
-    shared_key_arg = f" --shared-key {shared_key}" if shared_key else ""
-    return (
-        prefix
-        + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
-        "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
-        "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
-        f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
-        f"{shared_key_arg}{seed_arg(seed)}"
-    )
+    else:
+        shared_key_arg = f" --shared-key {shared_key}" if shared_key else ""
+        cmd = (
+            prefix
+            + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
+            "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
+            "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
+            f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
+            f"{shared_key_arg}{seed_arg(seed)}"
+        )
+    return with_console_log(cmd, "client.console.log")
 
 
 def scmc_ips(args) -> str:
@@ -228,6 +281,36 @@ def download_logs(scmc, semp, args, dst_dir, prefix=""):
         "/var/log/mosquitto/mosquitto.log",
         f"{dst_dir}/{prefix}mosquitto.log",
     )
+    # Agents' captured console output (see with_console_log): diagnostics only,
+    # so a missing file is a warning, not a failed run.
+    consoles = [(scmc, "client.console.log")]
+    if not args.no_mtd:
+        consoles.append((semp, "coordinator.log"))
+    for machine, name in consoles:
+        try:
+            download_file_from_container(machine.api_object, name, f"{dst_dir}/{prefix}{name}")
+        except Exception as e:
+            log.warning("Could not download %s: %s", name, e)
+
+
+def check_published(client_log: str, discard=()) -> bool:
+    """True if the SCMC published at least once during this run.
+
+    Otherwise the run is unusable (e.g. the publisher died at startup): log it,
+    delete `discard` (the run's capture, so Make's order-only rules regenerate
+    it instead of training on an empty nanogrid flow) and return False.
+    """
+    n = count_publishes(client_log)
+    if n:
+        log.info("SCMC published %d messages", n)
+        return True
+    log.error("SCMC never published (see %s and the client.console.log next to it) "
+              "— run discarded", client_log)
+    for path in discard:
+        if os.path.exists(path):
+            os.remove(path)
+            log.error("Removed %s", path)
+    return False
 
 
 def _parse_args() -> argparse.Namespace:
@@ -460,6 +543,7 @@ def main():
         setup_run_log(f"{out_dir}/run.log")
 
     # This run's seed: one per role, so train/test/attack draws differ.
+    run_ok = True   # set False by check_published when the SCMC never published
     run_seed = role_seed(args.seed, args.name if args.generate_dataset is not None
                          else "attack")
     log.info("Seed: %s (run seed %s)", args.seed, run_seed)
@@ -573,11 +657,7 @@ def main():
     )
 
     log.info("Executing certification client for getting client certificate and key")
-    manager.exec_obj(
-        scmc,
-        f'bash -c "sleep 1; python3 cert_client.py --shared-key {shared_key} --ca-host 10.1.0.2 --cn scmc1 --out-dir certs/"',
-        stream=False,
-    )
+    bootstrap_client_cert(manager, scmc, shared_key)
 
     log.info("Waiting for mosquitto server on semp")
     manager.exec_obj(
@@ -597,31 +677,33 @@ def main():
                  args.rl_policy, args.rl_tick)
         manager.exec_obj(
             semp,
-            f"python3 mtd_rl_coordinator.py --policy policy.npz --tick {args.rl_tick}"
-            f" --control-port 9998"
-            f" --ip-pool {args.mtd_ip_pool}"
-            f" --port-pool {args.mtd_port_pool} --real-port 18883"
-            f" --hop-timeout {args.mtd_hop_timeout}"
-            f" --pad-buckets {args.mtd_pad_buckets}"
-            f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
-            f" --freq-pool {args.mtd_freq_pool}"
-            f" --shared-key {shared_key}" + seed_arg(run_seed),
+            with_console_log(
+                f"python3 mtd_rl_coordinator.py --policy policy.npz --tick {args.rl_tick}"
+                f" --control-port 9998"
+                f" --ip-pool {args.mtd_ip_pool}"
+                f" --port-pool {args.mtd_port_pool} --real-port 18883"
+                f" --hop-timeout {args.mtd_hop_timeout}"
+                f" --pad-buckets {args.mtd_pad_buckets}"
+                f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
+                f" --freq-pool {args.mtd_freq_pool}"
+                f" --shared-key {shared_key}" + seed_arg(run_seed), "coordinator.log"),
         )
     else:
         manager.exec_obj(
             semp,
-            f"python3 mtd_coordinator.py --control-port 9998"
-            f" --ip-pool {args.mtd_ip_pool}"
-            f" --port-pool {args.mtd_port_pool} --real-port 18883"
-            f" --hop-interval {args.mtd_hop_interval}"
-            f" --hop-timeout {args.mtd_hop_timeout}"
-            f" --pad-buckets {args.mtd_pad_buckets}"
-            f" --pad-interval {args.mtd_pad_interval}"
-            f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
-            f" --src-hop-interval {args.mtd_src_hop_interval}"
-            f" --freq-pool {args.mtd_freq_pool}"
-            f" --freq-interval {args.mtd_freq_interval}"
-            f" --shared-key {shared_key}" + seed_arg(run_seed),
+            with_console_log(
+                f"python3 mtd_coordinator.py --control-port 9998"
+                f" --ip-pool {args.mtd_ip_pool}"
+                f" --port-pool {args.mtd_port_pool} --real-port 18883"
+                f" --hop-interval {args.mtd_hop_interval}"
+                f" --hop-timeout {args.mtd_hop_timeout}"
+                f" --pad-buckets {args.mtd_pad_buckets}"
+                f" --pad-interval {args.mtd_pad_interval}"
+                f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
+                f" --src-hop-interval {args.mtd_src_hop_interval}"
+                f" --freq-pool {args.mtd_freq_pool}"
+                f" --freq-interval {args.mtd_freq_interval}"
+                f" --shared-key {shared_key}" + seed_arg(run_seed), "coordinator.log"),
         )
 
     if args.generate_dataset is not None:
@@ -662,6 +744,8 @@ def main():
 
         download_logs(scmc, semp, args, datasets_dir, prefix=f"{args.name}.")
         write_scmc_ips(args, datasets_dir)
+        run_ok = check_published(f"{datasets_dir}/{args.name}.client.log",
+                                 discard=[local_path])
 
     elif args.attack is not None:
         sniff_duration = args.attack
@@ -745,9 +829,12 @@ def main():
         download_logs(scmc, semp, args, out_dir)
         write_scmc_ips(args, out_dir)
         log.info("[Attack] Captures saved to %s/", out_dir)
+        run_ok = check_published(f"{out_dir}/client.log")
 
     log.info("Undeploying lab")
     manager.undeploy_lab(lab=lab)
+    if not run_ok:
+        sys.exit(EXIT_NO_PUBLISH)
     log.info("Done")
 
 

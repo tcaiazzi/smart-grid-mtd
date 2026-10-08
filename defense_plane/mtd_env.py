@@ -84,7 +84,8 @@ class Calibration:
 def load_calibration(output_root: str = "output") -> Calibration:
     """Best-effort calibration from existing experiment outputs.
 
-    Scans output/*/summary.csv for the baseline (no-MTD) and best MTD detection
+    Scans every summary.csv under output_root (output/<exp>/ and, for repeated
+    runs, output/run-<i>/<exp>/) for the baseline (no-MTD) and best MTD detection
     scores to set detection_max/min. Silent fallback to the dataclass defaults
     (anchored to the runs present at design time) when nothing is found — so
     training never depends on a sweep having been run.
@@ -97,7 +98,8 @@ def load_calibration(output_root: str = "output") -> Calibration:
     cal = Calibration()
     try:
         fracs_static, fracs_mtd = [], []
-        for path in glob.glob(os.path.join(output_root, "*", "summary.csv")):
+        for path in glob.glob(os.path.join(output_root, "**", "summary.csv"),
+                              recursive=True):
             df = pd.read_csv(path)
             if "scmc_nanogrid_frac" not in df.columns:
                 continue
