@@ -55,6 +55,10 @@ POST_ATTACK      ?= 40
 BLOCK_POLICY     ?= top1
 BLOCK_THRESHOLD  ?=
 BG_REPLAY_MBPS   ?= 2
+# Experiment seed (empty = unseeded). Passed to the lab runs (each derives a
+# per-role seed: train/test/attack) and to the CNN training.
+SEED             ?=
+SEED_FLAG        := $(if $(SEED),--seed $(SEED))
 
 # ── MTD parameters ─────────────────────────────────────────────────────────────
 # Tune these to make fingerprinting harder.
@@ -226,14 +230,14 @@ dataset-train: $(TRAIN_PCAP)
 
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
 	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
 		--name train --trace $(TRAIN_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
 	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
 		--name test --trace $(TEST_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 datasets: dataset-train dataset-test
@@ -250,7 +254,7 @@ CLASSIFY_LABEL_FLAGS := --scmc-ip-pool $(MTD_SCMC_IP_POOL) --semp-ip-pool $(MTD_
 
 # Training produces model.pt + scaler.pkl in $(EXP_DIR)/model
 $(MODEL):
-	$(PYTHON) -m attack_plane.classify --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model \
+	$(PYTHON) -m attack_plane.classify --mode train --train-pcap $(TRAIN_PCAP) --out-dir $(EXP_DIR)/model $(SEED_FLAG) \
 		$(CLASSIFY_LABEL_FLAGS)
 
 train: $(MODEL)
@@ -268,7 +272,7 @@ evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 attack: $(ATTACK_MODEL)
 	$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) \
 		--block-policy $(BLOCK_POLICY) $(if $(BLOCK_THRESHOLD),--block-threshold $(BLOCK_THRESHOLD)) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 
 # Cross-model: the foreign model must be trained already — don't silently

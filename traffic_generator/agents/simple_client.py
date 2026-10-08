@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore")   # suppress gym deprecation noise
 
 # Same pymgrid physics as mtd_executor.py (MTD publisher) — see
 # microgrid_sim.py, copied alongside this file on every scmc machine.
-from microgrid_sim import build_microgrid, step_microgrid
+from microgrid_sim import build_microgrid, sensor_rng, step_microgrid
 
 INTERVAL = 1.0            # seconds between publishes
 
@@ -65,6 +65,8 @@ def parse_args():
     parser.add_argument("--log-file", default="simple_client.log",
                         help="File to write the message-exchange log "
                              "(default: simple_client.log in the working directory)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed for the sensor noise (omit = unseeded)")
     args = parser.parse_args()
 
     if args.ssl and args.cafile is None:
@@ -94,6 +96,7 @@ def main():
 
     log.info("[%s] Building microgrid simulator...", scmc_id)
     mg = build_microgrid()
+    noise_rng = sensor_rng(args.seed)
 
     tls_label = f"TLS  cafile={args.cafile}" if args.ssl else "plain"
     log.info("[%s] Ready — broker=%s:%s  (%s)", scmc_id, args.broker, args.port, tls_label)
@@ -126,7 +129,7 @@ def main():
 
     try:
         while True:
-            r = step_microgrid(mg, scmc_id)
+            r = step_microgrid(mg, scmc_id, noise_rng)
 
             for metric in ("power_kw", "frequency", "voltage"):
                 client.publish(

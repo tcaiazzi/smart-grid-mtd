@@ -58,14 +58,13 @@ from mtd_wire import send_msg as _send_msg, recv_msg as _recv_msg
 
 log = logging.getLogger(__name__)
 
-import numpy as np
 import paho.mqtt.client as mqtt
 
 warnings.filterwarnings("ignore")   # suppress gym deprecation noise
 
 # Same pymgrid physics as simple_client.py (baseline publisher) — see
 # microgrid_sim.py, copied alongside this file on every scmc machine.
-from microgrid_sim import build_microgrid, step_microgrid
+from microgrid_sim import build_microgrid, sensor_rng, step_microgrid
 
 # Bounded window for a hop's NEW broker to answer before we give up and keep
 # publishing on the old endpoint (make-before-break, see _do_hop). Short on
@@ -90,8 +89,12 @@ class SCMCExecutor:
                  ssl: bool = False, cafile: str = None,
                  certfile: str = None, keyfile: str = None,
                  pad_buckets: list = None, src_ip: str = None,
-                 shared_key: str = None):
+                 shared_key: str = None, seed: int = None):
         self.grid_id   = grid_id
+        # Seeded draws (seed=None → OS entropy). Padding and publish jitter are
+        # both drawn on the publish thread, so one RNG gives a stable sequence.
+        self._rng       = random.Random(None if seed is None else f"{seed}:executor")
+        self._noise_rng = sensor_rng(seed)
         # QKD-simulated shared key for control-channel encryption (None = plaintext).
         self._key      = bytes.fromhex(shared_key) if shared_key else None
         self.broker    = broker
@@ -235,7 +238,7 @@ class SCMCExecutor:
         candidates = [b for b in buckets if b >= len(raw)]
         if not candidates:
             return raw                      # already larger than every bucket
-        target = random.choice(candidates)
+        target = self._rng.choice(candidates)
 
         # Account for the overhead the "_pad" field itself adds to the JSON.
         overhead = len(json.dumps({**obj, "_pad": ""}).encode())
@@ -243,7 +246,7 @@ class SCMCExecutor:
         return json.dumps({**obj, "_pad": "A" * filler}).encode()
 
     def _publish(self, seq_num: int) -> None:
-        r = step_microgrid(self.mg, self.grid_id)
+        r = step_microgrid(self.mg, self.grid_id, self._noise_rng)
         topic_base = f"grid/{self.grid_id}"
 
         for metric in ("power_kw", "frequency", "voltage"):
@@ -512,7 +515,7 @@ class SCMCExecutor:
                     if hop:
                         self._do_hop(hop)
 
-                time.sleep(self.interval + np.random.uniform(-0.05, 0.05))
+                time.sleep(self.interval + self._rng.uniform(-0.05, 0.05))
         except KeyboardInterrupt:
             log.info("[%s] stopped", self.grid_id)
         finally:
@@ -559,6 +562,9 @@ def main():
     parser.add_argument("--shared-key", default=None,
                         help="64-char hex QKD shared key for control-channel "
                              "AES-256-GCM encryption (omit = plaintext)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed for padding, publish jitter and sensor noise "
+                             "(omit = unseeded)")
     args = parser.parse_args()
 
     if args.shared_key is not None and len(args.shared_key) != 64:
@@ -600,6 +606,7 @@ def main():
         pad_buckets = pad_buckets,
         src_ip      = src_ip,
         shared_key  = args.shared_key,
+        seed        = args.seed,
     ).run()
 
 

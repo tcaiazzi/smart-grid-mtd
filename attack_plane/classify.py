@@ -237,9 +237,15 @@ def train_classifier(
     batch_size: int = 64,
     lr: float = 1e-3,
     device: Optional[torch.device] = None,
+    seed: Optional[int] = None,
 ) -> tuple["FlowClassifierCNN", StandardScaler]:
+    """Train the CNN. `seed` fixes weight init and batch shuffling (None = unseeded);
+    the train/validation split is always fixed (random_state=0)."""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if seed is not None:
+        torch.manual_seed(seed)
+    shuffle_gen = torch.Generator().manual_seed(seed) if seed is not None else None
 
     n_ng = int((train_df["is_nanogrid"] == 1).sum())
     n_bg = int((train_df["is_nanogrid"] == 0).sum())
@@ -267,6 +273,7 @@ def train_classifier(
         TensorDataset(torch.from_numpy(X_t), torch.from_numpy(y_t).float()),
         batch_size=batch_size,
         shuffle=True,
+        generator=shuffle_gen,
     )
     dl_val = DataLoader(
         TensorDataset(torch.from_numpy(X_v), torch.from_numpy(y_v).float()),
@@ -530,6 +537,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--seed", type=int, default=None,
+                   help="Seed for CNN weight init and batch shuffling (omit = unseeded)")
     p.add_argument(
         "--load-model",
         action="store_true",
@@ -567,6 +576,7 @@ def main() -> None:
             batch_size=args.batch_size,
             lr=args.lr,
             device=device,
+            seed=args.seed,
         )
         save_artifacts(model, scaler, out_dir)
 
@@ -603,6 +613,7 @@ def main() -> None:
                 batch_size=args.batch_size,
                 lr=args.lr,
                 device=device,
+                seed=args.seed,
             )
             save_artifacts(model, scaler, out_dir)
             window_size = args.window_size

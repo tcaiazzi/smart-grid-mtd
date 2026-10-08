@@ -6,6 +6,7 @@ import tarfile
 import io
 import os
 import time
+import zlib
 
 from Kathara.manager.Kathara import Kathara
 from Kathara.setting.Setting import Setting
@@ -66,6 +67,24 @@ def setup_run_log(log_path: str) -> None:
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
     logging.getLogger().addHandler(handler)
     log.info("Logging this run to %s", log_path)
+
+
+def role_seed(seed, role: str):
+    """Seed for one lab run, derived from the experiment --seed and the run's role.
+
+    The train capture, the test capture and the attack run of one config each
+    get a distinct (but reproducible) seed, so the test/attack traffic does not
+    replay the exact MTD draws the attacker's model was trained on.
+    None → None (unseeded run).
+    """
+    if seed is None:
+        return None
+    return zlib.crc32(f"{seed}:{role}".encode()) & 0x7FFFFFFF
+
+
+def seed_arg(seed) -> str:
+    """` --seed N` for a guest agent's command line, or "" when unseeded."""
+    return "" if seed is None else f" --seed {seed}"
 
 
 def generate_shared_key(n_bytes: int = 32) -> str:
@@ -144,13 +163,14 @@ def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str,
     return str(ranking.index[0]), ranking
 
 
-def scmc_client_command(args, duration=None, shared_key=None):
+def scmc_client_command(args, duration=None, shared_key=None, seed=None):
     """Build the SCMC publisher command for the active variant.
 
     Baseline (--no-mtd) runs the plain simple_client; otherwise the MTD executor.
     When `duration` is set the command is wrapped in `timeout` so it self-terminates.
     `shared_key` (QKD-simulated) encrypts the MTD control channel; passed only to
-    the executor (the baseline simple_client has no control channel).
+    the executor (the baseline simple_client has no control channel). `seed`
+    (see role_seed) seeds the publisher's random draws.
     """
     prefix = f"timeout {duration} " if duration is not None else ""
     if args.no_mtd:
@@ -159,6 +179,7 @@ def scmc_client_command(args, duration=None, shared_key=None):
             + "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl "
             "--cafile certs/ca.crt --certfile certs/client.crt "
             "--keyfile certs/client.key --log-file simple_client.log"
+            + seed_arg(seed)
         )
     shared_key_arg = f" --shared-key {shared_key}" if shared_key else ""
     return (
@@ -167,7 +188,7 @@ def scmc_client_command(args, duration=None, shared_key=None):
         "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
         "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
         f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
-        f"{shared_key_arg}"
+        f"{shared_key_arg}{seed_arg(seed)}"
     )
 
 
@@ -218,6 +239,15 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Capture a single mixed PCAP (background + SCMC together) "
         "for DURATION seconds.",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Experiment seed. Each lab run (train/test capture, attack) derives "
+        "its own seed from it and passes it to the coordinator and the SCMC "
+        "publisher (MTD draws, padding, publish jitter, sensor noise). Omit for an "
+        "unseeded run. TLS, the QKD-simulated key and container timing stay random.",
     )
     p.add_argument(
         "--name",
@@ -429,6 +459,11 @@ def main():
         out_dir = args.results_dir or f"./output/{experiment_slug(args)}/attack/model-{variant}"
         setup_run_log(f"{out_dir}/run.log")
 
+    # This run's seed: one per role, so train/test/attack draws differ.
+    run_seed = role_seed(args.seed, args.name if args.generate_dataset is not None
+                         else "attack")
+    log.info("Seed: %s (run seed %s)", args.seed, run_seed)
+
     log.info("Initializing Kathara manager")
     manager = Kathara.get_instance()
 
@@ -570,7 +605,7 @@ def main():
             f" --pad-buckets {args.mtd_pad_buckets}"
             f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
             f" --freq-pool {args.mtd_freq_pool}"
-            f" --shared-key {shared_key}",
+            f" --shared-key {shared_key}" + seed_arg(run_seed),
         )
     else:
         manager.exec_obj(
@@ -586,7 +621,7 @@ def main():
             f" --src-hop-interval {args.mtd_src_hop_interval}"
             f" --freq-pool {args.mtd_freq_pool}"
             f" --freq-interval {args.mtd_freq_interval}"
-            f" --shared-key {shared_key}",
+            f" --shared-key {shared_key}" + seed_arg(run_seed),
         )
 
     if args.generate_dataset is not None:
@@ -603,7 +638,7 @@ def main():
             f"timeout {duration} bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0",
         )
         log.info("[Dataset] Starting SCMC client in parallel with the replay")
-        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key))
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key, seed=run_seed))
         # _drain(agent_stream, to_print=True)
 
         # manager.connect_tty_obj(scmc)
@@ -638,7 +673,7 @@ def main():
         manager.exec_obj(router, f"bash ./replay_background.sh eth1 {args.bg_replay_mbps} 0")
 
         log.info("[Attack] Starting scmc client")
-        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key))
+        agent_stream = manager.exec_obj(scmc, scmc_client_command(args, shared_key=shared_key, seed=run_seed))
         # _drain(agent_stream, to_print=True)
 
         log.info("[Attack] Starting router capture (before + after attack)")

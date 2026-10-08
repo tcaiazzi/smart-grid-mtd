@@ -87,8 +87,13 @@ class SEMPCoordinator:
                  pad_buckets: list = None, pad_interval: float = 30.0,
                  scmc_ip_pool: list = None, src_hop_interval: float = 30.0,
                  freq_pool: list = None, freq_interval: float = 30.0,
-                 hop_timeout: float = 10.0, shared_key: str = None):
+                 hop_timeout: float = 10.0, shared_key: str = None,
+                 seed: int = None):
         self.control_port = control_port
+        # One RNG per knob, so a seeded run draws the same per-knob sequence no
+        # matter how the knob threads interleave (seed=None → OS entropy).
+        self._rng = {knob: random.Random(None if seed is None else f"{seed}:{knob}")
+                     for knob in ("hop", "pad", "src", "freq")}
         # QKD-simulated shared key for control-channel encryption (None = plaintext).
         self._key = bytes.fromhex(shared_key) if shared_key else None
         self.ip_pool      = ip_pool
@@ -383,7 +388,7 @@ class SEMPCoordinator:
                           "ip_hop"   if ip_changed else
                           "port_hop")
 
-                in_messages = random.randint(5, 15)
+                in_messages = self._rng["hop"].randint(5, 15)
                 self._pending_done[seq]  = set(self._clients.keys())
                 self._hop_old_port[seq]  = self.current_port
                 self._hop_new_port[seq]  = new_port
@@ -465,9 +470,9 @@ class SEMPCoordinator:
 
                 # Announce a random subset of the master buckets as the new
                 # active regime, so the size distribution keeps moving.
-                k = random.randint(1, len(self.pad_buckets))
-                buckets = sorted(random.sample(self.pad_buckets, k))
-                in_messages = random.randint(5, 15)
+                k = self._rng["pad"].randint(1, len(self.pad_buckets))
+                buckets = sorted(self._rng["pad"].sample(self.pad_buckets, k))
+                in_messages = self._rng["pad"].randint(5, 15)
                 self._pending_pad_done[seq] = set(self._clients.keys())
 
             msg = {
@@ -513,7 +518,7 @@ class SEMPCoordinator:
                 new_src_ip = self.scmc_ip_pool[idx]
                 self.current_src_ip = new_src_ip
 
-                in_messages = random.randint(5, 15)
+                in_messages = self._rng["src"].randint(5, 15)
                 self._pending_src_done[seq] = set(self._clients.keys())
 
             msg = {
@@ -556,8 +561,8 @@ class SEMPCoordinator:
                 self._seq += 1
                 seq = self._seq
 
-                new_interval = random.choice(self.freq_pool)
-                in_messages = random.randint(5, 15)
+                new_interval = self._rng["freq"].choice(self.freq_pool)
+                in_messages = self._rng["freq"].randint(5, 15)
                 self._pending_freq_done[seq] = set(self._clients.keys())
 
             msg = {
@@ -626,6 +631,8 @@ def main():
     parser.add_argument("--shared-key", default=None,
                         help="64-char hex QKD shared key for control-channel "
                              "AES-256-GCM encryption (omit = plaintext)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed for the per-knob random draws (omit = unseeded)")
     args = parser.parse_args()
 
     if args.shared_key is not None and len(args.shared_key) != 64:
@@ -643,6 +650,7 @@ def main():
         scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
         freq_pool=freq_pool, freq_interval=args.freq_interval,
         hop_timeout=args.hop_timeout, shared_key=args.shared_key,
+        seed=args.seed,
     ).run()
 
 

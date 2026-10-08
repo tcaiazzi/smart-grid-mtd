@@ -30,7 +30,6 @@ Usage:
 """
 
 import argparse
-import random
 import threading
 import time
 
@@ -99,7 +98,7 @@ class RLSEMPCoordinator(SEMPCoordinator):
 
             self._seq += 1
             seq = self._seq
-            in_messages = random.randint(5, 15)
+            in_messages = self._rng["hop"].randint(5, 15)
             self._pending_done[seq] = set(self._clients.keys())
             self._hop_old_port[seq] = self.current_port
             self._hop_new_port[seq] = new_port
@@ -128,7 +127,7 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self.current_src_ip = new_src_ip
             self._seq += 1
             seq = self._seq
-            in_messages = random.randint(5, 15)
+            in_messages = self._rng["src"].randint(5, 15)
             self._pending_src_done[seq] = set(self._clients.keys())
 
         self._broadcast({
@@ -149,10 +148,10 @@ class RLSEMPCoordinator(SEMPCoordinator):
                 return False
             frac = (level + 1) / (K_PAD - 1)
             k = max(1, min(len(self.pad_buckets), round(frac * len(self.pad_buckets))))
-            buckets = sorted(random.sample(self.pad_buckets, k))
+            buckets = sorted(self._rng["pad"].sample(self.pad_buckets, k))
             self._seq += 1
             seq = self._seq
-            in_messages = random.randint(5, 15)
+            in_messages = self._rng["pad"].randint(5, 15)
             self._pending_pad_done[seq] = set(self._clients.keys())
 
         self._broadcast({
@@ -178,7 +177,7 @@ class RLSEMPCoordinator(SEMPCoordinator):
             new_interval = self.freq_pool[self._freq_idx]
             self._seq += 1
             seq = self._seq
-            in_messages = random.randint(5, 15)
+            in_messages = self._rng["freq"].randint(5, 15)
             self._pending_freq_done[seq] = set(self._clients.keys())
 
         self._broadcast({
@@ -258,6 +257,8 @@ def main():
     parser.add_argument("--shared-key", default=None,
                         help="64-char hex QKD shared key for control-channel "
                              "AES-256-GCM encryption (omit = plaintext)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed for the per-knob random draws (omit = unseeded)")
     args = parser.parse_args()
 
     if args.shared_key is not None and len(args.shared_key) != 64:
@@ -276,7 +277,7 @@ def main():
         scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
         freq_pool=freq_pool, freq_interval=args.freq_interval,
         hop_timeout=args.hop_timeout, shared_key=args.shared_key,
-        policy_path=args.policy, tick_interval=args.tick,
+        policy_path=args.policy, tick_interval=args.tick, seed=args.seed,
     ).run()
 
 

@@ -45,19 +45,30 @@ def build_microgrid(steps: int = 10_000) -> Microgrid:
     ])
 
 
-def derive_frequency(net_balance_kw: float) -> float:
+def derive_frequency(net_balance_kw: float, rng=None) -> float:
     freq = FREQ_NOMINAL + FREQ_DROOP * net_balance_kw
-    freq += np.random.normal(0, 0.005)          # ±5 mHz sensor noise
+    freq += (rng or np.random).normal(0, 0.005)  # ±5 mHz sensor noise
     return round(float(np.clip(freq, 49.0, 51.0)), 4)
 
 
-def derive_voltage(load_kw: float) -> float:
+def derive_voltage(load_kw: float, rng=None) -> float:
     volt = VOLT_NOMINAL - VOLT_DROOP * (load_kw - LOAD_NOMINAL)
-    volt += np.random.normal(0, 0.3)            # ±0.3 V sensor noise
+    volt += (rng or np.random).normal(0, 0.3)    # ±0.3 V sensor noise
     return round(float(np.clip(volt, 200.0, 260.0)), 2)
 
 
-def step_microgrid(mg: Microgrid, scmc_id: str) -> dict:
+def sensor_rng(seed=None) -> np.random.Generator:
+    """RNG for the sensor noise of step_microgrid (seed=None → OS entropy).
+
+    The noise changes the reported values' digits, hence the JSON payload length
+    on the wire, so a seeded run must seed it too.
+    """
+    return np.random.default_rng(None if seed is None else [seed, 0x5E45])
+
+
+def step_microgrid(mg: Microgrid, scmc_id: str, rng=None) -> dict:
+    """Advance the microgrid one step; `rng` (see sensor_rng) drives the sensor
+    noise, None = numpy's global RNG."""
     action = {
         "genset":  [np.array([1.0, 0.6])],  # on, 60 % of max (normalised)
         "battery": [np.array([0.0])],         # hold
@@ -79,8 +90,8 @@ def step_microgrid(mg: Microgrid, scmc_id: str) -> dict:
         "scmc_id":   scmc_id,
         "timestamp": round(time.time(), 3),
         "power_kw":  power_kw,
-        "frequency": derive_frequency(net_kw),
-        "voltage":   derive_voltage(load_kw),
+        "frequency": derive_frequency(net_kw, rng),
+        "voltage":   derive_voltage(load_kw, rng),
         "load_kw":   round(load_kw,  2),
         "pv_kw":     round(pv_kw,    2),
         "genset_kw": round(genset_kw,2),
