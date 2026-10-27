@@ -1,0 +1,926 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTD Defense Monitor</title>
+<!--
+  Live view of the SEMP MTD coordinator, served by mtd_dashboard.py.
+  Live: polls /api/events. Replay: open this file directly (or add ?replay) and
+  load a telemetry.jsonl downloaded by run_experiment.py — optionally together with
+  the run's ground_truth.jsonl, to compare detector alerts with the real blackholes
+  and benign faults (never available live). Both modes feed the same reducer
+  (apply()), so every number is computed the same way.
+  Self-contained on purpose: no CDN, the lab may have no internet access.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --k-port: #2a78d6; --k-ip: #eb6834; --k-src: #1baf7a; --k-pad: #eda100; --k-freq: #e87ba4;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --k-port: #3987e5; --k-ip: #d95926; --k-src: #199e70; --k-pad: #c98500; --k-freq: #d55181;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --k-port: #3987e5; --k-ip: #d95926; --k-src: #199e70; --k-pad: #c98500; --k-freq: #d55181;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--ring); color: var(--ink-2); }
+.badge .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+.spacer { flex: 1; }
+button, .btn {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; cursor: pointer; text-decoration: none;
+}
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid2 > .card { margin-bottom: 0; }
+.row-gap { margin-bottom: 16px; }
+@media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile.hero .value { font-size: 48px; line-height: 1.05; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.surface { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.knob { border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px; }
+.knob .name { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.knob .val { font-size: 17px; font-weight: 600; margin: 2px 0; overflow-wrap: anywhere; }
+.knob .meta { font-size: 12px; color: var(--muted); }
+.knob.off { opacity: 0.55; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.chart { width: 100%; position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; border-bottom: 1px solid var(--axis); padding: 4px 8px 4px 0; white-space: nowrap; }
+td { border-bottom: 1px solid var(--grid); padding: 4px 8px 4px 0; vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+.tall { max-height: 320px; overflow-y: auto; }
+.empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+.meter { display: inline-block; height: 8px; border-radius: 0 4px 4px 0; vertical-align: middle; margin-right: 6px; }
+.st { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+#tip {
+  position: fixed; pointer-events: none; z-index: 10; display: none; max-width: 320px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); white-space: pre-line;
+}
+#drop { display: none; }
+body.replay #drop { display: flex; }
+#drop {
+  border: 1px dashed var(--axis); border-radius: 10px; padding: 18px; margin-bottom: 16px;
+  align-items: center; gap: 12px; flex-wrap: wrap; color: var(--ink-2);
+}
+details summary { cursor: pointer; color: var(--ink-2); font-size: 13px; }
+code { font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>MTD Defense Monitor</h1>
+    <span class="badge" id="conn"><span class="dot"></span>…</span>
+    <span class="badge" id="kind"></span>
+    <span class="spacer"></span>
+    <a class="btn" id="download" href="/telemetry.jsonl" download="telemetry.jsonl">Download telemetry</a>
+    <button id="openfile">Load files…</button>
+    <button id="theme" title="Toggle light/dark">◐</button>
+    <input type="file" id="file" accept=".jsonl,.json,.txt" multiple hidden>
+  </header>
+
+  <div id="drop">Replay mode — drop a <code>telemetry.jsonl</code> here (add the run's
+    <code>ground_truth.jsonl</code> to compare alerts with the truth) or
+    <button id="openfile2">choose files</button></div>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Exposed attack surface</h2>
+    <p class="sub">What an observer would see right now, how long it has been stable, and how evenly
+      each knob has spread over its pool (time-weighted entropy, 100% = uniform over the pool).</p>
+    <div class="surface" id="surface"></div>
+  </section>
+
+  <section class="card">
+    <h2>MTD actions</h2>
+    <p class="sub">One row per knob; each mark is an action at the time it was scheduled, its tail runs
+      until the coordinator stopped waiting on it. Shaded bands are data-plane gaps.</p>
+    <div class="legend" id="tl-legend"></div>
+    <div class="chart" id="timeline"></div>
+  </section>
+
+  <div class="grid2 row-gap">
+    <section class="card">
+      <h2>Cumulative availability cost</h2>
+      <p class="sub">Charged with the RL reward's per-knob weights when an executor fires the action.</p>
+      <div class="chart" id="cost"></div>
+    </section>
+    <section class="card">
+      <h2>Nanogrid data reaching the broker</h2>
+      <p class="sub" id="data-sub">Snapshot messages per second, observed on the broker's loopback listener.</p>
+      <div class="chart" id="data"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Update delivery by knob</h2>
+    <p class="sub">Sent = broadcast by the coordinator. Latency is measured from scheduling; DONE includes
+      the deliberate “apply in N messages” countdown. Skipped = not sent because the previous one was still in flight.</p>
+    <div class="scroll" id="delivery"></div>
+  </section>
+
+  <div class="grid2 row-gap">
+    <section class="card">
+      <h2>Delivery problems</h2>
+      <p class="sub" id="problems-sub"></p>
+      <div class="scroll tall" id="problems"></div>
+    </section>
+    <section class="card">
+      <h2>Executors</h2>
+      <p class="sub">Control-channel health per SCMC. Handovers are make-before-break control reconnects
+        (source-IP hop, control following a broker-IP hop).</p>
+      <div class="scroll" id="executors"></div>
+      <h2 style="margin-top:14px">In flight</h2>
+      <div class="scroll" id="inflight"></div>
+    </section>
+  </div>
+
+  <section class="card" id="det-card" hidden>
+    <h2>Delivery attack detector</h2>
+    <p class="sub">Per SCMC, every second: how likely it is that a blackhole is cutting its data off, from
+      what the SEMP sees (data silence, unanswered MTD actions, control-channel state). An alert is raised
+      after 2 windows above the threshold and cleared after 3 below.</p>
+    <div class="legend" id="det-legend"></div>
+    <div id="det-charts"></div>
+    <div class="scroll" id="det-table" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card" id="rl-card" hidden>
+    <h2>RL policy decisions</h2>
+    <p class="sub">Last ticks, newest on the right. A filled cell is a knob the policy fired; an outlined
+      cell is one it asked for but that was blocked (previous action still in flight, or no clients).</p>
+    <div class="legend" id="rl-legend"></div>
+    <div class="chart" id="rl"></div>
+    <div class="scroll" id="rl-table" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Event log (newest first)</summary>
+      <div class="scroll tall" id="log" style="margin-top:8px"></div>
+    </details>
+  </section>
+</main>
+<div id="tip"></div>
+
+<script>
+"use strict";
+
+// ── constants ─────────────────────────────────────────────────────────────────
+const KNOBS = ["port", "ip", "src", "pad", "freq"];
+const KNOB_LABEL = { port: "Broker port", ip: "Broker IP", src: "SCMC source IP", pad: "Padding", freq: "Publish interval" };
+const ACTION_KNOBS = { hop: ["port", "ip"], src: ["src"], pad: ["pad"], freq: ["freq"] };
+const ACTIONS = ["hop", "src", "pad", "freq"];
+const ACTION_LABEL = { hop: "Broker hop", src: "Source-IP hop", pad: "Padding", freq: "Publish interval" };
+// Outcome → status color + shape (shape keeps it readable without color).
+const OUTCOME = {
+  applied:     { label: "Applied",      color: "var(--good)",     shape: "circle" },
+  partial:     { label: "Partial",      color: "var(--serious)",  shape: "circle" },
+  failed:      { label: "Failed",       color: "var(--critical)", shape: "cross" },
+  timed_out:   { label: "Timed out",    color: "var(--serious)",  shape: "triangle" },
+  client_lost: { label: "Client lost",  color: "var(--warning)",  shape: "diamond" },
+  late:        { label: "Applied late", color: "var(--good)",     shape: "square" },
+  inflight:    { label: "In flight",    color: "var(--muted)",    shape: "ring" },
+};
+const RL_WINDOW = 120;   // ticks shown in the RL raster
+
+// ── state + reducer ───────────────────────────────────────────────────────────
+let S;
+function reset() {
+  S = {
+    n: 0, t0: null, tLast: null, info: null,
+    actions: new Map(),          // seq → action record
+    costEvents: [],              // [t, cost, action]
+    totalCost: 0,
+    skipped: {},                 // action → {in_progress, no_clients}
+    clients: new Map(),          // scmc_id → executor record
+    surface: {},                 // knob → {value, since, changes, occ: Map value→seconds}
+    data: [],                    // [t, msgs/s, maxSilence, expected_s]
+    gaps: [],                    // {scmc_id, t0, t1, gap_s, expected_s}
+    problems: [],                // {t, what, detail, sev}
+    rl: [],                      // {t, cmd, fired, dwell, rate}
+    nat: [],
+    log: [],
+    det: new Map(),              // scmc_id → [{t, p, hit, alert, rule, top}]
+    detThreshold: null,
+    alerts: [],                  // {scmc_id, t0, t1|null, p}
+    gt: { meta: null, blocks: [], faults: [], open: {}, openFault: {} },   // replay only
+  };
+}
+reset();
+
+function setSurface(knob, value, t) {
+  const s = S.surface[knob];
+  if (!s) { S.surface[knob] = { value, since: t, changes: 0, occ: new Map() }; return; }
+  if (s.value === value) return;
+  s.occ.set(s.value, (s.occ.get(s.value) || 0) + (t - s.since));
+  s.value = value; s.since = t; s.changes += 1;
+}
+const fmtBuckets = b => (b && b.length) ? b.join(",") : "off";
+function applySurface(a, t) {
+  const p = a.params;
+  if (a.action === "hop") { setSurface("port", String(p.new_port), t); setSurface("ip", p.new_ip, t); }
+  if (a.action === "src") setSurface("src", p.new_src_ip, t);
+  if (a.action === "pad") setSurface("pad", fmtBuckets(p.buckets), t);
+  if (a.action === "freq") setSurface("freq", p.interval + " s", t);
+}
+function problem(t, what, detail, sev) { S.problems.push({ t, what, detail, sev }); }
+
+function apply(ev) {
+  if (ev.i != null) S.n = Math.max(S.n, ev.i + 1);
+  const t = ev.t;
+  if (S.t0 === null) S.t0 = t;
+  S.tLast = t;
+  S.log.push(ev);
+  switch (ev.kind) {
+    case "run_info": {
+      S.info = ev; S.t0 = t;
+      const init = ev.initial || {};
+      setSurface("port", String(init.port), t);
+      setSurface("ip", init.ip, t);
+      setSurface("src", init.src ?? "—", t);
+      setSurface("pad", "off", t);
+      setSurface("freq", init.interval + " s", t);
+      break;
+    }
+    case "action_scheduled":
+      S.actions.set(ev.seq, {
+        seq: ev.seq, action: ev.action, knobs: ev.knobs, t, params: ev.params || {},
+        in_messages: ev.in_messages, awaited: ev.awaited || [], ack: {}, done: {}, failed: {},
+        status: "inflight", tEnd: null, cost: 0,
+      });
+      break;
+    case "reply": {
+      const a = S.actions.get(ev.seq);
+      const c = touchClient(ev.scmc_id, t);
+      if (!a) break;
+      const bucket = ev.phase === "ACK" ? a.ack : ev.phase === "DONE" ? a.done : a.failed;
+      bucket[ev.scmc_id] = ev.latency_s;
+      if (ev.phase === "FAILED") {
+        problem(t, `${ACTION_LABEL[a.action]} failed on ${ev.scmc_id}`,
+                `seq ${ev.seq}: new endpoint unreachable, executor stayed put`, "critical");
+        c.failed += 1;
+      }
+      break;
+    }
+    case "action_outcome": {
+      const a = S.actions.get(ev.seq) || { seq: ev.seq, action: ev.action, knobs: ACTION_KNOBS[ev.action], t, params: {}, ack: {}, done: {}, failed: {}, awaited: [] };
+      S.actions.set(ev.seq, a);
+      a.tEnd = t; a.cost = ev.cost || 0; a.rolledBack = ev.rolled_back; a.timedOut = ev.timed_out || [];
+      const partial = ev.status === "applied" && ((ev.failed || []).length || (ev.timed_out || []).length);
+      a.status = partial ? "partial" : ev.status;
+      if (a.cost > 0) { S.totalCost += a.cost; S.costEvents.push([t, a.cost, a.action]); }
+      if (ev.status === "applied") applySurface(a, t);
+      const name = `${ACTION_LABEL[a.action]} seq ${ev.seq}`;
+      if (ev.status === "timed_out") problem(t, `${name} timed out`, `no answer from ${a.timedOut.join(", ")}${ev.rolled_back ? " — rolled back" : ""}`, "serious");
+      else if (ev.status === "failed") problem(t, `${name} rolled back`, "every executor reported FAILED", "critical");
+      else if (ev.status === "client_lost") problem(t, `${name} abandoned`, "awaited executors disconnected before DONE", "warning");
+      else if (partial) problem(t, `${name} partially applied`, `failed: ${(ev.failed || []).join(", ") || "—"}; timed out: ${a.timedOut.join(", ") || "—"}`, "serious");
+      break;
+    }
+    case "action_skipped": {
+      const s = S.skipped[ev.action] || (S.skipped[ev.action] = { in_progress: 0, no_clients: 0 });
+      s[ev.reason] = (s[ev.reason] || 0) + 1;
+      break;
+    }
+    case "client": {
+      const c = touchClient(ev.scmc_id, t);
+      if (ev.event === "connected") { c.connected = true; c.since = t; c.connects += 1; if (c.connects > 1) problem(t, `${ev.scmc_id} reconnected`, "control channel was down", "warning"); }
+      else if (ev.event === "handover") { c.connected = true; c.handovers += 1; }
+      else if (ev.event === "disconnected") { c.connected = false; c.disconnects += 1; problem(t, `${ev.scmc_id} disconnected`, "control channel closed", "serious"); }
+      else if (ev.event === "broadcast_failed") { c.connected = false; c.broadcastFailed += 1; problem(t, `Broadcast to ${ev.scmc_id} failed`, `${ev.msg_type} seq ${ev.seq} not delivered; client dropped`, "critical"); }
+      break;
+    }
+    case "nat":
+      S.nat.push(ev);
+      if (ev.op === "add_failed") problem(t, `NAT rule for port ${ev.port} failed`, ev.error || "", "critical");
+      break;
+    case "data": {
+      const n = Object.values(ev.n || {}).reduce((x, y) => x + y, 0);
+      const sil = Math.max(0, ...Object.values(ev.silence_s || {}));
+      S.data.push([t, n / (ev.window_s || 1), sil, ev.expected_s]);
+      break;
+    }
+    case "data_gap":
+      S.gaps.push({ scmc_id: ev.scmc_id, t0: ev.t_start, t1: t, gap_s: ev.gap_s, expected_s: ev.expected_s });
+      problem(t, `Data gap ${ev.gap_s.toFixed(1)} s from ${ev.scmc_id}`, `expected one snapshot every ${ev.expected_s} s` + gapCause(ev.t_start, t), "serious");
+      break;
+    case "action_late": {
+      // A DONE/FAILED that arrived after the coordinator closed the action: the
+      // executor did fire it, so it is charged (and shown) now.
+      const a = S.actions.get(ev.seq);
+      if (!a) break;
+      a.status = "late"; a.cost += ev.cost || 0; a.lateAt = t;
+      if (ev.cost > 0) { S.totalCost += ev.cost; S.costEvents.push([t, ev.cost, a.action]); }
+      if (ev.phase === "DONE") applySurface(a, t);
+      problem(t, `${ACTION_LABEL[a.action]} seq ${ev.seq} confirmed late`,
+              `${ev.phase} from ${ev.scmc_id} ${fmtDur(ev.delay_s)} after sending, once the coordinator had stopped waiting`, "warning");
+      break;
+    }
+    case "rl_decision":
+      S.rl.push({ t, cmd: ev.cmd, fired: ev.fired, dwell: ev.dwell, rate: ev.rate });
+      break;
+    case "detection": {
+      const d = S.det.get(ev.scmc_id) || [];
+      d.push({ t, p: ev.p, hit: ev.hit, alert: ev.alert, rule: ev.rule, top: ev.top || [] });
+      S.det.set(ev.scmc_id, d);
+      S.detThreshold = ev.threshold;
+      break;
+    }
+    case "detector_alert":
+      if (ev.state === "raised") {
+        S.alerts.push({ scmc_id: ev.scmc_id, t0: t, t1: null, p: ev.p });
+        problem(t, `Blackhole suspected on ${ev.scmc_id}`, `detector score ${ev.p.toFixed(2)} ≥ ${fmtNum(S.detThreshold)}`, "critical");
+      } else {
+        const a = [...S.alerts].reverse().find(x => x.scmc_id === ev.scmc_id && x.t1 == null);
+        if (a) a.t1 = t;
+        problem(t, `Alert cleared on ${ev.scmc_id}`, a ? `after ${fmtDur(t - a.t0)}` : "", "ok");
+      }
+      break;
+    // ground_truth.jsonl (replay only): what the cyber range really did
+    case "run_meta": S.gt.meta = ev; break;
+    case "block": S.gt.open[ev.ip] = { t0: t, ip: ev.ip, target: ev.target }; break;
+    case "unblock": {
+      const b = S.gt.open[ev.ip];
+      if (b) { b.t1 = t; S.gt.blocks.push(b); delete S.gt.open[ev.ip]; }
+      break;
+    }
+    case "impair_start": S.gt.openFault[ev.type] = { t0: t, type: ev.type, params: ev.params }; break;
+    case "impair_stop": {
+      const f = S.gt.openFault[ev.type];
+      if (f) { f.t1 = t; S.gt.faults.push(f); delete S.gt.openFault[ev.type]; }
+      break;
+    }
+    case "executor_restart":
+      if (ev.phase === "kill") S.gt.openFault.restart = { t0: t, type: "restart", params: {} };
+      else if (S.gt.openFault.restart) { S.gt.openFault.restart.t1 = t; S.gt.faults.push(S.gt.openFault.restart); delete S.gt.openFault.restart; }
+      break;
+  }
+}
+const hasTruth = () => !!S.gt.meta;
+const gtBlocks = () => [...S.gt.blocks, ...Object.values(S.gt.open)];
+const gtFaults = () => [...S.gt.faults, ...Object.values(S.gt.openFault)];
+
+function touchClient(id, t) {
+  let c = S.clients.get(id);
+  if (!c) { c = { id, connected: true, since: t, lastSeen: t, connects: 0, handovers: 0, disconnects: 0, broadcastFailed: 0, failed: 0 }; S.clients.set(id, c); }
+  c.lastSeen = t;
+  return c;
+}
+
+// Actions whose life overlaps a gap — the likely cause.
+// Closed gaps plus the one still open: the observer only reports a gap when data
+// resumes, so a silence that is still going on (the most important case) comes
+// from the latest data event.
+function allGaps(tNow) {
+  const last = S.data[S.data.length - 1];
+  if (!last || !last[3] || last[2] <= 2 * last[3]) return S.gaps;
+  const t0 = last[0] - last[2];
+  return [...S.gaps, { scmc_id: "all", t0, t1: LIVE ? tNow : last[0], gap_s: (LIVE ? tNow : last[0]) - t0,
+                       expected_s: last[3], open: true }];
+}
+
+function gapCause(t0, t1) {
+  const hits = [];
+  for (const a of S.actions.values()) {
+    const end = a.tEnd ?? Infinity;
+    if (a.t <= t1 && end >= t0 - 0.5) hits.push(`${ACTION_LABEL[a.action].toLowerCase()} seq ${a.seq}`);
+  }
+  return hits.length ? `; overlapping: ${hits.slice(-3).join(", ")}` : "; no MTD action in flight";
+}
+
+// ── derived metrics ───────────────────────────────────────────────────────────
+function now() { return LIVE ? Math.max(S.tLast ?? 0, Date.now() / 1000) : (S.tLast ?? 0); }
+const rel = t => t - (S.t0 ?? t);
+function quant(xs, q) {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(q * (s.length - 1) + 0.5))];
+}
+function poolSize(knob) {
+  const i = S.info || {};
+  return { port: (i.port_pool || []).length, ip: (i.ip_pool || []).length, src: (i.scmc_ip_pool || []).length,
+           pad: null, freq: (i.freq_pool || []).length }[knob];
+}
+function knobEnabled(knob) {
+  const i = S.info; if (!i) return true;
+  if (knob === "pad") return (i.pad_buckets || []).length > 0;
+  return (poolSize(knob) || 0) > 1;
+}
+function entropy(knob, tNow) {
+  const s = S.surface[knob]; if (!s) return null;
+  const occ = new Map(s.occ); occ.set(s.value, (occ.get(s.value) || 0) + (tNow - s.since));
+  const tot = [...occ.values()].reduce((a, b) => a + b, 0); if (tot <= 0) return null;
+  let h = 0; for (const v of occ.values()) if (v > 0) { const p = v / tot; h -= p * Math.log2(p); }
+  const n = knob === "pad" ? Math.max(occ.size, 2) : Math.max(poolSize(knob) || occ.size, 2);
+  return { bits: h, norm: h / Math.log2(n), distinct: occ.size };
+}
+function perAction(tNow) {
+  const out = {};
+  for (const k of ACTIONS) out[k] = { sent: 0, applied: 0, partial: 0, late: 0, failed: 0, timed_out: 0, client_lost: 0, inflight: 0, recent: 0, recentApplied: 0, ack: [], done: [], cost: 0 };
+  for (const a of S.actions.values()) {
+    const o = out[a.action]; if (!o) continue;
+    o.sent += 1; o[a.status] += 1; o.cost += a.cost;
+    if (tNow - a.t <= 60) { o.recent += 1; if (["applied", "partial", "late"].includes(a.status)) o.recentApplied += 1; }
+    o.ack.push(...Object.values(a.ack).filter(x => x != null));
+    o.done.push(...Object.values(a.done).filter(x => x != null));
+  }
+  return out;
+}
+
+// ── formatting ────────────────────────────────────────────────────────────────
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function fmtDur(s) {
+  if (s == null || !isFinite(s)) return "—";
+  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s";
+  const m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return m < 60 ? `${m}m ${String(r).padStart(2, "0")}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+const fmtClock = s => { s = Math.max(0, s); return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; };
+const fmtLat = x => x == null ? "—" : (x < 1 ? (x * 1000).toFixed(0) + " ms" : x.toFixed(1) + " s");
+const fmtNum = (x, d = 2) => x == null ? "—" : x.toFixed(d);
+function niceTicks(max, n = 4) {
+  if (max <= 0) return [0];
+  const raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * p).find(s => s >= raw);
+  const out = []; for (let v = 0; v <= max + 1e-9; v += step) out.push(+v.toFixed(6));
+  return out;
+}
+function timeTicks(span) {
+  const steps = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  const step = steps.find(s => span / s <= 8) || 3600;
+  const out = []; for (let v = 0; v <= span; v += step) out.push(v);
+  return out;
+}
+
+// ── shapes ────────────────────────────────────────────────────────────────────
+function shape(kind, x, y, color, r = 5) {
+  const ring = `stroke="var(--surface)" stroke-width="2"`;
+  switch (kind) {
+    case "cross": return `<path d="M${x - r} ${y - r}L${x + r} ${y + r}M${x + r} ${y - r}L${x - r} ${y + r}" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>`;
+    case "triangle": return `<path d="M${x} ${y - r - 1}L${x + r + 1} ${y + r}L${x - r - 1} ${y + r}Z" fill="${color}" ${ring}/>`;
+    case "diamond": return `<path d="M${x} ${y - r - 1}L${x + r + 1} ${y}L${x} ${y + r + 1}L${x - r - 1} ${y}Z" fill="${color}" ${ring}/>`;
+    case "ring": return `<circle cx="${x}" cy="${y}" r="${r - 1}" fill="var(--surface)" stroke="${color}" stroke-width="2"/>`;
+    case "square": return `<rect x="${x - r}" y="${y - r}" width="${2 * r}" height="${2 * r}" rx="1.5" fill="${color}" ${ring}/>`;
+    default: return `<circle cx="${x}" cy="${y}" r="${r}" fill="${color}" ${ring}/>`;
+  }
+}
+function legendShape(kind, color) {
+  return `<svg width="14" height="14" viewBox="0 0 14 14">${shape(kind, 7, 7, color, 4)}</svg>`;
+}
+
+// ── renderers ─────────────────────────────────────────────────────────────────
+function renderHeader() {
+  const conn = document.getElementById("conn");
+  const color = !LIVE ? "var(--muted)" : connOK ? "var(--good)" : "var(--critical)";
+  const text = !LIVE ? (S.n ? `Replay · ${S.n} events` : "Replay") : connOK ? "Live" : "Disconnected — lab stopped?";
+  conn.innerHTML = `<span class="dot" style="background:${color}"></span>${esc(text)}`;
+  const i = S.info;
+  document.getElementById("kind").textContent = i
+    ? `${i.coordinator === "rl" ? "RL coordinator" : "Fixed-timer coordinator"}${i.seed != null ? " · seed " + i.seed : ""}`
+    : "waiting for coordinator…";
+  document.getElementById("download").hidden = !LIVE;
+}
+
+function renderTiles(tNow, pa) {
+  const sent = ACTIONS.reduce((s, k) => s + pa[k].sent, 0);
+  const applied = ACTIONS.reduce((s, k) => s + pa[k].applied + pa[k].partial + pa[k].late, 0);
+  const problems = S.problems.length;
+  const connected = [...S.clients.values()].filter(c => c.connected).length;
+  const lastData = S.data[S.data.length - 1];
+  const silence = lastData ? lastData[2] : null;
+  const span = S.t0 != null ? tNow - S.t0 : 0;
+  const perMin = span > 0 ? applied / (span / 60) : 0;
+  const tiles = [
+    { hero: true, label: "Availability cost", value: S.totalCost.toFixed(2), note: `${fmtNum(span > 0 ? S.totalCost / (span / 60) : 0)} per minute` },
+    { label: "Actions applied", value: `${applied}`, note: `${sent} sent · ${perMin.toFixed(1)}/min` },
+    { label: "Delivery problems", value: `${problems}`, note: problems ? S.problems[S.problems.length - 1].what : "none so far" },
+    { label: "Executors connected", value: `${connected}`, note: `${S.clients.size} seen` },
+    { label: "Data silence", value: silence == null ? "—" : fmtDur(silence), note: lastData ? `${lastData[1].toFixed(1)} msg/s in the last second` : "no data observed" },
+    { label: "Run time", value: fmtClock(span), note: S.t0 ? new Date(S.t0 * 1000).toLocaleTimeString() + " start" : "" },
+  ];
+  if (S.det.size) {
+    const open = S.alerts.filter(a => a.t1 == null);
+    const pNow = Math.max(...[...S.det.values()].map(d => d[d.length - 1].p));
+    tiles.splice(1, 0, { label: "Attack detector", value: open.length ? "ALERT" : "Normal",
+      icon: open.length ? legendShape("cross", "var(--critical)") : legendShape("circle", "var(--good)"),
+      note: `p = ${pNow.toFixed(2)} · ${S.alerts.length} alert${S.alerts.length === 1 ? "" : "s"} so far` });
+  }
+  document.getElementById("tiles").innerHTML = tiles.map(x =>
+    `<div class="tile${x.hero ? " hero" : ""}"><div class="label">${esc(x.label)}</div><div class="value">${x.icon ? `<span class="st">${x.icon}${esc(x.value)}</span>` : esc(x.value)}</div><div class="note">${esc(x.note)}</div></div>`).join("");
+}
+
+function renderSurface(tNow) {
+  document.getElementById("surface").innerHTML = KNOBS.map(k => {
+    const s = S.surface[k]; const on = knobEnabled(k);
+    const e = entropy(k, tNow);
+    const pool = k === "pad" ? (S.info?.pad_buckets || []).length + " buckets" : (poolSize(k) ?? "?") + " in pool";
+    return `<div class="knob${on ? "" : " off"}">
+      <div class="name"><span class="sw" style="background:var(--k-${k})"></span>${esc(KNOB_LABEL[k])}${on ? "" : " · disabled"}</div>
+      <div class="val">${esc(s ? s.value : "—")}</div>
+      <div class="meta">stable for ${s ? fmtDur(tNow - s.since) : "—"} · ${s ? s.changes : 0} changes</div>
+      <div class="meta">diversity ${e ? Math.round(e.norm * 100) + "%" : "—"} (${e ? e.distinct : 0} values seen, ${esc(pool)})</div>
+    </div>`;
+  }).join("");
+}
+
+function axisX(x0, x1, y, span, sx) {
+  return timeTicks(span).map(v => {
+    const x = sx(v);
+    return `<line x1="${x}" x2="${x}" y1="${y}" y2="${y + 4}" stroke="var(--axis)"/>` +
+           `<text x="${x}" y="${y + 16}" fill="var(--muted)" font-size="11" text-anchor="middle">${fmtClock(v)}</text>`;
+  }).join("") + `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke="var(--axis)"/>`;
+}
+
+function renderTimeline(tNow) {
+  const box = document.getElementById("timeline");
+  // Interval rows above the knobs: detector alerts, and in replay the ground truth.
+  const bandRows = [];
+  if (S.det.size) bandRows.push({ label: "Detector alert", color: "var(--critical)",
+    items: S.alerts.map(a => ({ t0: a.t0, t1: a.t1 ?? tNow, tip: `Alert on ${a.scmc_id}\nraised at ${fmtClock(rel(a.t0))}, p=${a.p.toFixed(2)}\n${a.t1 ? "cleared after " + fmtDur(a.t1 - a.t0) : "still open"}` })) });
+  if (hasTruth()) {
+    bandRows.push({ label: "Blackhole (truth)", color: "var(--ink-2)",
+      items: gtBlocks().map(b => ({ t0: b.t0, t1: b.t1 ?? tNow, tip: `Blackhole on ${b.ip} (${b.target})\n${fmtClock(rel(b.t0))} → ${b.t1 ? fmtClock(rel(b.t1)) : "end"}` })) });
+    bandRows.push({ label: "Benign fault (truth)", color: "var(--warning)",
+      items: gtFaults().map(f => ({ t0: f.t0, t1: f.t1 ?? tNow, tip: `${f.type} ${JSON.stringify(f.params || {})}\n${fmtClock(rel(f.t0))} → ${f.t1 ? fmtClock(rel(f.t1)) : "end"}` })) });
+  }
+  document.getElementById("tl-legend").innerHTML = Object.entries(OUTCOME)
+    .map(([k, o]) => `<span>${legendShape(o.shape, o.color)}${esc(o.label)}</span>`).join("") +
+    `<span><svg width="18" height="12"><rect x="0" y="1" width="18" height="10" rx="2" fill="var(--critical)" opacity="0.15"/></svg>Data gap</span>`;
+  const knobRows = KNOBS.filter(knobEnabled);
+  const W = box.clientWidth || 800, L = 112, R = 12, rowH = 30, bandH = 22;
+  const top = 6 + bandRows.length * bandH + (bandRows.length ? 6 : 0);
+  const rows = knobRows;
+  const H = top + rows.length * rowH + 24;
+  const span = Math.max(10, tNow - (S.t0 ?? tNow));
+  const sx = v => L + (W - L - R) * Math.min(1, Math.max(0, v / span));
+  let svg = "";
+  bandRows.forEach((b, r) => {
+    const y = 6 + r * bandH;
+    svg += `<text x="0" y="${y + 14}" fill="var(--ink-2)" font-size="12">${esc(b.label)}</text>` +
+           `<rect x="${L}" y="${y + 3}" width="${W - L - R}" height="${bandH - 6}" rx="3" fill="var(--grid)" opacity="0.5"/>`;
+    for (const it of b.items) {
+      const x0 = sx(rel(it.t0)), x1 = sx(rel(it.t1));
+      svg += `<rect x="${x0}" y="${y + 3}" width="${Math.max(3, x1 - x0)}" height="${bandH - 6}" rx="3" fill="${b.color}" data-tip="${esc(it.tip)}"/>`;
+    }
+  });
+  for (const g of allGaps(tNow)) {
+    const x0 = sx(rel(g.t0)), x1 = sx(rel(g.t1));
+    svg += `<rect x="${x0}" y="${top}" width="${Math.max(2, x1 - x0)}" height="${rows.length * rowH}" fill="var(--critical)" opacity="0.15" data-tip="${esc(`${g.open ? "No data for" : "Data gap"} ${g.gap_s.toFixed(1)} s${g.open ? " (still going on)" : ` (${g.scmc_id})`}\nexpected every ${g.expected_s} s`)}"/>`;
+  }
+  rows.forEach((k, r) => {
+    const y = top + r * rowH + rowH / 2;
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="var(--grid)"/>` +
+           `<rect x="0" y="${y - 5}" width="10" height="10" rx="3" fill="var(--k-${k})"/>` +
+           `<text x="16" y="${y + 4}" fill="var(--ink-2)" font-size="12">${esc(KNOB_LABEL[k])}</text>`;
+  });
+  for (const a of S.actions.values()) {
+    const o = OUTCOME[a.status] || OUTCOME.inflight;
+    const x = sx(rel(a.t)), xe = sx(rel(a.tEnd ?? tNow));
+    const tip = actionTip(a, tNow);
+    for (const k of a.knobs || []) {
+      const r = rows.indexOf(k); if (r < 0) continue;
+      const y = top + r * rowH + rowH / 2;
+      svg += `<g data-tip="${esc(tip)}"><line x1="${x}" x2="${Math.max(x, xe)}" y1="${y}" y2="${y}" stroke="${o.color}" stroke-width="2" opacity="0.5"/>` +
+             shape(o.shape, x, y, o.color) +
+             `<rect x="${x - 7}" y="${y - 11}" width="${Math.max(14, xe - x + 7)}" height="22" fill="transparent"/></g>`;
+    }
+  }
+  svg += axisX(L, W - R, top + rows.length * rowH, span, sx);
+  box.innerHTML = rows.length ? `<svg height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg>` : `<div class="empty">No MTD knob enabled.</div>`;
+}
+
+function actionTip(a, tNow) {
+  const p = a.params || {};
+  const what = a.action === "hop" ? `${p.old_ip}:${p.old_port} → ${p.new_ip}:${p.new_port}`
+    : a.action === "src" ? `→ ${p.new_src_ip}` : a.action === "pad" ? `buckets ${fmtBuckets(p.buckets)}` : `interval ${p.interval} s`;
+  const lat = obj => Object.entries(obj).map(([id, v]) => `${id} ${fmtLat(v)}`).join(", ") || "—";
+  return `${ACTION_LABEL[a.action]} seq ${a.seq} — ${(OUTCOME[a.status] || OUTCOME.inflight).label}\n${what}\n` +
+    `at ${fmtClock(rel(a.t))}, apply in ${a.in_messages ?? "?"} msgs\nACK: ${lat(a.ack)}\nDONE: ${lat(a.done)}` +
+    (Object.keys(a.failed).length ? `\nFAILED: ${lat(a.failed)}` : "") +
+    (a.timedOut?.length ? `\nno answer: ${a.timedOut.join(", ")}` : "") +
+    `\n${a.tEnd ? "closed after " + fmtDur(a.tEnd - a.t) : "open for " + fmtDur(tNow - a.t)} · cost ${a.cost.toFixed(2)}`;
+}
+
+// Line chart with crosshair; points = [[relT, y]], step = draw as step function.
+function lineChart(boxId, points, { span, yLabel, step, refY, refLabel = "expected", yMax, bands, fmtY, empty }) {
+  const box = document.getElementById(boxId);
+  if (!points.length) { box.innerHTML = `<div class="empty">${esc(empty)}</div>`; return; }
+  const W = box.clientWidth || 500, H = 200, L = 44, R = 12, T = 10, B = 24;
+  const ymax = yMax ?? Math.max(1e-6, refY || 0, ...points.map(p => p[1])) * 1.1;
+  const ticks = niceTicks(ymax);
+  const top = Math.max(ymax, ticks[ticks.length - 1]);
+  const sx = v => L + (W - L - R) * Math.min(1, Math.max(0, v / span));
+  const sy = v => T + (H - T - B) * (1 - v / top);
+  let svg = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="var(--grid)"/>` +
+    `<text x="${L - 6}" y="${sy(v) + 4}" fill="var(--muted)" font-size="11" text-anchor="end">${fmtY(v)}</text>`).join("");
+  for (const b of bands || []) {
+    svg += `<rect x="${sx(b[0])}" y="${T}" width="${Math.max(2, sx(b[1]) - sx(b[0]))}" height="${H - T - B}" fill="${b[2] || "var(--critical)"}" opacity="0.15"/>`;
+  }
+  if (refY) svg += `<line x1="${L}" x2="${W - R}" y1="${sy(refY)}" y2="${sy(refY)}" stroke="var(--muted)" stroke-width="1"/>` +
+    `<text x="${L + 6}" y="${sy(refY) - 4}" fill="var(--muted)" font-size="11">${esc(refLabel)}</text>`;
+  let d = "";
+  points.forEach(([x, y], i) => {
+    if (i === 0) d += `M${sx(x)} ${sy(y)}`;
+    else d += step ? `H${sx(x)}V${sy(y)}` : `L${sx(x)} ${sy(y)}`;
+  });
+  const last = points[points.length - 1];
+  if (step) d += `H${sx(span)}`;
+  const area = d + `V${sy(0)}H${sx(points[0][0])}Z`;
+  svg += `<path d="${area}" fill="var(--k-port)" opacity="0.1"/>` +
+         `<path d="${d}" fill="none" stroke="var(--k-port)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+         shape("circle", step ? sx(span) : sx(last[0]), sy(last[1]), "var(--k-port)", 4) +
+         `<text x="${Math.min(W - R, (step ? sx(span) : sx(last[0])))}" y="${sy(last[1]) - 10}" fill="var(--ink)" font-size="12" font-weight="600" text-anchor="end">${fmtY(last[1])}</text>`;
+  svg += axisX(L, W - R, H - B, span, sx);
+  svg += `<line class="xh" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--axis)" visibility="hidden"/>` +
+         `<rect class="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>`;
+  box.innerHTML = `<svg height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+  const hit = box.querySelector(".hit"), xh = box.querySelector(".xh");
+  hit.addEventListener("mousemove", e => {
+    const r = box.querySelector("svg").getBoundingClientRect();
+    const px = (e.clientX - r.left) * (W / r.width);
+    const v = (px - L) / (W - L - R) * span;
+    let idx = -1; for (let i = 0; i < points.length; i++) { if (points[i][0] <= v) idx = i; else break; }
+    if (!step) { // nearest point
+      let best = 0; points.forEach((p, i) => { if (Math.abs(p[0] - v) < Math.abs(points[best][0] - v)) best = i; }); idx = best;
+    }
+    const y = idx >= 0 ? points[idx][1] : 0;
+    const x = step ? px : sx(points[idx][0]);
+    xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible");
+    showTip(e, `${fmtClock(step ? v : points[idx][0])}\n${yLabel}: ${fmtY(y)}`);
+  });
+  hit.addEventListener("mouseleave", () => { xh.setAttribute("visibility", "hidden"); hideTip(); });
+}
+
+function renderCost(tNow) {
+  const span = Math.max(10, tNow - (S.t0 ?? tNow));
+  let cum = 0; const pts = [[0, 0]];
+  for (const [t, c] of S.costEvents) { cum += c; pts.push([rel(t), cum]); }
+  lineChart("cost", pts.length > 1 ? pts : [], { span, step: true, yLabel: "cost", fmtY: v => v.toFixed(2),
+    empty: "No action has been charged yet." });
+}
+
+function renderData(tNow) {
+  const span = Math.max(10, tNow - (S.t0 ?? tNow));
+  const pts = S.data.map(d => [rel(d[0]), d[1]]);
+  const last = S.data[S.data.length - 1];
+  const expected = last && last[3] ? (S.clients.size || 1) / last[3] : null;
+  lineChart("data", pts, { span, yLabel: "msg/s", refY: expected, fmtY: v => v.toFixed(1),
+    bands: allGaps(tNow).map(g => [rel(g.t0), rel(g.t1)]),
+    empty: LIVE ? "Waiting for nanogrid data (the observer needs the broker's loopback listener)." : "No data-plane events in this telemetry." });
+  document.getElementById("data-sub").textContent =
+    `Snapshot messages per second, observed on the broker's loopback listener. ${S.gaps.length} gaps longer than twice the publish interval` +
+    (S.gaps.length ? `, longest ${Math.max(...S.gaps.map(g => g.gap_s)).toFixed(1)} s.` : ".");
+}
+
+function statusCell(kind, n) {
+  if (!n) return `<td class="num">0</td>`;
+  const o = OUTCOME[kind];
+  return `<td class="num"><span class="st">${legendShape(o.shape, o.color)}${n}</span></td>`;
+}
+
+function renderDelivery(pa) {
+  const rows = ACTIONS.filter(k => pa[k].sent || (S.skipped[k] && (S.skipped[k].in_progress || S.skipped[k].no_clients)) || ACTION_KNOBS[k].some(knobEnabled));
+  const maxRate = Math.max(1, ...rows.map(k => pa[k].recent));
+  const body = rows.map(k => {
+    const o = pa[k], sk = S.skipped[k] || {};
+    const w = Math.round(60 * o.recent / maxRate);
+    return `<tr><td><span class="st">${ACTION_KNOBS[k].map(kn => `<span class="sw" style="background:var(--k-${kn})"></span>`).join("")}${esc(ACTION_LABEL[k])}</span></td>
+      <td class="num">${o.sent}</td>
+      <td class="num"><span class="meter" style="width:${w}px;background:var(--k-${ACTION_KNOBS[k][0]})"></span>${o.recent}</td>
+      ${statusCell("applied", o.applied)}${statusCell("partial", o.partial)}${statusCell("failed", o.failed)}
+      ${statusCell("late", o.late)}${statusCell("timed_out", o.timed_out)}${statusCell("client_lost", o.client_lost)}${statusCell("inflight", o.inflight)}
+      <td class="num">${sk.in_progress || 0}</td>
+      <td class="num">${fmtLat(quant(o.ack, 0.5))} / ${fmtLat(quant(o.ack, 0.95))}</td>
+      <td class="num">${fmtLat(quant(o.done, 0.5))} / ${fmtLat(quant(o.done, 0.95))} / ${fmtLat(o.done.length ? Math.max(...o.done) : null)}</td>
+      <td class="num">${o.cost.toFixed(2)}</td></tr>`;
+  }).join("");
+  document.getElementById("delivery").innerHTML = `<table><thead><tr>
+    <th>Action</th><th class="num">Sent</th><th class="num">Sent, last 60 s</th><th class="num">Applied</th><th class="num">Partial</th>
+    <th class="num">Failed</th><th class="num">Late</th><th class="num">Timed out</th><th class="num">Lost</th><th class="num">In flight</th><th class="num">Skipped</th>
+    <th class="num">ACK p50 / p95</th><th class="num">DONE p50 / p95 / max</th><th class="num">Cost</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+const SEV = { critical: "failed", serious: "timed_out", warning: "client_lost", ok: "applied" };
+function renderProblems() {
+  const counts = {};
+  for (const p of S.problems) counts[p.sev] = (counts[p.sev] || 0) + 1;
+  document.getElementById("problems-sub").textContent = S.problems.length
+    ? `${S.problems.length} total — ${counts.critical || 0} critical, ${counts.serious || 0} serious, ${counts.warning || 0} warnings.`
+    : "Failed or timed-out actions, rollbacks, dropped executors, broadcast and NAT errors, data gaps.";
+  const list = S.problems.slice(-200).reverse();
+  document.getElementById("problems").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>Problem</th><th>Detail</th></tr></thead><tbody>` +
+    list.map(p => { const o = OUTCOME[SEV[p.sev]]; return `<tr><td class="num">${fmtClock(rel(p.t))}</td><td><span class="st">${legendShape(o.shape, o.color)}${esc(p.what)}</span></td><td>${esc(p.detail)}</td></tr>`; }).join("") +
+    `</tbody></table>` : `<div class="empty">No delivery problems so far.</div>`;
+}
+
+function renderExecutors(tNow) {
+  const cs = [...S.clients.values()];
+  document.getElementById("executors").innerHTML = cs.length ? `<table><thead><tr><th>SCMC</th><th>State</th><th class="num">Last message</th>
+    <th class="num">Handovers</th><th class="num">Reconnects</th><th class="num">FAILED</th><th class="num">Broadcast errors</th></tr></thead><tbody>` +
+    cs.map(c => `<tr><td>${esc(c.id)}</td><td><span class="st">${legendShape(c.connected ? "circle" : "cross", c.connected ? "var(--good)" : "var(--critical)")}${c.connected ? "connected" : "disconnected"}</span></td>
+      <td class="num">${fmtDur(tNow - c.lastSeen)} ago</td><td class="num">${c.handovers}</td><td class="num">${Math.max(0, c.connects - 1)}</td>
+      <td class="num">${c.failed}</td><td class="num">${c.broadcastFailed}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">No executor has connected yet.</div>`;
+  const fl = [...S.actions.values()].filter(a => a.status === "inflight");
+  document.getElementById("inflight").innerHTML = fl.length ? `<table><thead><tr><th>Action</th><th class="num">Seq</th><th class="num">Age</th><th>Waiting on</th></tr></thead><tbody>` +
+    fl.map(a => `<tr><td>${esc(ACTION_LABEL[a.action])}</td><td class="num">${a.seq}</td><td class="num">${fmtDur(tNow - a.t)}</td>
+      <td>${esc(a.awaited.filter(id => !(id in a.done) && !(id in a.failed)).join(", ") || "—")}</td></tr>`).join("") + `</tbody></table>`
+    : `<div class="empty">Nothing in flight.</div>`;
+}
+
+function renderRL() {
+  const card = document.getElementById("rl-card");
+  const isRL = S.info?.coordinator === "rl" || S.rl.length > 0;
+  card.hidden = !isRL;
+  if (!isRL) return;
+  document.getElementById("rl-legend").innerHTML =
+    `<span><svg width="12" height="12"><rect x="1" y="1" width="10" height="10" rx="2" fill="var(--ink-2)"/></svg>Fired</span>` +
+    `<span><svg width="12" height="12"><rect x="1.5" y="1.5" width="9" height="9" rx="2" fill="none" stroke="var(--ink-2)" stroke-width="1.5"/></svg>Asked, blocked</span>`;
+  const ticks = S.rl.slice(-RL_WINDOW);
+  const box = document.getElementById("rl");
+  const W = box.clientWidth || 800, L = 112, rowH = 18, H = KNOBS.length * rowH + 4;
+  const cw = Math.max(2, (W - L) / RL_WINDOW);
+  const asked = d => [d.cmd.port, d.cmd.ip, d.cmd.src, d.cmd.pad_level != null, d.cmd.freq_rotate];
+  let svg = KNOBS.map((k, r) => `<rect x="0" y="${r * rowH + 4}" width="10" height="10" rx="3" fill="var(--k-${k})"/>` +
+    `<text x="16" y="${r * rowH + 13}" fill="var(--ink-2)" font-size="12">${esc(KNOB_LABEL[k])}</text>`).join("");
+  const off = RL_WINDOW - ticks.length;
+  ticks.forEach((d, j) => {
+    const x = L + (off + j) * cw, a = asked(d);
+    KNOBS.forEach((k, r) => {
+      const y = r * rowH + 3, s = Math.max(1, cw - 2);
+      if (d.fired[r]) svg += `<rect x="${x}" y="${y}" width="${s}" height="12" rx="2" fill="var(--k-${k})"/>`;
+      else if (a[r]) svg += `<rect x="${x + 0.75}" y="${y + 0.75}" width="${Math.max(0.5, s - 1.5)}" height="10.5" rx="2" fill="none" stroke="var(--k-${k})" stroke-width="1.5"/>`;
+    });
+    svg += `<rect x="${x}" y="0" width="${cw}" height="${H}" fill="transparent" data-tip="${esc(`tick at ${fmtClock(rel(d.t))}\n` +
+      KNOBS.map((k, r) => `${KNOB_LABEL[k]}: ${d.fired[r] ? "fired" : a[r] ? "asked, blocked" : "hold"} · dwell ${d.dwell[r]} · rate ${(+d.rate[r]).toFixed(2)}`).join("\n"))}"/>`;
+  });
+  box.innerHTML = `<svg height="${H}" viewBox="0 0 ${W} ${H}">${svg}</svg>`;
+  const tot = KNOBS.map((k, r) => ({ k, asked: 0, fired: 0 }));
+  for (const d of S.rl) { const a = asked(d); KNOBS.forEach((k, r) => { if (a[r]) tot[r].asked++; if (d.fired[r]) tot[r].fired++; }); }
+  const lastD = S.rl[S.rl.length - 1];
+  document.getElementById("rl-table").innerHTML = `<table><thead><tr><th>Knob</th><th class="num">Asked</th><th class="num">Fired</th>
+    <th class="num">Blocked</th><th class="num">Dwell now (ticks)</th><th class="num">Rate (EWMA)</th></tr></thead><tbody>` +
+    tot.map((x, r) => `<tr><td><span class="st"><span class="sw" style="background:var(--k-${x.k})"></span>${esc(KNOB_LABEL[x.k])}</span></td>
+      <td class="num">${x.asked}</td><td class="num">${x.fired}</td><td class="num">${Math.max(0, x.asked - x.fired)}</td>
+      <td class="num">${lastD ? lastD.dwell[r] : "—"}</td><td class="num">${lastD ? (+lastD.rate[r]).toFixed(2) : "—"}</td></tr>`).join("") +
+    `</tbody></table><p class="sub" style="margin-top:6px">${S.rl.length} decisions.</p>`;
+}
+
+function renderLog() {
+  const det = document.querySelector("#log").closest("details");
+  if (!det.open) return;
+  const rows = S.log.filter(e => !["data", "rl_decision", "detection"].includes(e.kind)).slice(-300).reverse();
+  document.getElementById("log").innerHTML = `<table><thead><tr><th>Time</th><th>Kind</th><th>Fields</th></tr></thead><tbody>` +
+    rows.map(e => { const { i, t, kind, ...rest } = e; return `<tr><td class="num">${fmtClock(rel(t))}</td><td>${esc(kind)}</td><td><code>${esc(JSON.stringify(rest))}</code></td></tr>`; }).join("") +
+    `</tbody></table>`;
+}
+
+function renderDetector(tNow) {
+  const card = document.getElementById("det-card");
+  card.hidden = !S.det.size;
+  if (!S.det.size) return;
+  const span = Math.max(10, tNow - (S.t0 ?? tNow));
+  document.getElementById("det-legend").innerHTML =
+    `<span><svg width="18" height="12"><rect x="0" y="1" width="18" height="10" rx="2" fill="var(--critical)" opacity="0.15"/></svg>Alert</span>` +
+    (hasTruth() ? `<span><svg width="18" height="12"><rect x="0" y="1" width="18" height="10" rx="2" fill="var(--ink-2)" opacity="0.15"/></svg>Blackhole (truth)</span>` : "");
+  const ids = [...S.det.keys()].sort();
+  const charts = document.getElementById("det-charts");
+  if (charts.dataset.ids !== ids.join(",")) {
+    charts.innerHTML = ids.map((id, i) => `${ids.length > 1 ? `<div class="sub" style="margin:8px 0 2px">${esc(id)}</div>` : ""}<div class="chart" id="det-chart-${i}"></div>`).join("");
+    charts.dataset.ids = ids.join(",");
+  }
+  const truth = gtBlocks().map(b => [rel(b.t0), rel(b.t1 ?? tNow), "var(--ink-2)"]);
+  ids.forEach((id, i) => {
+    const bands = S.alerts.filter(a => a.scmc_id === id).map(a => [rel(a.t0), rel(a.t1 ?? tNow)]);
+    lineChart(`det-chart-${i}`, S.det.get(id).map(d => [rel(d.t), d.p]), {
+      span, yMax: 1, refY: S.detThreshold, refLabel: "threshold", yLabel: "attack score",
+      fmtY: v => v.toFixed(2), bands: [...truth, ...bands], empty: "No detector output yet." });
+  });
+  document.getElementById("det-table").innerHTML = `<table><thead><tr><th>SCMC</th><th>State</th><th class="num">Score</th>
+    <th class="num">Alerts</th><th class="num">Time in alert</th><th>Most unusual now</th></tr></thead><tbody>` +
+    ids.map(id => {
+      const d = S.det.get(id), last = d[d.length - 1];
+      const mine = S.alerts.filter(a => a.scmc_id === id);
+      const inAlert = mine.reduce((s, a) => s + ((a.t1 ?? tNow) - a.t0), 0);
+      const open = mine.some(a => a.t1 == null);
+      return `<tr><td>${esc(id)}</td><td><span class="st">${legendShape(open ? "cross" : "circle", open ? "var(--critical)" : "var(--good)")}${open ? "alert" : "normal"}</span></td>
+        <td class="num">${last.p.toFixed(2)}</td><td class="num">${mine.length}</td><td class="num">${fmtDur(inAlert)}</td>
+        <td>${esc(last.top.join(", "))}</td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+function render() {
+  const tNow = now();
+  const pa = perAction(tNow);
+  renderHeader(); renderTiles(tNow, pa); renderSurface(tNow); renderTimeline(tNow);
+  renderCost(tNow); renderData(tNow); renderDetector(tNow); renderDelivery(pa); renderProblems();
+  renderExecutors(tNow); renderRL(); renderLog();
+}
+
+// ── tooltip ───────────────────────────────────────────────────────────────────
+const tipEl = document.getElementById("tip");
+function showTip(e, text) {
+  tipEl.textContent = text; tipEl.style.display = "block";
+  const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tipEl.style.left = x + "px"; tipEl.style.top = y + "px";
+}
+function hideTip() { tipEl.style.display = "none"; }
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest && e.target.closest("[data-tip]");
+  if (t) showTip(e, t.getAttribute("data-tip"));
+  else if (!e.target.classList?.contains("hit")) hideTip();
+});
+
+// ── data sources ──────────────────────────────────────────────────────────────
+const params = new URLSearchParams(location.search);
+let LIVE = location.protocol !== "file:" && !params.has("replay");
+let connOK = false, next = 0;
+
+async function poll() {
+  if (!LIVE) return;
+  try {
+    const r = await fetch(`/api/events?since=${next}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const body = await r.json();
+    if (body.next < next) { reset(); next = 0; return poll(); }   // coordinator restarted
+    body.events.forEach(apply);
+    next = body.next; connOK = true;
+  } catch (e) { connOK = false; }
+  render();
+  setTimeout(poll, 1000);
+}
+
+// Replay one or more files (telemetry.jsonl, optionally ground_truth.jsonl): their
+// events are merged in time order and folded by the same reducer as live.
+function loadTexts(texts) {
+  LIVE = false; document.body.classList.add("replay"); reset();
+  const events = [];
+  for (const text of texts) for (const line of text.split("\n")) {
+    const s = line.trim(); if (!s) continue;
+    try { events.push(JSON.parse(s)); } catch (e) { /* skip a truncated last line */ }
+  }
+  events.sort((a, b) => a.t - b.t || (a.i ?? 0) - (b.i ?? 0));
+  events.forEach(apply);
+  render();
+}
+const loadFiles = files => Promise.all([...files].map(f => f.text())).then(loadTexts);
+const fileInput = document.getElementById("file");
+for (const id of ["openfile", "openfile2"]) document.getElementById(id).onclick = () => fileInput.click();
+fileInput.onchange = () => { if (fileInput.files.length) loadFiles(fileInput.files); };
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { e.preventDefault(); if (e.dataTransfer.files.length) loadFiles(e.dataTransfer.files); });
+
+document.getElementById("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("mtd-theme", document.documentElement.dataset.theme); } catch (e) {}
+};
+try { const th = localStorage.getItem("mtd-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+document.querySelector("#log").closest("details").addEventListener("toggle", render);
+addEventListener("resize", () => render());
+
+if (LIVE) poll(); else { document.body.classList.add("replay"); render(); }
+</script>
+</body>
+</html>

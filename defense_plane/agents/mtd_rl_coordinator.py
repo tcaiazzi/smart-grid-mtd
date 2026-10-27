@@ -35,7 +35,7 @@ import time
 
 import numpy as np
 
-from mtd_coordinator import SEMPCoordinator
+from mtd_coordinator import SEMPCoordinator, add_telemetry_args
 from rl_policy import (
     DWELL_INIT,
     EWMA_ALPHA,
@@ -49,6 +49,8 @@ from rl_policy import (
 
 class RLSEMPCoordinator(SEMPCoordinator):
     """SEMPCoordinator whose schedule is set by a trained policy, not timers."""
+
+    KIND = "rl"
 
     def __init__(self, *args, policy_path: str, tick_interval: float = 1.0, **kwargs):
         super().__init__(*args, **kwargs)
@@ -80,6 +82,8 @@ class RLSEMPCoordinator(SEMPCoordinator):
         (port_fired, ip_fired)."""
         with self._lock:
             if not self._clients or self._pending_done:
+                if self._pending_done:
+                    self.telemetry.skipped("hop", "in_progress")
                 return (False, False)          # no clients, or a hop is in flight
             new_ip, new_port = self.current_ip, self.current_port
             if do_ip and len(self.ip_pool) > 1:
@@ -105,6 +109,7 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._hop_succeeded[seq] = set()
             self._hop_endpoints[seq] = (self.current_ip, self.current_port, new_ip, new_port)
             self._hop_deadline[seq] = time.monotonic() + self.hop_timeout + in_messages
+            self._track_hop(seq, ip_changed, port_changed, in_messages, new_ip, new_port)
             self.current_ip, self.current_port = new_ip, new_port
 
         self._nat_add(new_port)              # open new port before clients migrate
@@ -119,6 +124,8 @@ class RLSEMPCoordinator(SEMPCoordinator):
     def _emit_src_hop(self) -> bool:
         with self._lock:
             if not self._clients or self._pending_src_done:
+                if self._pending_src_done:
+                    self.telemetry.skipped("src", "in_progress")
                 return False
             if len(self.scmc_ip_pool) < 2:
                 return False
@@ -128,7 +135,9 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._seq += 1
             seq = self._seq
             in_messages = self._rng["src"].randint(5, 15)
-            self._pending_src_done[seq] = set(self._clients.keys())
+            self._await(self._pending_src_done, seq, in_messages)
+            self.telemetry.scheduled(seq, "src", ["src"], in_messages,
+                                     self._clients, new_src_ip=new_src_ip)
 
         self._broadcast({
             "type": "SCHEDULE_SRC_HOP", "seq": seq,
@@ -143,6 +152,8 @@ class RLSEMPCoordinator(SEMPCoordinator):
         (0..K_PAD-2): higher level = more buckets = more packet-size diversity."""
         with self._lock:
             if not self._clients or self._pending_pad_done:
+                if self._pending_pad_done:
+                    self.telemetry.skipped("pad", "in_progress")
                 return False
             if not self.pad_buckets:
                 return False
@@ -152,7 +163,9 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._seq += 1
             seq = self._seq
             in_messages = self._rng["pad"].randint(5, 15)
-            self._pending_pad_done[seq] = set(self._clients.keys())
+            self._await(self._pending_pad_done, seq, in_messages)
+            self.telemetry.scheduled(seq, "pad", ["pad"], in_messages,
+                                     self._clients, buckets=buckets, level=level)
 
         self._broadcast({
             "type": "SET_PADDING", "seq": seq,
@@ -170,6 +183,8 @@ class RLSEMPCoordinator(SEMPCoordinator):
         timing real on-wire variety (a fixed level→value map would freeze it)."""
         with self._lock:
             if not self._clients or self._pending_freq_done:
+                if self._pending_freq_done:
+                    self.telemetry.skipped("freq", "in_progress")
                 return False
             if len(self.freq_pool) < 2:
                 return False
@@ -178,7 +193,9 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._seq += 1
             seq = self._seq
             in_messages = self._rng["freq"].randint(5, 15)
-            self._pending_freq_done[seq] = set(self._clients.keys())
+            self._await(self._pending_freq_done, seq, in_messages)
+            self.telemetry.scheduled(seq, "freq", ["freq"], in_messages,
+                                     self._clients, interval=new_interval)
 
         self._broadcast({
             "type": "SET_INTERVAL", "seq": seq,
@@ -215,15 +232,21 @@ class RLSEMPCoordinator(SEMPCoordinator):
             if cmd["freq_rotate"] and self._emit_interval():
                 fired[4] = 1.0
 
+            # What the policy saw, what it asked for, and what actually fired
+            # (an asked-for knob can be blocked by an action still in flight).
+            self.telemetry.emit("rl_decision", dwell=self._dwell.tolist(),
+                                rate=[round(float(r), 4) for r in self._rate],
+                                cmd=cmd, fired=fired.astype(int).tolist())
             self._dwell = np.where(fired > 0, 0.0, self._dwell + 1.0)
             self._rate = (1.0 - EWMA_ALPHA) * self._rate + EWMA_ALPHA * fired
 
     def run(self) -> None:
         # Same bring-up as the base coordinator, but the decision driver is the
         # policy loop instead of the timer loops. The watchdog is still essential.
+        self._start_telemetry()
         self._nat_add(self.current_port)
         threading.Thread(target=self._serve, daemon=True).start()
-        threading.Thread(target=self._hop_watchdog_loop, daemon=True).start()
+        threading.Thread(target=self._action_watchdog_loop, daemon=True).start()
         try:
             self._policy_loop()
         finally:
@@ -259,6 +282,7 @@ def main():
                              "AES-256-GCM encryption (omit = plaintext)")
     parser.add_argument("--seed", type=int, default=None,
                         help="Seed for the per-knob random draws (omit = unseeded)")
+    add_telemetry_args(parser)
     args = parser.parse_args()
 
     if args.shared_key is not None and len(args.shared_key) != 64:
@@ -278,6 +302,8 @@ def main():
         freq_pool=freq_pool, freq_interval=args.freq_interval,
         hop_timeout=args.hop_timeout, shared_key=args.shared_key,
         policy_path=args.policy, tick_interval=args.tick, seed=args.seed,
+        telemetry_path=args.telemetry_path, dashboard_port=args.dashboard_port,
+        detector_model=args.detector_model,
     ).run()
 
 

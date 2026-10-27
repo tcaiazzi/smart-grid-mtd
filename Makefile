@@ -62,6 +62,14 @@ SEED             ?=
 # output/ regardless: they are shared by every run.
 OUTPUT_ROOT      ?= output
 SEED_FLAG        := $(if $(SEED),--seed $(SEED))
+# Host port of the live MTD dashboard served by semp during MTD runs (empty =
+# run_experiment's default 8080, 0 = no dashboard).
+DASHBOARD_PORT   ?=
+DASHBOARD_FLAG   := $(if $(DASHBOARD_PORT),--dashboard-port $(DASHBOARD_PORT))
+# Delivery-attack detector (.npz from `make detector-train`) to run live on semp
+# next to the dashboard (empty = none).
+DETECTOR_MODEL   ?=
+DETECTOR_FLAG    := $(if $(DETECTOR_MODEL),--detector-model $(DETECTOR_MODEL))
 
 # ── MTD parameters ─────────────────────────────────────────────────────────────
 # Tune these to make fingerprinting harder.
@@ -167,7 +175,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -194,6 +202,11 @@ help:
 	@echo "  all-attack          Run all three attack scenarios"
 	@echo "  all                 Full pipeline: both datasets -> all-evaluate -> all-attack -> plots"
 	@echo "  experiment          Full pipeline with MTD: datasets -> train -> attack"
+	@echo "  detector-runs       Labelled attack runs for the delivery-attack detector"
+	@echo "                      (DET_SEEDS='$(DET_SEEDS)' x DET_VARIANTS='$(DET_VARIANTS)' x DET_ATTACKS='$(DET_ATTACKS)')"
+	@echo "                      -> $(DET_ROOT)/runs/"
+	@echo "  detector-train      Dataset + dev-seed ablation (DET_DEV_SEEDS=$(DET_DEV_SEEDS)) -> $(DET_ROOT)/ablation.md"
+	@echo "  detector-final      Fit the chosen config on dev, score the test seeds ONCE -> $(DET_ROOT)/kpi.md"
 	@echo "  experiment-baseline Full pipeline without MTD (NO_MTD=1)"
 	@echo "  plots               Compare scenarios -> $(EXP_DIR)/"
 	@echo "  plots-baseline      Standalone baseline figures -> $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)/"
@@ -234,14 +247,14 @@ dataset-train: $(TRAIN_PCAP)
 
 $(TRAIN_PCAP): | $(TRAIN_TRACE)
 	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) $(DASHBOARD_FLAG) \
 		--name train --trace $(TRAIN_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 dataset-test: $(TEST_PCAP)
 
 $(TEST_PCAP): | $(TEST_TRACE)
 	$(PYTHON) -m network_scenario.run_experiment --generate-dataset $(DATASET_DURATION) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) $(DASHBOARD_FLAG) \
 		--name test --trace $(TEST_TRACE) --datasets-dir $(EXP_DIR)/datasets
 
 datasets: dataset-train dataset-test
@@ -276,7 +289,7 @@ evaluate: $(ATTACK_MODEL) $(TEST_PCAP)
 attack: $(ATTACK_MODEL)
 	$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) \
 		--block-policy $(BLOCK_POLICY) $(if $(BLOCK_THRESHOLD),--block-threshold $(BLOCK_THRESHOLD)) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) \
+		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) $(DASHBOARD_FLAG) $(DETECTOR_FLAG) \
 		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
 
 # Cross-model: the foreign model must be trained already — don't silently
@@ -429,6 +442,67 @@ compare-rl-all:
 # security" is measurable (the lab entropy comparison has no cost axis). No lab run.
 plot-tradeoff:
 	$(PYTHON) -m defense_plane.plot_tradeoff --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
+
+# ── Delivery-attack detector (blackhole seen from the SEMP) ───────────────────
+# Labelled runs in the paper's MTD configuration (main.py's constants): each run
+# sniffs, then spends DET_POST_ATTACK s with DET_BLOCK_EPISODES blackholes of
+# DET_BLOCK_DURATION s (the CNN attacker's pick, or the oracle's: the address in
+# use) and seeded benign faults (netem loss/delay/bursts, executor restarts).
+# The ground truth stays on the host (ground_truth.jsonl). Runs that already have
+# their telemetry are skipped; a failed run is moved aside to <dir>.failed.
+DET_ROOT           ?= $(OUTPUT_ROOT)/detector
+DET_SEEDS          ?= 1 2
+DET_VARIANTS       ?= fixed rl
+DET_ATTACKS        ?= cnn oracle
+DET_POST_ATTACK    ?= 180
+DET_BLOCK_DURATION ?= 40
+DET_BLOCK_EPISODES ?= 2
+DET_CNN_MODEL_DIR  ?= $(OUTPUT_ROOT)/baseline-mbps2/model
+DET_MTD_FLAGS := --mtd-hop-interval 4 --mtd-src-hop-interval 4 --mtd-pad-interval 3 \
+	--mtd-freq-interval 5 --mtd-freq-pool 0.1,0.2,0.4,0.6,0.8,1 \
+	--mtd-ip-pool 10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8 \
+	--mtd-port-pool 8883,8884,8885,8886,8887,8888,8889 \
+	--mtd-scmc-ip-pool 10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8 \
+	--mtd-pad-buckets 128,256,384,512,640,768,1024
+
+detector-runs: | $(TEST_TRACE)
+	@for seed in $(DET_SEEDS); do for v in $(DET_VARIANTS); do for a in $(DET_ATTACKS); do \
+		dir=$(DET_ROOT)/runs/$$v-$$a-s$$seed; \
+		if [ -f $$dir/ground_truth.jsonl ] && [ -f $$dir/telemetry.jsonl ]; then \
+			echo "######## $$dir: already done, skipped"; continue; fi; \
+		echo "######## $$dir"; \
+		$(PYTHON) -m network_scenario.run_experiment --attack $(ATTACK_DURATION) \
+			--post-attack $(DET_POST_ATTACK) $(DET_MTD_FLAGS) --bg-replay-mbps 2 --seed $$seed \
+			$$( [ $$v = rl ] && echo "--rl-policy $(RL_POLICY) --rl-tick $(RL_TICK)" ) \
+			$$( [ $$a = oracle ] && echo "--oracle-block random" ) \
+			--block-duration $(DET_BLOCK_DURATION) --block-episodes $(DET_BLOCK_EPISODES) \
+			--impair-profile random $(DASHBOARD_FLAG) $(DETECTOR_FLAG) \
+			--model $(DET_CNN_MODEL_DIR)/model.pt --scaler $(DET_CNN_MODEL_DIR)/scaler.pkl \
+			--trace $(TEST_TRACE) --results-dir $$dir \
+		|| { echo "######## $$dir FAILED -> $$dir.failed" >&2; rm -rf $$dir.failed; mv $$dir $$dir.failed; }; \
+	done; done; done
+
+# Dev seeds tune everything (features, size, smoothing, threshold); the test seeds are
+# scored once, by detector-final, with the configuration chosen on dev.
+DET_DEV_SEEDS  ?= 1-3
+DET_TEST_SEEDS ?= 4-10
+DET_MODEL      ?= mlp
+DET_FEATURES   ?= v2h
+DET_HIDDEN     ?= 16,16
+DET_SMOOTHING  ?= 1of1
+DET_SPLIT := --dev-seeds $(DET_DEV_SEEDS) --test-seeds $(DET_TEST_SEEDS)
+
+detector-dataset:
+	$(PYTHON) -m monitor.delivery_dataset --runs $(DET_ROOT)/runs --out $(DET_ROOT)/windows.csv
+
+detector-train: detector-dataset
+	$(PYTHON) -m defense_plane.train_delivery_detector --mode dev --ablation $(DET_SPLIT) \
+		--data $(DET_ROOT)/windows.csv --out-dir $(DET_ROOT)
+
+detector-final: detector-dataset
+	$(PYTHON) -m defense_plane.train_delivery_detector --mode final $(DET_SPLIT) \
+		--model $(DET_MODEL) --features $(DET_FEATURES) --hidden $(DET_HIDDEN) --smoothing $(DET_SMOOTHING) \
+		--data $(DET_ROOT)/windows.csv --out-dir $(DET_ROOT)
 
 clean:
 	rm -rf output

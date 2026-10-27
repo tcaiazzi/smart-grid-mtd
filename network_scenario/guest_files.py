@@ -28,19 +28,26 @@ there, to catch a missing shared-module copy without a live lab deploy.
 # staged even when --no-mtd never starts it, since the RL layout below reuses it.
 # mtd_crypto.py / mtd_wire.py back both cert_authority.py (QKD bootstrap) and
 # mtd_coordinator.py (MTD control channel), so both ship here unconditionally.
+# Every coordinator records telemetry (mtd_telemetry.py) priced with
+# rl_policy.KNOB_COST, and can serve it live (mtd_dashboard.py + its page) and
+# score it with the blackhole detector (delivery_detector.py, numpy-only).
 SEMP_FILES = [
     ("defense_plane/qkd/cert_authority.py", "/cert_authority.py"),
     ("defense_plane/agents/mtd_coordinator.py", "/mtd_coordinator.py"),
     ("defense_plane/agents/mtd_crypto.py", "/mtd_crypto.py"),
     ("defense_plane/agents/mtd_wire.py", "/mtd_wire.py"),
+    ("defense_plane/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
+    ("defense_plane/agents/mtd_dashboard.py", "/mtd_dashboard.py"),
+    ("defense_plane/agents/mtd_dashboard.html", "/mtd_dashboard.html"),
+    ("defense_plane/rl_policy.py", "/rl_policy.py"),
+    ("defense_plane/delivery_detector.py", "/delivery_detector.py"),
 ]
 
 # Copied onto semp only when an RL policy is selected (`--rl-policy`, MTD variant
 # only). mtd_rl_coordinator.py subclasses SEMPCoordinator from mtd_coordinator.py
-# above, and both it and the coordinator's decision loop import rl_policy.py.
+# above; rl_policy.py, which its decision loop imports, already ships above.
 SEMP_RL_FILES = [
     ("defense_plane/agents/mtd_rl_coordinator.py", "/mtd_rl_coordinator.py"),
-    ("defense_plane/rl_policy.py", "/rl_policy.py"),
 ]
 
 # Copied onto every scmc machine, all variants: the QKD cert client always runs,

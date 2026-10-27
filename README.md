@@ -106,6 +106,7 @@ make split
 | `MTD_PORT_POOL` | `8883–8887` | Broker port pool for MTD |
 | `MTD_PAD_BUCKETS` | `128,256,…,1024` | Payload padding bucket sizes (bytes) |
 | `MTD_PAD_INTERVAL` | `3` | Seconds between padding rotations |
+| `DASHBOARD_PORT` | `8080` | Host port of the live MTD dashboard (`0` disables it) |
 
 Variables can be overridden on the command line:
 
@@ -138,3 +139,54 @@ output/
 
 Results are keyed by the scoring model (`model-mtd` / `model-baseline`); the
 cross-model run reads the baseline model from `output/baseline-mbps<M>/model/`.
+
+### Live MTD dashboard
+
+During every MTD run (fixed-timer or RL) the coordinator on `semp` serves a live
+dashboard at `http://localhost:8080/` (`make attack DASHBOARD_PORT=9090` to move
+it, `DASHBOARD_PORT=0` to turn it off). It shows the MTD actions taken and how
+each one ended (applied, failed and rolled back, timed out, client lost), the
+cumulative availability cost (same per-knob weights as the RL reward and
+`compare_coordinators`), how often updates are sent and skipped, ACK/DONE
+latencies, delivery problems, executor health, the currently exposed attack
+surface, the nanogrid messages actually reaching the broker (with gaps), and —
+for the RL coordinator — every policy decision.
+
+The page is reached through a Kathará bridged interface + port forward on `semp`,
+never over link B, so the attacker's capture contains no dashboard traffic; the
+data-plane observer subscribes over a loopback-only mosquitto listener. Every
+event is also written to `telemetry.jsonl`, downloaded next to `coordinator.log`;
+open `defense_plane/agents/mtd_dashboard.html` directly in a browser and load
+that file to replay a finished run.
+
+### Delivery-attack detector (blackhole seen from the SEMP)
+
+The attacker's active phase blackholes an address on the router, so nanogrid data
+stops reaching the SEMP. `defense_plane/delivery_detector.py` scores every SCMC each
+second from the SEMP's telemetry alone (data silence, MTD actions left unanswered,
+control-channel state, ACK latency) and tells a blackhole apart from MTD-induced
+gaps and benign faults. It is a small MLP, trained on the host and replayed with
+numpy on `semp`.
+
+```bash
+make detector-runs DET_SEEDS="1 2 3 4 5 6 7 8 9 10"   # labelled lab runs -> output/detector/runs/
+make detector-train          # dev seeds (DET_DEV_SEEDS=1-3) only: ablation -> output/detector/ablation.md
+make detector-final DET_FEATURES=v2h DET_HIDDEN=16,16 DET_SMOOTHING=2of3
+                             # fit the chosen config on dev, score the test seeds (4-10) ONCE
+                             # -> output/detector/kpi.md + detector.npz
+make attack DETECTOR_MODEL=output/detector/detector.npz   # run it live in the dashboard
+```
+
+Everything that is tuned (feature set, network size, smoothing, threshold) is chosen
+on the dev seeds; the test seeds are only scored by `detector-final`.
+
+Each detector run uses the paper's MTD configuration, sniffs, then spends
+`DET_POST_ATTACK` seconds with `DET_BLOCK_EPISODES` blackholes (the CNN attacker's
+pick, or an oracle attacker blocking the address in use) and seeded benign faults
+(netem loss / delay / burst loss on the router, executor restarts). What really
+happened is written on the host to `ground_truth.jsonl`; labels come from the
+captures and the broker log (a blackhole is "in effect" from the block on the
+address the SCMC uses, or tries to use, until the broker receives nanogrid data
+again), never from what the detector itself sees. KPIs are cross-validated by run and
+reported for the MLP and for a plain threshold rule. Load `telemetry.jsonl` and
+`ground_truth.jsonl` together in the dashboard to compare alerts with the truth.

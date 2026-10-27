@@ -154,7 +154,13 @@ def baseline_scenarios(root: str, bg_replay_mbps: int = 2) -> list:
 # ── Availability: match SCMC-sent packets against what reached the SEMP ───────
 
 def _iter_tcp(pcap_path: str):
-    """Yield (timestamp, src_ip, tcp) for every IPv4/TCP packet in a pcap.
+    """Yield (timestamp, src_ip, tcp) for every IPv4/TCP packet in a pcap."""
+    for ts, src, _dst, tcp in iter_ip_tcp(pcap_path):
+        yield ts, src, tcp
+
+
+def iter_ip_tcp(pcap_path: str):
+    """Yield (timestamp, src_ip, dst_ip, tcp) for every IPv4/TCP packet in a pcap.
 
     Uses dpkt (much faster than scapy on the multi-MB link-B captures) and stops
     cleanly on a truncated trailing record — tcpdump is killed mid-write, so the
@@ -179,7 +185,7 @@ def _iter_tcp(pcap_path: str):
             tcp = ip.data
             if not isinstance(tcp, dpkt.tcp.TCP):
                 continue
-            yield ts, socket.inet_ntoa(ip.src), tcp
+            yield ts, socket.inet_ntoa(ip.src), socket.inet_ntoa(ip.dst), tcp
 
 
 def _segment_key(tcp) -> bytes:

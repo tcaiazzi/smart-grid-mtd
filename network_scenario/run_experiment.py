@@ -27,6 +27,7 @@ from network_scenario.guest_files import (
     SEMP_FILES,
     SEMP_RL_FILES,
 )
+from network_scenario.detection_scenario import GroundTruth, Scenario
 from network_scenario.slug import experiment_slug
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
@@ -103,6 +104,7 @@ def with_console_log(cmd: str, log_name: str) -> str:
 # simple_client "power=...".
 PUBLISH_RE = re.compile(r"\] (?:#\d+ →|power=)")
 EXIT_NO_PUBLISH = 3   # run_experiment exit code: the SCMC never published
+DASHBOARD_GUEST_PORT = 8080   # port the semp coordinator serves the MTD dashboard on
 
 
 def count_publishes(client_log: str) -> int:
@@ -214,7 +216,8 @@ def detect_nanogrid_ip(pcap_path: str, model_path: str, scaler_path: str,
     return str(ranking.index[0]), ranking
 
 
-def scmc_client_command(args, duration=None, shared_key=None, seed=None):
+def scmc_client_command(args, duration=None, shared_key=None, seed=None, state=None,
+                        console_log="client.console.log"):
     """Build the SCMC publisher command for the active variant.
 
     Baseline (--no-mtd) runs the plain simple_client; otherwise the MTD executor.
@@ -222,6 +225,10 @@ def scmc_client_command(args, duration=None, shared_key=None, seed=None):
     `shared_key` (QKD-simulated) encrypts the MTD control channel; passed only to
     the executor (the baseline simple_client has no control channel). `seed`
     (see role_seed) seeds the publisher's random draws.
+
+    `state` (detection_scenario.executor_state) restarts the executor where the
+    MTD has moved it — broker endpoint, source IP, publish interval, padding —
+    instead of the initial 10.1.0.2:8883, which the NAT may no longer open.
     """
     prefix = f"timeout {duration} " if duration is not None else ""
     if args.no_mtd:
@@ -234,15 +241,28 @@ def scmc_client_command(args, duration=None, shared_key=None, seed=None):
         )
     else:
         shared_key_arg = f" --shared-key {shared_key}" if shared_key else ""
+        state = state or {}
+        broker = state.get("broker_ip", "10.1.0.2")
+        pool = [x.strip() for x in args.mtd_scmc_ip_pool.split(",")]
+        if state.get("src_ip") in pool:          # current source first = bound at start
+            i = pool.index(state["src_ip"])
+            pool = pool[i:] + pool[:i]
+        resume = ""
+        if "broker_port" in state:
+            resume += f" --mqtt-port {state['broker_port']}"
+        if "interval" in state:
+            resume += f" --interval {state['interval']}"
+        if state.get("pad_buckets"):
+            resume += f" --pad-buckets {','.join(map(str, state['pad_buckets']))}"
         cmd = (
             prefix
-            + "python3 mtd_executor.py --grid-id scmc1 --broker 10.1.0.2 --ssl "
+            + f"python3 mtd_executor.py --grid-id scmc1 --broker {broker} --ssl "
             "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
-            "--semp-control-ip 10.1.0.2 --semp-control-port 9998 "
-            f"--scmc-ip-pool {args.mtd_scmc_ip_pool} --log-file mtd_executor.log"
-            f"{shared_key_arg}{seed_arg(seed)}"
+            f"--semp-control-ip {broker} --semp-control-port 9998 "
+            f"--scmc-ip-pool {','.join(pool)} --log-file mtd_executor.log"
+            f"{resume}{shared_key_arg}{seed_arg(seed)}"
         )
-    return with_console_log(cmd, "client.console.log")
+    return with_console_log(cmd, console_log)
 
 
 def scmc_ips(args) -> str:
@@ -262,7 +282,7 @@ def write_scmc_ips(args, dst_dir):
         f.write(scmc_ips(args) + "\n")
 
 
-def download_logs(scmc, semp, args, dst_dir, prefix=""):
+def download_logs(scmc, semp, args, dst_dir, prefix="", extra_consoles=()):
     """Download the SCMC client log and the broker log into dst_dir.
 
     `prefix` (e.g. the capture name) is prepended to the filenames so several
@@ -283,9 +303,11 @@ def download_logs(scmc, semp, args, dst_dir, prefix=""):
     )
     # Agents' captured console output (see with_console_log): diagnostics only,
     # so a missing file is a warning, not a failed run.
-    consoles = [(scmc, "client.console.log")]
+    consoles = [(scmc, "client.console.log")] + [(scmc, n) for n in extra_consoles]
     if not args.no_mtd:
-        consoles.append((semp, "coordinator.log"))
+        # telemetry.jsonl: the coordinator's MTD events, replayable in the
+        # dashboard page (defense_plane/agents/mtd_dashboard.html).
+        consoles += [(semp, "coordinator.log"), (semp, "telemetry.jsonl")]
     for machine, name in consoles:
         try:
             download_file_from_container(machine.api_object, name, f"{dst_dir}/{prefix}{name}")
@@ -429,6 +451,46 @@ def _parse_args() -> argparse.Namespace:
         help="Path to the fitted scaler (the Makefile passes the per-experiment "
         "path; default output/scaler.pkl is a standalone placeholder).",
     )
+    det = p.add_argument_group(
+        "Delivery-attack detector dataset (--attack MTD runs; all optional, the "
+        "default attack is the paper's single permanent CNN block)")
+    det.add_argument(
+        "--oracle-block",
+        choices=("src", "broker", "random"),
+        default=None,
+        help="Instead of the IP the CNN picks, blackhole the address the SCMC's "
+        "MQTT path uses right now: its source IP, the broker IP, or either at random "
+        "per episode (worst-case attacker).",
+    )
+    det.add_argument(
+        "--block-duration",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Lift each blackhole after SECONDS (default: never).",
+    )
+    det.add_argument(
+        "--block-episodes",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Blackhole episodes in the post-attack phase, 20-40 s apart; needs "
+        "--block-duration (default: 1).",
+    )
+    det.add_argument(
+        "--impair-profile",
+        choices=("none", "random"),
+        default="none",
+        help="'random': seeded benign faults during the post-attack phase — tc netem "
+        "loss / delay / burst loss on the router and executor restarts (default: none).",
+    )
+    det.add_argument(
+        "--detector-model",
+        default=None,
+        metavar="NPZ",
+        help="Run the delivery-attack detector (.npz from "
+        "defense_plane.train_delivery_detector) live on semp; needs the dashboard.",
+    )
     mtd = p.add_argument_group("MTD parameters (ignored in --no-mtd baseline mode)")
     mtd.add_argument(
         "--mtd-hop-interval",
@@ -501,6 +563,15 @@ def _parse_args() -> argparse.Namespace:
         help="Seconds between publish-frequency changes (default: 30).",
     )
     mtd.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8080,
+        metavar="PORT",
+        help="Host port forwarded to the live MTD dashboard served by the semp "
+        "coordinator, over a Kathara bridged interface (never over the link the "
+        "attacker sniffs). 0 disables it (default: 8080).",
+    )
+    mtd.add_argument(
         "--rl-policy",
         default=None,
         metavar="NPZ",
@@ -558,6 +629,13 @@ def main():
     scmc = lab.new_machine("scmc", image="kathara/mqtt")
     router = lab.new_machine("router", image="kathara/mqtt")
     semp = lab.new_machine("semp", image="kathara/mqtt")
+    dashboard = bool(args.dashboard_port) and not args.no_mtd
+    if dashboard:
+        # Management interface for the dashboard: a bridged NIC to the host plus a
+        # port forward, kept apart from link B so its traffic never reaches the
+        # attacker's capture.
+        semp.add_meta("bridged", True)
+        semp.add_meta("port", f"{args.dashboard_port}:{DASHBOARD_GUEST_PORT}/tcp")
     attacker = lab.new_machine("attacker")
 
     log.info("Connecting machines to links")
@@ -576,6 +654,8 @@ def main():
         for host_path, guest_path in SEMP_RL_FILES:
             semp.create_file_from_path(host_path, guest_path)
         semp.create_file_from_path(args.rl_policy, "/policy.npz")
+    if args.detector_model and dashboard:
+        semp.create_file_from_path(args.detector_model, "/detector.npz")
     mosquitto_conf = (
         "assets/mosquitto/mosquitto_nomtd.conf"
         if args.no_mtd
@@ -619,7 +699,9 @@ def main():
 
     semp_startup = [
         "ip address add 10.1.0.2/24 dev eth0",
-        "ip route add default via 10.1.0.1 dev eth0",
+        # replace, not add: the bridged dashboard NIC may already carry a default
+        # route, and the data plane must keep leaving through eth0.
+        "ip route replace default via 10.1.0.1 dev eth0",
     ]
     if not args.no_mtd:
         ip_pool = [x.strip() for x in args.mtd_ip_pool.split(",")]
@@ -670,6 +752,9 @@ def main():
     )
 
     manager.exec_obj(semp, "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
+    dashboard_arg = f" --dashboard-port {DASHBOARD_GUEST_PORT}" if dashboard else ""
+    if args.detector_model and dashboard:
+        dashboard_arg += " --detector-model detector.npz"
     if args.no_mtd:
         log.info("[Baseline] MTD disabled — coordinator not started (mosquitto on 8883)")
     elif args.rl_policy:
@@ -686,7 +771,8 @@ def main():
                 f" --pad-buckets {args.mtd_pad_buckets}"
                 f" --scmc-ip-pool {args.mtd_scmc_ip_pool}"
                 f" --freq-pool {args.mtd_freq_pool}"
-                f" --shared-key {shared_key}" + seed_arg(run_seed), "coordinator.log"),
+                f" --shared-key {shared_key}" + seed_arg(run_seed) + dashboard_arg,
+                "coordinator.log"),
         )
     else:
         manager.exec_obj(
@@ -703,8 +789,11 @@ def main():
                 f" --src-hop-interval {args.mtd_src_hop_interval}"
                 f" --freq-pool {args.mtd_freq_pool}"
                 f" --freq-interval {args.mtd_freq_interval}"
-                f" --shared-key {shared_key}" + seed_arg(run_seed), "coordinator.log"),
+                f" --shared-key {shared_key}" + seed_arg(run_seed) + dashboard_arg,
+                "coordinator.log"),
         )
+    if dashboard:
+        log.info("[MTD] Dashboard: http://localhost:%d/", args.dashboard_port)
 
     if args.generate_dataset is not None:
         duration = args.generate_dataset
@@ -795,12 +884,29 @@ def main():
 
         if detected_ip:
             log.info("[Attack] Blocking nanogrid IP: %s", detected_ip)
-            manager.exec_obj(
-                router,
-                f"iptables -A FORWARD -s {detected_ip} -j DROP",
-            )
         else:
             log.warning("[Attack] No nanogrid IP detected — nothing blocked")
+
+        # Blackhole episodes (the CNN's block, or the oracle's) and benign faults,
+        # all recorded in ground_truth.jsonl for the delivery-attack detector.
+        gt = GroundTruth(f"{out_dir}/ground_truth.jsonl")
+        gt.record("run_meta", variant=variant, rl_policy=args.rl_policy, seed=args.seed,
+                  run_seed=run_seed, oracle_block=args.oracle_block,
+                  block_duration=args.block_duration, block_episodes=args.block_episodes,
+                  impair_profile=args.impair_profile, cnn_ip=detected_ip,
+                  scmc_ip_pool=args.mtd_scmc_ip_pool, ip_pool=args.mtd_ip_pool,
+                  port_pool=args.mtd_port_pool, post_attack=args.post_attack)
+        port_pool = [int(x) for x in args.mtd_port_pool.split(",")] if not args.no_mtd else [8883]
+
+        def relaunch(state, n):
+            manager.exec_obj(scmc, scmc_client_command(
+                args, shared_key=shared_key, seed=run_seed, state=state,
+                console_log=f"client.console.restart{n}.log"))
+
+        scenario = Scenario(manager, router, scmc, gt, port_pool, run_seed, relaunch)
+        gt.record("post_attack_start")
+        scenario.start(args.oracle_block, detected_ip, args.block_duration,
+                       args.block_episodes, args.impair_profile == "random")
 
         log.info("[Attack] Observing post-attack effect for %ds", args.post_attack)
         post_attack_stream = manager.exec_obj(
@@ -808,6 +914,9 @@ def main():
             f"timeout {args.post_attack} tcpdump -i eth0 -w post_attack_capture.pcap",
         )
         _drain(post_attack_stream)
+        scenario.finish()
+        gt.record("post_attack_end")
+        gt.close()
 
         log.info("[Attack] Stopping router capture")
         manager.exec_obj(router, "pkill -INT tcpdump")
@@ -826,7 +935,8 @@ def main():
         download_file_from_container(
             scmc.api_object, "scmc_capture.pcap", f"{out_dir}/scmc_capture.pcap"
         )
-        download_logs(scmc, semp, args, out_dir)
+        download_logs(scmc, semp, args, out_dir, extra_consoles=[
+            f"client.console.restart{n}.log" for n in range(1, scenario.restarts + 1)])
         write_scmc_ips(args, out_dir)
         log.info("[Attack] Captures saved to %s/", out_dir)
         run_ok = check_published(f"{out_dir}/client.log")

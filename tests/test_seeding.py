@@ -26,6 +26,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "defense_plane" / "agents"))
+sys.path.insert(0, str(REPO_ROOT / "defense_plane"))   # flat rl_policy, as on semp
 sys.path.insert(0, str(REPO_ROOT / "traffic_generator" / "agents"))
 
 from mtd_coordinator import SEMPCoordinator  # noqa: E402
