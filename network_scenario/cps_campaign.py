@@ -93,7 +93,14 @@ def run_args(cfg, entry, out_dir):
         # One response policy per campaign: compare policies across campaigns.
         respond=getattr(cfg, "respond", "off"),
         respond_interval=getattr(cfg, "respond_interval", 0.5),
-        approval=getattr(cfg, "approval", "auto"))
+        approval=getattr(cfg, "approval", "auto"),
+        # Attack driver (scripted keeps the per-mode chain; planner is reactive).
+        attack_driver=getattr(cfg, "attack_driver", "scripted"),
+        attacker_profile=getattr(cfg, "attacker_profile", "opportunistic"),
+        attack_goal=getattr(cfg, "attack_goal", None),
+        dwell=getattr(cfg, "dwell", 0.0),
+        max_steps=getattr(cfg, "max_steps", 12),
+        it_telemetry=getattr(cfg, "it_telemetry", False))
 
 
 def _default_run_fn(args, progress):
@@ -222,6 +229,12 @@ def main():
     ap.add_argument("--dashboard-port", type=int, default=0)
     ap.add_argument("--respond", default="off", choices=("off", "rules", "solver"),
                     help="response policy for every run of the campaign (SOAR prototype)")
+    ap.add_argument("--it-telemetry", dest="it_telemetry", action="store_true",
+                    help="run the IT-side sensor on the HMI for every run")
+    ap.add_argument("--attack-driver", default="scripted", choices=("scripted", "planner"))
+    ap.add_argument("--attacker-profile", default="opportunistic",
+                    choices=("opportunistic", "targeted", "stealthy"))
+    ap.add_argument("--dwell", type=float, default=0.0)
     ap.add_argument("--respond-interval", type=float, default=0.5)
     ap.add_argument("--approval", default="auto", help="auto | deny | delay:<seconds>")
     ap.add_argument("--retries", type=int, default=1)

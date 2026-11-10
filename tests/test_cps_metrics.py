@@ -114,8 +114,8 @@ class CpsMetricsV2(unittest.TestCase):
         ])
         _write(self.d / "ground_truth.jsonl", [
             {"t": self.attack_t, "kind": "attack_start", "mode": "manual-hijack"},
-            {"t": self.write_t, "kind": "modbus_write", "register": 2, "value": 1.0},
-            {"t": self.write_t, "kind": "modbus_write", "register": 0, "value": 60.0},
+            {"t": self.write_t, "kind": "modbus_write", "register": 2, "value": 1.0, "ok": True},
+            {"t": self.write_t, "kind": "modbus_write", "register": 0, "value": 60.0, "ok": True},
             {"t": self.write_t + 0.5, "kind": "attack_end", "rc": 0},
         ])
 
@@ -210,6 +210,46 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertEqual(r["over_response"], ["restore_breaker"])
         self.assertEqual(r["failed_actions"], ["block_flow"])
         self.assertIsNone(r["attacker_writes_after_block"])
+
+
+class PlannerRun(unittest.TestCase):
+    """A tree-guided attack stopped at the pivot (defended): no writes landed."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="cps-plan-"))
+        t0 = 1000.0
+        _write(self.d / "engine.engine_frames.jsonl", [
+            {"timestamp": t0 + i, "step": i, "v_load": 0.99, "v_dg": 1.0, "abnormal": 0,
+             "energy_kwh": 0.01 * (i + 1)} for i in range(12)])
+        _write(self.d / "sensor.telemetry.jsonl", [{"t": t0, "kind": "sensor_up"}])
+        _write(self.d / "ground_truth.jsonl", [
+            {"t": t0 + 10, "kind": "attack_start", "mode": "planner:opportunistic"},
+            {"t": t0 + 10, "kind": "plan_step", "node": "it_access", "stage": "it_access", "ok": True},
+            {"t": t0 + 11, "kind": "rce", "mode": "planner:opportunistic"},
+            {"t": t0 + 11, "kind": "plan_step", "node": "it_exec", "stage": "it_exec", "ok": True},
+            {"t": t0 + 12, "kind": "plan_step", "node": "pivot", "stage": "pivot", "ok": False},
+            {"t": t0 + 12, "kind": "attack_end", "mode": "planner:opportunistic",
+             "success": False, "stage_reached": "it_exec", "writes_ok": 0},
+        ])
+
+    def test_planner_metrics(self):
+        m = compute_metrics(str(self.d))
+        self.assertTrue(m["planner"])
+        self.assertEqual(m["attacker_profile"], "opportunistic")
+        self.assertEqual(m["stage_reached"], "it_exec")
+        self.assertFalse(m["attack_succeeded"])
+        self.assertTrue(m["prevented"])
+        self.assertEqual(len(m["plan_steps"]), 3)
+        self.assertIn("tree-guided attacker", format_report(m))
+
+    def test_scripted_run_has_no_planner_fields(self):
+        _write(self.d / "ground_truth.jsonl", [
+            {"t": 1010.0, "kind": "attack_start", "mode": "setpoint-overvoltage"},
+            {"t": 1011.0, "kind": "modbus_write", "register": 0, "value": 200.0, "ok": True},
+            {"t": 1012.0, "kind": "attack_end"}])
+        m = compute_metrics(str(self.d))
+        self.assertFalse(m["planner"])
+        self.assertIsNone(m["stage_reached"])
 
 
 if __name__ == "__main__":

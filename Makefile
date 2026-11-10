@@ -526,6 +526,15 @@ CPS_DASH_PORT    ?= 8765
 CPS_RESPOND      ?= off
 CPS_APPROVAL     ?= auto
 CPS_RESPOND_FLAGS := --respond $(CPS_RESPOND) --approval $(CPS_APPROVAL)
+# Attack driver: scripted (fixed per-mode chain) | planner (reactive, tree-guided).
+CPS_ATTACK_DRIVER ?= scripted
+CPS_PROFILE       ?= opportunistic
+CPS_DWELL         ?= 0
+CPS_ATTACK_FLAGS  := --attack-driver $(CPS_ATTACK_DRIVER) --attacker-profile $(CPS_PROFILE) \
+	--dwell $(CPS_DWELL) $(if $(CPS_GOAL),--attack-goal $(CPS_GOAL))
+# IT-side telemetry (sensor on the HMI + legitimate diagnostic traffic): CPS_IT=1.
+CPS_IT            ?=
+CPS_IT_FLAG       := $(if $(CPS_IT),--it-telemetry)
 
 cps-image:                 ## build the OT node image (pandapower + pymodbus)
 	docker build -t kathara/cps docker/cps/
@@ -536,7 +545,8 @@ cps-selftest:              ## CPS physics, Modbus, PLC, sensor rules+model, atta
 		tests.test_active_attack tests.test_cps_topology tests.test_cps_metrics \
 		tests.test_progress tests.test_cps_campaign tests.test_cps_dashboard \
 		tests.test_soar_kg tests.test_soar_trees tests.test_soar_mapping \
-		tests.test_soar_policy tests.test_cps_responder
+		tests.test_soar_policy tests.test_cps_responder tests.test_attack_planner \
+		tests.test_it_sensor
 
 cps-engine:                ## run engine + PLC locally over loopback Modbus (Ctrl-C to stop)
 	@echo "Start the engine and PLC in two shells:"
@@ -547,14 +557,14 @@ cps-lab:                   ## deploy the 3-zone lab, normal operation only
 	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_IT_FLAG)
 
 cps-attack:                ## deploy the lab and drive the active attack chain (CPS_ATTACK_MODE)
 	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --post-attack-duration $(CPS_POST) \
 		--step-interval $(CPS_STEP) --attack --attack-mode $(CPS_ATTACK_MODE) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_ATTACK_FLAGS) $(CPS_IT_FLAG)
 
 cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + aggregated (resumable)
 	$(PYTHON) -m network_scenario.cps_campaign --name $(CPS_CAMPAIGN) \

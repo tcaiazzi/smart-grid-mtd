@@ -14,9 +14,25 @@ onto the hmi machine (see network_scenario/guest_files.py). Stdlib only.
 """
 
 import argparse
+import json
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+
+ACCESS_LOG = None   # set in main(); JSONL request log the IT sensor tails
+
+
+def _access(src, path, target):
+    if not ACCESS_LOG:
+        return
+    try:
+        with open(ACCESS_LOG, "a") as f:
+            f.write(json.dumps({"t": round(time.time(), 3), "src": src,
+                                "path": path, "target": target}) + "\n")
+            f.flush()
+    except OSError:
+        pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +50,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/diag":
             qs = parse_qs(u.query)
             target = (qs.get("target") or qs.get("host") or ["127.0.0.1"])[0]
+            _access(self.client_address[0], u.path, target)
             # VULNERABLE ON PURPOSE: unsanitised input into a shell command.
             cmd = "ping -c 1 " + target
             try:
@@ -53,7 +70,11 @@ def main():
     ap = argparse.ArgumentParser(description="Deliberately-vulnerable lab web app")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--access-log", default=None,
+                    help="JSONL request log for the IT sensor (off by default)")
     args = ap.parse_args()
+    global ACCESS_LOG
+    ACCESS_LOG = args.access_log
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True
     print(f"vuln_app listening on {args.host}:{args.port}", flush=True)

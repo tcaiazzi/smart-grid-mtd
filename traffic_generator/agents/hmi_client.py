@@ -20,13 +20,35 @@ looks like at the register level — which is what makes detection non-trivial.
 import argparse
 import logging
 import random
+import threading
 import time
+import urllib.request
 
 from pymodbus.client import ModbusTcpClient
 
 import ot_registers as reg
 
 log = logging.getLogger("hmi")
+
+# Plain hostnames an operator would legitimately diagnose: the "normal" web
+# traffic the IT sensor learns, so the attacker's injection stands out.
+DIAG_HOSTS = ("10.20.0.20", "localhost", "10.20.0.10", "127.0.0.1")
+
+
+def diag_loop(base_url, every, jitter, rng, stop):
+    """Periodically run a legitimate diagnostic query against the local app."""
+    while not stop.is_set():
+        stop.wait(max(0.5, every + rng.uniform(-jitter, jitter)))
+        if stop.is_set():
+            break
+        host = rng.choice(DIAG_HOSTS)
+        url = base_url.rstrip("/") + "/diag?target=" + host
+        try:
+            with urllib.request.urlopen(url, timeout=8) as r:
+                r.read()
+            log.info("operator diagnostic: ping %s", host)
+        except Exception as e:
+            log.debug("diagnostic failed: %s", e)
 
 DG_SCALE = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
 SAFE_SETPOINT_KW = (15.0, 35.0)   # operator dispatches stay well inside the safe band
@@ -69,10 +91,20 @@ def main():
     ap.add_argument("--hold", type=float, default=5.0)
     ap.add_argument("--duration", type=float, default=0.0, help="0 = forever")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--diag-url", default=None,
+                    help="base URL of the local diagnostics app; enables legitimate "
+                         "periodic diagnostic queries (the IT sensor's 'normal')")
+    ap.add_argument("--diag-every", type=float, default=9.0)
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     rng = random.Random(args.seed)
+
+    diag_stop = threading.Event()
+    if args.diag_url:
+        threading.Thread(target=diag_loop, args=(args.diag_url, args.diag_every, 2.0,
+                         random.Random((args.seed or 0) ^ 0x1D1A6), diag_stop),
+                         daemon=True).start()
 
     client = ModbusTcpClient(args.engine_host, port=args.port)
     while not client.connect():
@@ -128,6 +160,7 @@ def main():
                     client.connect()
             time.sleep(0.1)
     finally:
+        diag_stop.set()
         client.close()
 
 

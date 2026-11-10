@@ -34,6 +34,7 @@ log = logging.getLogger("cps_responder")
 
 POLICIES = ("off", "rules", "solver")
 SENSOR_TELEMETRY = "/telemetry.jsonl"
+IT_TELEMETRY = "/it_telemetry.jsonl"
 
 
 def parse_approval(spec):
@@ -72,14 +73,14 @@ class JsonlRecorder:
             self._f = None
 
 
-def write_structure(out_dir, g=None):
+def write_structure(out_dir, g=None, it=False):
     """kg.json + tree.json (knowledge graph, attack-defense tree) of the lab
     into ``out_dir`` — what the progress dashboard draws. Returns the graph."""
     g = g if g is not None else kgmod.build_cps_kg()
     os.makedirs(out_dir, exist_ok=True)
     kgmod.save(g, os.path.join(out_dir, "kg.json"))
     with open(os.path.join(out_dir, "tree.json"), "w") as f:
-        json.dump(trees.to_json(trees.cps_attack_tree(g), trees.cps_countermeasures(g)), f,
+        json.dump(trees.to_json(trees.cps_attack_tree(g), trees.cps_countermeasures(g, it=it)), f,
                   indent=1)
     return g
 
@@ -94,10 +95,10 @@ def compact_state(snap):
 class ResponseEngine:
     """Mapping + policy, independent of how events arrive or actions run."""
 
-    def __init__(self, kind, approval="auto", g=None, record=None, on_state=None):
+    def __init__(self, kind, approval="auto", g=None, record=None, on_state=None, it=False):
         self.g = g if g is not None else kgmod.build_cps_kg()
         self.tree = trees.cps_attack_tree(self.g)
-        self.cms = {c.id: c for c in trees.cps_countermeasures(self.g)}
+        self.cms = {c.id: c for c in trees.cps_countermeasures(self.g, it=it)}
         mode, _delay = parse_approval(approval)
         self.policy = policy.make_policy(kind, list(self.cms.values()), self.tree,
                                          approval="deny" if mode == "deny" else "auto")
@@ -134,24 +135,33 @@ class Responder(threading.Thread):
     """Live responder: tails the sensor, decides, applies countermeasures."""
 
     def __init__(self, manager, machines, kind, out_dir, emit=None, interval=0.5,
-                 approval="auto", exec_fn=None, read_fn=None):
+                 approval="auto", exec_fn=None, read_fn=None, it=False, it_read_fn=None):
         super().__init__(name="cps-responder", daemon=True)
         self.manager, self.machines = manager, machines
         self.interval = float(interval)
         self.approval, self.approval_delay = parse_approval(approval)
         self.emit = emit or (lambda *a, **k: None)
+        self.it = bool(it)
         os.makedirs(out_dir, exist_ok=True)
         self.record = JsonlRecorder(os.path.join(out_dir, "response.jsonl"))
         self.engine = ResponseEngine(
-            kind, approval, record=self.record,
+            kind, approval, record=self.record, it=self.it,
             on_state=lambda snap: self.emit("tree_state", **compact_state(snap)))
-        write_structure(out_dir, self.engine.g)
+        write_structure(out_dir, self.engine.g, it=self.it)
         self._exec = exec_fn or self._exec_in_lab
-        self._read = read_fn or self._read_sensor
+        # Telemetry sources: the OT sensor, and (with IT) the HMI's IT sensor.
+        # Each keeps its own line cursor.
+        self._sources = [{"read": read_fn or self._read_sensor, "lines": 0}]
+        if self.it:
+            self._sources.append({"read": it_read_fn or self._read_it_sensor, "lines": 0})
         self._halt = threading.Event()
-        self._lines = 0
         self._pending = []            # (due_t, decision, countermeasure id)
-        self.record("response_up", policy=kind, approval=approval, interval=self.interval)
+        self.record("response_up", policy=kind, approval=approval, interval=self.interval,
+                    it=self.it)
+
+    @property
+    def _lines(self):
+        return self._sources[0]["lines"]     # OT source cursor (compat)
 
     # ── lab I/O ──────────────────────────────────────────────────────────────
     def _exec_in_lab(self, machine, cmd):
@@ -163,6 +173,12 @@ class Responder(threading.Thread):
     def _read_sensor(self, start_line):
         out, _err, _rc = self.manager.exec_obj(self.machines["sensor"],
                                                f"tail -n +{start_line} {SENSOR_TELEMETRY}",
+                                               stream=False)
+        return (out or b"").decode(errors="replace")
+
+    def _read_it_sensor(self, start_line):
+        out, _err, _rc = self.manager.exec_obj(self.machines["hmi"],
+                                               f"tail -n +{start_line} {IT_TELEMETRY}",
                                                stream=False)
         return (out or b"").decode(errors="replace")
 
@@ -181,20 +197,21 @@ class Responder(threading.Thread):
             self._halt.wait(self.interval)
 
     def poll_once(self):
-        raw = self._read(self._lines + 1)
-        lines = raw.split("\n")
-        complete = lines[:-1]          # the last element is "" or a partial line
-        self._lines += len(complete)
-        for line in complete:
-            if not line.strip():
-                continue
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            d = self.engine.on_event(ev, now=time.time())
-            if d is not None:
-                self._dispatch(d)
+        for src in self._sources:
+            raw = src["read"](src["lines"] + 1)
+            lines = raw.split("\n")
+            complete = lines[:-1]      # the last element is "" or a partial line
+            src["lines"] += len(complete)
+            for line in complete:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                d = self.engine.on_event(ev, now=time.time())
+                if d is not None:
+                    self._dispatch(d)
         self._run_due()
 
     def _dispatch(self, d):

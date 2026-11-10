@@ -33,6 +33,14 @@ EXPLAINED_AWAY = 0.4      # discount on consequence evidence once another leaf i
 COMMAND, CONSEQUENCE = "command", "consequence"
 IMPACT_LEAVES = ("setpoint_oor", "breaker_open", "mode_hijack")
 
+# IT-sensor finding class -> the attack-tree step it directly confirms.
+_IT_KLASS_NODE = {"web_injection_pattern": "it_access", "web_child_process": "it_exec",
+                  "unexpected_modbus_client": "pivot"}
+_IT_NODES = set(_IT_KLASS_NODE.values())
+# Early steps whose confirmation implies the pivot is likely next (forward belief).
+FORWARD_STEPS = ("it_access", "it_exec")
+FORWARD_WEIGHT = 0.5
+
 # Model features -> leaves they hint at (evidence.top of behavioral_anomaly).
 #  (feature names: defense_plane/agents/ot_model.py FEATURES)
 _FEATURE_HINTS = {
@@ -56,6 +64,12 @@ def evidence_from_finding(f, g):
     src_host = kgmod.host_of_ip(g, ent.get("src")) if ent.get("src") else None
     role = g.nodes[f"host:{src_host}"]["role"] if src_host else None
     conf = float(f.get("confidence") or 0.0)
+
+    if det == "it":
+        # IT-side sensor: direct, observed evidence on the early steps the OT
+        # sensor can only infer (the finding carries its own target node).
+        node = f.get("maps_to") or _IT_KLASS_NODE.get(klass)
+        return [(node, conf, COMMAND)] if node in _IT_NODES else []
 
     if det == "model":
         top_z = {t.get("feature"): float(t.get("z") or 0.0)
@@ -179,6 +193,16 @@ class CampaignState:
                 if v > s.get(p, 0.0):
                     s[p] = v
                     inferred[p] = True
+        # Forward belief: a confirmed early IT step means the chain is under way,
+        # so the pivot (the gateway to the plant) is likely next — a discounted,
+        # never-confirming score so the response can act before the manipulation.
+        early = max((obs.get(n, 0.0) for n in FORWARD_STEPS if obs.get(n, 0.0) >= CONFIRM_AT),
+                    default=0.0)
+        if early and "pivot" in self.idx:
+            fwd = min(FORWARD_WEIGHT * early, CONFIRM_AT - 0.01)
+            if fwd > s.get("pivot", 0.0):
+                s["pivot"] = fwd
+                inferred["pivot"] = True
         for node in reversed(list(self.tree.walk())):   # children before parents
             if node.children:
                 s[node.id] = max([s.get(node.id, 0.0)] + [s[c.id] for c in node.children])

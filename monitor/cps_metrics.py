@@ -121,15 +121,30 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
     }
 
 
-# Countermeasures each attack mode needs (response accuracy). The setpoint
-# attack needs no restore: the PLC rejects the value and recovers on its own.
-EXPECTED_RESPONSE = {
-    "setpoint-overvoltage": {"block_flow"},
-    "breaker-open": {"block_flow", "restore_breaker"},
-    "manual-hijack": {"block_flow", "force_auto"},
-    None: set(),
-}
 HMI_CUTTING = ("block_flow", "isolate_hmi")
+
+
+def expected_response(gt):
+    """Countermeasures the run needs, derived from the registers the attacker
+    wrote — robust to both the scripted (per-mode) and planner drivers. Always
+    block the flow; restore the breaker if it was opened; force AUTO if control
+    mode was taken. A lone out-of-range setpoint needs only the block (the PLC
+    rejects the value and recovers)."""
+    # register name, or the number as a fallback (HR_SWITCH_CMD=1, HR_CTRL_MODE=2).
+    REG_NAME = {0: "dg_setpoint", 1: "switch_cmd", 2: "ctrl_mode"}
+    names = set()
+    for e in gt:
+        if e.get("kind") != "modbus_write":
+            continue
+        names.add(e.get("register_name") or REG_NAME.get(e.get("register")))
+    if not names:
+        return set()
+    want = {"block_flow"}
+    if "switch_cmd" in names:
+        want.add("restore_breaker")
+    if "ctrl_mode" in names:
+        want.add("force_auto")
+    return want
 
 
 def _explained(decision):
@@ -146,7 +161,7 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
     actions = [r for r in resp if r.get("kind") == "action"]
     applied = [a for a in actions if a.get("ok")]
     applied_ids = {a["id"] for a in applied}
-    expected = EXPECTED_RESPONSE.get(mode, set())
+    expected = expected_response(gt)
     hits = [e["t"] for e in findings
             if attack_start is not None and e["t"] >= attack_start - SLACK_S]
     real = [a for a in applied if a["id"] != "notify"]
@@ -154,6 +169,17 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
     block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
     ok_writes = [e for e in gt if e.get("kind") == "modbus_write" and e.get("ok")]
     pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
+    # The attack reached the plant iff a write landed; otherwise, with an attack
+    # present, a response that applied is what prevented it (not over-response).
+    prevented = attack_start is not None and not ok_writes
+    if attack_start is None:
+        accurate, over = (not pre), sorted(applied_ids - {"notify"})
+    elif prevented:
+        accurate = bool(real)                   # a countermeasure stopped it early
+        over = []                               # preventing before the plant is good
+    else:
+        accurate = expected <= applied_ids
+        over = sorted(applied_ids - expected - {"notify"})
     return {
         "policy": up.get("policy"),
         "approval": up.get("approval"),
@@ -165,8 +191,9 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
         "actions": sorted(applied_ids - {"notify"}),
         "failed_actions": sorted({a["id"] for a in actions if not a.get("ok")}),
         "expected_actions": sorted(expected),
-        "accurate": expected <= applied_ids if attack_start is not None else not pre,
-        "over_response": sorted(applied_ids - expected - {"notify"}),
+        "prevented_before_impact": prevented,
+        "accurate": accurate,
+        "over_response": over,
         "attacker_writes_after_block": (sum(1 for e in ok_writes if e["t"] > block_t)
                                         if block_t is not None else None),
         "false_responses": len(pre),
@@ -178,6 +205,9 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
 def compute_metrics(out_dir: str) -> dict:
     frames = _read_jsonl(_find(out_dir, "engine.engine_frames.jsonl", "engine_frames.jsonl"))
     events = _read_jsonl(_find(out_dir, "sensor.telemetry.jsonl", "telemetry.jsonl"))
+    # IT-side sensor findings (when --it-telemetry ran): same ot_finding shape,
+    # detector="it". Folded in so detection and response latency see them too.
+    it_events = _read_jsonl(_find(out_dir, "hmi.it_telemetry.jsonl", "it_telemetry.jsonl"))
     gt = _read_jsonl(_find(out_dir, "ground_truth.jsonl"))
     resp_path = os.path.join(out_dir, "response.jsonl")
     resp = _read_jsonl(resp_path) if os.path.exists(resp_path) else None
@@ -188,6 +218,9 @@ def compute_metrics(out_dir: str) -> dict:
     writes = [e["t"] for e in gt if e.get("kind") == "modbus_write"]
     first_write = min(writes) if writes else attack_start
     mode = next((e.get("mode") for e in gt if e.get("kind") == "attack_start"), None)
+    attack_end_ev = next((e for e in gt if e.get("kind") == "attack_end"), {})
+    planner = bool(mode) and str(mode).startswith("planner:")
+    plan_steps = [e for e in gt if e.get("kind") == "plan_step"]
 
     ts = [fr.get("timestamp", 0) for fr in frames]
     dt = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 1.0
@@ -214,10 +247,14 @@ def compute_metrics(out_dir: str) -> dict:
             energy_attack = round(energies[-1] - pre[-1], 5)
 
     # ── detection ────────────────────────────────────────────────────────────
-    findings = [e for e in events if e.get("kind") == "ot_finding"]
+    ot_findings = [e for e in events if e.get("kind") == "ot_finding"]
+    it_findings = [e for e in it_events if e.get("kind") == "ot_finding"]
+    findings = ot_findings + it_findings       # combined / response see both sides
     normal_spans = [(a, b) for a, b in manual_spans if attack_start is None or a < attack_start]
-    per = {d: _detection([e for e in findings if _detector(e) == d], attack_start,
+    per = {d: _detection([e for e in ot_findings if _detector(e) == d], attack_start,
                          first_write, first_abn, normal_spans) for d in DETECTORS}
+    if it_findings:
+        per["it"] = _detection(it_findings, attack_start, first_write, first_abn, normal_spans)
     per["combined"] = _detection(findings, attack_start, first_write, first_abn, normal_spans)
     fitted = next((e for e in events if e.get("kind") == "model_fitted"), None)
 
@@ -255,6 +292,15 @@ def compute_metrics(out_dir: str) -> dict:
         "mitigated_s": (round(mitigated_t - first_write, 3)
                         if mitigated_t is not None and first_write is not None else None),
         "response": response,
+        # Tree-guided attacker (planner driver)
+        "planner": planner,
+        "attacker_profile": (mode.split(":", 1)[1] if planner else None),
+        "stage_reached": attack_end_ev.get("stage_reached") if planner else None,
+        "attack_succeeded": (bool(attack_end_ev.get("success")) if planner else None),
+        "prevented": (not any(e.get("kind") == "modbus_write" and e.get("ok") for e in gt)
+                      if planner else None),
+        "plan_steps": [{"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")}
+                       for e in plan_steps] if planner else None,
         "max_abs_deviation_pu": round(max((abs(v - V_NOMINAL) for v in vs), default=0.0), 4),
         "v_min": round(min(vs), 4) if vs else None,
         "v_max": round(max(vs), 4) if vs else None,
@@ -276,7 +322,8 @@ def format_report(m: dict) -> str:
     lines.append("| detector | detected | latency (s) | from write (s) | before impact "
                  "| false alarms | …in operator windows | classes |")
     lines.append("|---|---|---|---|---|---|---|---|")
-    for d in (*DETECTORS, "combined"):
+    det_rows = (*DETECTORS, *(["it"] if "it" in m["detectors"] else []), "combined")
+    for d in det_rows:
         x = m["detectors"][d]
         lines.append(f"| {d} | {'yes' if x['detected'] else 'no'} | {x['detection_latency_s']} "
                      f"| {x['latency_from_write_s']} | {'yes' if x['before_impact'] and x['detected'] else 'no'} "
@@ -295,6 +342,10 @@ def format_report(m: dict) -> str:
     lines.append(f"- mitigated (MTM, from first write): {m.get('mitigated_s')}s")
     lines.append(f"- energy: total={m['energy_kwh_total']} kWh, "
                  f"during attack={m['energy_kwh_during_attack']} kWh")
+    if m.get("planner"):
+        lines.append(f"- tree-guided attacker ({m['attacker_profile']}): reached "
+                     f"{m['stage_reached']}, succeeded={m['attack_succeeded']}, "
+                     f"prevented={m['prevented']}")
     r = m.get("response")
     if r:
         lines += ["", f"## Response (policy: {r['policy']}, approval: {r['approval']})", ""]
@@ -303,6 +354,8 @@ def format_report(m: dict) -> str:
                      f"accurate: {r['accurate']}; over-response: "
                      f"{', '.join(r['over_response']) or '—'}; failed: "
                      f"{', '.join(r['failed_actions']) or '—'})")
+        if r.get("prevented_before_impact"):
+            lines.append("- attack prevented before the plant was touched")
         lines.append(f"- decision latency (first finding -> first countermeasure done): "
                      f"{r['decision_latency_s']}s")
         lines.append(f"- decisions: {r['decisions']}, explained: {r['explained_decisions']} "

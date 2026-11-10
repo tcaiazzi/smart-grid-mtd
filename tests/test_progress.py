@@ -179,7 +179,7 @@ class RunLifecycle(unittest.TestCase):
                        cps.active_attack.drive_attack, cps.time.sleep, cps.LEARN_MARGIN_S)
         cps.Setting = types.SimpleNamespace(get_instance=lambda: types.SimpleNamespace(
             load_from_dict=lambda d: None))
-        cps._download_artifacts = lambda manager, m, out_dir, attack=True: None
+        cps._download_artifacts = lambda manager, m, out_dir, attack=True, it=False: None
         cps.LEARN_MARGIN_S = 0.0
         real_sleep = self._saved[4]
         cps.time.sleep = lambda s: real_sleep(min(s, 0.05))   # services' fixed 2 s pause

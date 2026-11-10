@@ -122,6 +122,38 @@ class Policies(unittest.TestCase):
         self.assertIn("force_auto", d.actions)      # restoring is still worth it
         self.assertNotIn("causal pairing", d.rationale)
 
+    def it_finding(self, klass, node, t, conf=0.9):
+        return {"i": 0, "t": t, "kind": "ot_finding", "detector": "it", "klass": klass,
+                "reasons": [klass], "confidence": conf, "maps_to": node,
+                "entities": {"src": HMI, "dst": None, "unit": None, "register": None,
+                             "name": None}, "evidence": {}}
+
+    def test_rules_early_response_on_it_exec(self):
+        # With the IT sensor, a confirmed it_exec triggers an early response
+        # (kill the foothold + pre-block the pivot) before the plant is touched.
+        cms = trees.cps_countermeasures(self.g, it=True)
+        p = policy.make_policy("rules", cms, self.tree)
+        st = mapping.CampaignState(self.tree, self.g)
+        st.update(self.it_finding("web_child_process", "it_exec", 1.0))
+        d = p.decide(st.snapshot(1.0), 1.0)
+        self.assertEqual(set(d.actions), {"kill_proc_tree", "block_flow"})
+        self.assertEqual(d.actions[0], "kill_proc_tree")   # order: earliest first
+        self.assertTrue(d.explained)
+
+    def test_it_countermeasures_absent_without_it_sensor(self):
+        cms = trees.cps_countermeasures(self.g, it=False)
+        self.assertNotIn("kill_proc_tree", {c.id for c in cms})
+
+    def test_solver_prefers_cheap_early_cut_with_it(self):
+        cms = trees.cps_countermeasures(self.g, it=True)
+        p = policy.make_policy("solver", cms, self.tree)
+        st = mapping.CampaignState(self.tree, self.g)
+        st.update(self.it_finding("web_child_process", "it_exec", 1.0))
+        d = p.decide(st.snapshot(1.0), 1.0)
+        # an IT cut (kill_proc_tree / block_web_src) is cheaper than block_flow
+        self.assertTrue({"kill_proc_tree", "block_web_src"} & set(d.actions))
+        self.assertTrue(d.explained)
+
     def test_pareto_front_non_dominated(self):
         d = self.drive("solver", SCENARIOS["manual-hijack"])[0]
         front = d.pareto

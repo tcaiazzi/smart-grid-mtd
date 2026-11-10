@@ -267,7 +267,8 @@ def run(args, progress=None):
         try:
             _run_episode(manager, m, args, emit)
             with phase(emit, "download"):
-                _download_artifacts(manager, m, args.out_dir, attack=attack)
+                _download_artifacts(manager, m, args.out_dir, attack=attack,
+                                    it=bool(getattr(args, "it_telemetry", False)))
         finally:
             with phase(emit, "undeploy"):
                 log.info("Undeploying cps lab")
@@ -404,11 +405,21 @@ def _run_episode(manager, m, args, emit):
             f"python3 plc_controller.py --engine-host {ENGINE_IP} --port {MODBUS_PORT} "
             f"--interval {args.step_interval}{seed_arg(plc_seed)}", "plc.log"), wait=False)
         # HMI: legitimate polling + operator dispatches, and the vulnerable web app.
+        it_tel = bool(getattr(args, "it_telemetry", False))
+        diag = f" --diag-url http://127.0.0.1:{APP_PORT}" if it_tel else ""
         manager.exec_obj(m["hmi"], with_console_log(
             f"python3 hmi_client.py --engine-host {ENGINE_IP} --port {MODBUS_PORT}"
-            f"{seed_arg(hmi_seed)}", "hmi.log"), wait=False)
+            f"{seed_arg(hmi_seed)}{diag}", "hmi.log"), wait=False)
+        access = " --access-log /vuln_app.access.jsonl" if it_tel else ""
         manager.exec_obj(m["hmi"], with_console_log(
-            f"python3 vuln_app.py --host 0.0.0.0 --port {APP_PORT}", "vuln_app.log"), wait=False)
+            f"python3 vuln_app.py --host 0.0.0.0 --port {APP_PORT}{access}", "vuln_app.log"),
+            wait=False)
+        if it_tel:
+            # IT-side sensor on the HMI: makes the attacker's early steps observable.
+            manager.exec_obj(m["hmi"], with_console_log(
+                f"python3 it_sensor.py --engine-ip {ENGINE_IP} --engine-port {MODBUS_PORT} "
+                f"--access-log /vuln_app.access.jsonl --learn-seconds {args.learn_seconds} "
+                f"--telemetry-file it_telemetry.jsonl", "it_sensor.log"), wait=False)
 
     # Response loop (SOAR prototype): its own thread, because the attack phase
     # blocks this one. Off by default — the scenario is unchanged without it.
@@ -418,9 +429,11 @@ def _run_episode(manager, m, args, emit):
         responder = cps_responder.Responder(
             manager, m, respond, args.out_dir, emit=emit,
             interval=getattr(args, "respond_interval", 0.5),
-            approval=getattr(args, "approval", "auto"))
+            approval=getattr(args, "approval", "auto"),
+            it=bool(getattr(args, "it_telemetry", False)))
         responder.start()
-        log.info("Responder up: policy=%s approval=%s", respond, getattr(args, "approval", "auto"))
+        log.info("Responder up: policy=%s approval=%s it=%s", respond,
+                 getattr(args, "approval", "auto"), getattr(args, "it_telemetry", False))
 
     try:
         log.info("Normal operation for %.0fs (model calibration: first %.0fs)",
@@ -437,13 +450,26 @@ def _run_episode(manager, m, args, emit):
                   approval=getattr(args, "approval", "auto"))
         try:
             if args.attack:
-                with phase(emit, "attack", mode=args.attack_mode):
-                    active_attack.drive_attack(
-                        manager, m["attacker"], gt,
-                        target_url=f"http://{HMI_IP}:{APP_PORT}",
-                        engine_ip=ENGINE_IP, engine_port=MODBUS_PORT,
-                        attack_mode=args.attack_mode, repeat=args.attack_repeat,
-                        interval=args.attack_interval)
+                driver = getattr(args, "attack_driver", "scripted")
+                mode_label = (f"planner:{args.attacker_profile}" if driver == "planner"
+                              else args.attack_mode)
+                with phase(emit, "attack", mode=mode_label):
+                    if driver == "planner":
+                        from defense_plane.soar import kg as soar_kg
+                        active_attack.drive_attack_planned(
+                            manager, m, gt, soar_kg.build_cps_kg(),
+                            target_url=f"http://{HMI_IP}:{APP_PORT}",
+                            engine_ip=ENGINE_IP, engine_port=MODBUS_PORT,
+                            profile=args.attacker_profile, goal=args.attack_goal,
+                            seed=args.seed, dwell=args.dwell, max_steps=args.max_steps,
+                            interval=args.attack_interval, emit=emit)
+                    else:
+                        active_attack.drive_attack(
+                            manager, m["attacker"], gt,
+                            target_url=f"http://{HMI_IP}:{APP_PORT}",
+                            engine_ip=ENGINE_IP, engine_port=MODBUS_PORT,
+                            attack_mode=args.attack_mode, repeat=args.attack_repeat,
+                            interval=args.attack_interval)
                 _emit_attack_writes(gt_path, emit)
                 log.info("Post-attack observation for %.0fs", args.post_attack_duration)
                 with phase(emit, "post_attack"):
@@ -456,7 +482,7 @@ def _run_episode(manager, m, args, emit):
             responder.stop()
 
 
-def _download_artifacts(manager, m, out_dir, attack=True):
+def _download_artifacts(manager, m, out_dir, attack=True, it=False):
     wanted = {
         "engine":    ["engine_frames.jsonl", "engine.log"],
         "plc":       ["plc.log"],
@@ -464,6 +490,8 @@ def _download_artifacts(manager, m, out_dir, attack=True):
         "hmi":       ["hmi.log", "vuln_app.log"],
         "attacker":  ["exploit.log"],
     }
+    if it:
+        wanted["hmi"] += ["it_telemetry.jsonl", "vuln_app.access.jsonl", "it_sensor.log"]
     if not attack:
         del wanted["attacker"]   # nothing ran there
     for name, files in wanted.items():
@@ -486,7 +514,18 @@ def main():
     ap.add_argument("--detectors", default="rules,model",
                     help="sensor detectors to run (comma list of rules, model)")
     ap.add_argument("--attack", action="store_true", help="run the active attack chain")
+    ap.add_argument("--attack-driver", default="scripted", choices=("scripted", "planner"),
+                    help="scripted = fixed per-mode chain; planner = reactive tree-guided attacker")
     ap.add_argument("--attack-mode", default="setpoint-overvoltage", choices=ATTACK_MODES)
+    ap.add_argument("--attacker-profile", default="opportunistic",
+                    choices=("opportunistic", "targeted", "stealthy"),
+                    help="planner driver: how the attacker chooses its next step")
+    ap.add_argument("--attack-goal", default=None,
+                    choices=("setpoint_oor", "breaker_open", "mode_hijack"),
+                    help="planner driver, targeted profile: the impact leaf to aim for")
+    ap.add_argument("--dwell", type=float, default=0.0,
+                    help="planner driver: seconds between steps (the defender's window)")
+    ap.add_argument("--max-steps", type=int, default=12, help="planner driver: step budget")
     ap.add_argument("--attack-repeat", type=int, default=None,
                     help="times the write sequence is issued (default: per attack mode)")
     ap.add_argument("--attack-interval", type=float, default=0.5)
@@ -497,6 +536,9 @@ def main():
                          "(0 = no live view)")
     ap.add_argument("--progress-file", default=None,
                     help="progress ledger path (default <out-dir>/progress.jsonl)")
+    ap.add_argument("--it-telemetry", action="store_true",
+                    help="run the IT-side sensor on the HMI (observe the attacker's early "
+                         "steps) + legitimate diagnostic traffic + the app access log")
     ap.add_argument("--respond", default="off", choices=cps_responder.POLICIES,
                     help="response policy driving countermeasures in the lab (SOAR prototype)")
     ap.add_argument("--respond-interval", type=float, default=0.5,

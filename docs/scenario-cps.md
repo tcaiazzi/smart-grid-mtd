@@ -201,6 +201,18 @@ README, sezione "Response (SOAR prototype)"). Comprende:
 - due policy: un playbook a regole fisse e un primo risolutore a costo
   atteso;
 - un'approvazione dell'operatore simulata.
+- una **telemetria IT sull'HMI** (`CPS_IT=1`): un sensore lato host
+  (`defense_plane/agents/it_sensor.py`) che rende osservabili i primi passi
+  dell'attacco — accesso all'app web, esecuzione di comandi, pivot — che il
+  sensore OT può solo inferire. Impara il normale (traffico diagnostico
+  legittimo) nella fase iniziale. Con questa telemetria la difesa ferma
+  l'attacco **prima** che l'impianto venga toccato; senza, può reagire solo
+  alla scrittura.
+- un **attaccante guidato dall'albero** (`CPS_ATTACK_DRIVER=planner`): invece di una sequenza
+  fissa, un pianificatore cammina sull'albero d'attacco e sceglie il passo successivo in base
+  allo stato, componendo le stesse primitive del lab (nessuna nuova capacità offensiva, solo
+  per il lab). Reagisce agli esiti: se una contromisura gli chiude una strada, ne prova
+  un'altra o si ferma. È anche l'avversario baseline del gioco di WP3.
 
 È un prototipo in piccolo, pensato per fissare le interfacce di WP2 e WP3
 (vedi [piano-wp2-wp3.md](piano-wp2-wp3.md)). Restano da fare:

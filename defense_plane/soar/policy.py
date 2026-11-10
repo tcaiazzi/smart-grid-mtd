@@ -67,11 +67,15 @@ class _Base:
         return sorted(ids, key=lambda a: (self.cms[a].order, a))
 
     def _covers(self, ids, nodes):
+        # What each action addresses: believed nodes it prevents/restores, plus
+        # the impact leaves it pre-emptively guards (a block before the plant is
+        # touched is justified by the impact it prevents, even if not yet seen).
+        relevant = set(nodes) | set(mapping.IMPACT_LEAVES)
         out = {}
         for a in ids:
             cm = self.cms[a]
-            out[a] = {"prevents": [n for n in cm.prevents if n in nodes],
-                      "restores": [n for n in cm.restores if n in nodes]}
+            out[a] = {"prevents": [n for n in cm.prevents if n in relevant],
+                      "restores": [n for n in cm.restores if n in relevant]}
         return out
 
     def _notify(self, snapshot, t, why):
@@ -88,32 +92,38 @@ class RulesPolicy(_Base):
 
     name = "rules"
     PLAYBOOK = {
+        # Early IT steps (observed only with the IT sensor): stop the foothold
+        # and pre-emptively block the pivot before the plant is touched.
+        "it_access": ["block_web_src"],
+        "it_exec": ["kill_proc_tree", "block_flow"],
+        # Impact leaves (OT sensor): block the flow and undo the effect.
         "setpoint_oor": ["block_flow"],          # the PLC rejects the value and recovers
         "breaker_open": ["block_flow", "restore_breaker"],
         "mode_hijack": ["block_flow", "force_auto"],
     }
+    TRIGGERS = ["it_access", "it_exec"] + list(mapping.IMPACT_LEAVES)
 
     def decide(self, snapshot, t=None):
         nodes = snapshot["nodes"]
-        confirmed = [n for n in mapping.IMPACT_LEAVES
+        confirmed = [n for n in self.TRIGGERS
                      if nodes.get(n, {}).get("state") == mapping.CONFIRMED]
         if not confirmed:
             return self._notify(snapshot, t, "suspicious activity below the confirmation "
                                 "threshold: operator notified, no automatic action")
         want = []
-        for leaf in confirmed:
-            for a in self.PLAYBOOK[leaf]:
+        for node in confirmed:
+            for a in self.PLAYBOOK.get(node, []):
                 if a not in want:
                     want.append(a)
         new = [a for a in want if a not in self.applied and a in self.allowed]
         if not new:
             return None
         new = self._order(new)
-        rationale = "; ".join(f"{leaf} confirmed ({', '.join(nodes[leaf]['classes'])}) "
-                              f"-> {', '.join(self.PLAYBOOK[leaf])}" for leaf in confirmed)
+        rationale = "; ".join(f"{node} confirmed ({', '.join(nodes[node]['classes'])}) "
+                              f"-> {', '.join(self.PLAYBOOK.get(node, []))}" for node in confirmed)
         return Decision(t, self.name, new, self._covers(new, nodes), {}, rationale,
                         needs_approval=[a for a in new if self.cms[a].requires_approval],
-                        active_impacts=confirmed)
+                        active_impacts=[n for n in confirmed if n in mapping.IMPACT_LEAVES])
 
 
 @dataclass

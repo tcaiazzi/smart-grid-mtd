@@ -155,11 +155,16 @@ def cps_context(g):
     hmi_ip = kgmod.addresses(g, hmi)[0][0]
     fw_on_hmi_zone = [a for a, z in kgmod.addresses(g, fw)
                       if z == kgmod.addresses(g, hmi)[0][1]][0]
+    it_hosts = [g.nodes[h]["name"] for h in kgmod.hosts(g)
+                if g.nodes[h]["role"] == "it-host"]
+    attacker = it_hosts[0] if it_hosts else None
+    attacker_ip = kgmod.addresses(g, attacker)[0][0] if attacker else None
     return {"hmi": hmi, "engine": engine, "firewall": fw,
             "hmi_ip": hmi_ip, "engine_ip": kgmod.addresses(g, engine)[0][0],
             "gateway_hmi": fw_on_hmi_zone, "modbus_port": modbus["port"],
             "modbus_svc": f"svc:{engine}/modbus", "hmi_svc": http,
-            "hmi_port": g.nodes[http]["port"]}
+            "hmi_port": g.nodes[http]["port"],
+            "attacker": attacker, "attacker_ip": attacker_ip}
 
 
 def cps_attack_tree(g):
@@ -225,13 +230,16 @@ def cps_attack_tree(g):
                 children=[via_hmi, direct])
 
 
-def cps_countermeasures(g):
-    """Countermeasures executable in the lab, with their commands."""
+def cps_countermeasures(g, it=False):
+    """Countermeasures executable in the lab, with their commands. The IT-side
+    ones (kill_proc_tree, block_web_src) are available only when ``it`` is set,
+    i.e. when the IT sensor runs — otherwise the early steps they answer are not
+    observed and the response has no justification to use them."""
     c = cps_context(g)
     flow = f"-s {c['hmi_ip']} -d {c['engine_ip']} -p tcp --dport {c['modbus_port']}"
     port = c["modbus_port"]
     ot_leaves = ["setpoint_oor", "breaker_open", "mode_hijack"]
-    return [
+    cms = [
         Countermeasure(
             "notify", "Alert the operator, no automatic action", None, None, [], [],
             time_to_effect_s=0.0, op_cost=0.0, energy_cost=0.0, order=90),
@@ -273,3 +281,25 @@ def cps_countermeasures(g):
             revert=[], restores=["breaker_open"],
             time_to_effect_s=1.0, op_cost=0.1, energy_cost=0.02, order=40),
     ]
+    if not it:
+        return cms
+    # IT-side countermeasures (need the IT sensor to observe the early steps).
+    cms += [
+        Countermeasure(
+            "kill_proc_tree", "Terminate the processes the web app spawned (the RCE)",
+            "Process Termination", c["hmi"],
+            apply=["for p in $(pgrep -f vuln_app.py); do pkill -P $p 2>/dev/null; done; true"],
+            revert=[],   # killing the foothold changes no persistent state
+            prevents=["it_exec", "pivot"] + ot_leaves,
+            time_to_effect_s=0.3, op_cost=0.15, energy_cost=0.01, order=5),
+        Countermeasure(
+            "block_web_src", "Block the attacking source at the diagnostics app",
+            "Inbound Traffic Filtering", c["hmi"],
+            apply=([f"iptables -I INPUT 1 -s {c['attacker_ip']} -p tcp "
+                    f"--dport {c['hmi_port']} -j DROP"] if c.get("attacker_ip") else []),
+            revert=([f"iptables -D INPUT -s {c['attacker_ip']} -p tcp "
+                     f"--dport {c['hmi_port']} -j DROP"] if c.get("attacker_ip") else []),
+            prevents=["it_access", "it_exec", "pivot"] + ot_leaves,
+            time_to_effect_s=0.4, op_cost=0.2, energy_cost=0.01, order=6),
+    ]
+    return cms

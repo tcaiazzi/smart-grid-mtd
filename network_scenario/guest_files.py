@@ -111,6 +111,10 @@ HMI_FILES = [
     ("attack_plane/agents/vuln_app.py", "/vuln_app.py"),
     ("attack_plane/agents/ot_write.py", "/ot_write.py"),
     ("defense_plane/ot_registers.py", "/ot_registers.py"),
+    # IT-side sensor (--it-telemetry): watches this host so the attacker's early
+    # steps are observed, not just inferred. Stdlib + the shared telemetry bus.
+    ("defense_plane/agents/it_sensor.py", "/it_sensor.py"),
+    ("defense_plane/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
 ]
 
 # Attacker node: drives the exploit over HTTP against the HMI host.

@@ -375,6 +375,55 @@ make cps-campaign CPS_CAMPAIGN=c-solver CPS_RESPOND=solver   # one policy per ca
 `CPS_APPROVAL` controls countermeasures that need an operator: `auto`, `deny` (never
 proposed) or `delay:<s>` (simulated operator latency).
 
+#### Tree-guided attacker (validating the defence)
+
+By default the attack is a fixed per-mode chain. `CPS_ATTACK_DRIVER=planner` instead runs a
+**reactive attacker** (`attack_plane/planner/`) that walks the same attack tree and picks its
+next step from the current state, composing the *same* lab primitives the scripted chain uses —
+no new offensive capability, lab-only. It learns by outcome: if a step fails (a countermeasure
+closed its path) it tries another feasible impact or gives up, so it exercises the response like
+a real adversary. It is also the baseline adversary of the WP3 stochastic game.
+
+```bash
+make cps-attack CPS_OUT=output/cps/plan CPS_ATTACK_DRIVER=planner     CPS_PROFILE=stealthy CPS_DWELL=3 CPS_RESPOND=rules SEED=1
+```
+
+- `CPS_PROFILE`: `opportunistic` (biggest reachable impact), `targeted` (with `CPS_GOAL`),
+  `stealthy` (quietest impact, longer dwell).
+- `CPS_DWELL`: seconds between steps — the window the defender gets (pays off once IT-side
+  telemetry makes the early steps observable).
+
+Each step is recorded as a `plan_step` in the ground truth; `cps-metrics` reports the furthest
+**stage reached** (access / exec / pivot / impact), whether the attack **succeeded**, and whether
+it was **prevented** (no write landed).
+
+#### IT-side telemetry (respond before the plant)
+
+The OT sensor sees only Modbus, so the attacker's first steps are only *inferred* and the defence
+can act only once a write reaches the plant. `CPS_IT=1` adds an **IT-side sensor on the HMI**
+(`defense_plane/agents/it_sensor.py`, stdlib) that makes those steps *observed*:
+
+- the diagnostics app's access log → `web_injection_pattern` (it_access);
+- the process table (`/proc`) → `web_child_process` (it_exec);
+- open connections (`/proc/net/tcp`) → `unexpected_modbus_client` (pivot).
+
+What is normal (the operator's legitimate diagnostic traffic, the real Modbus client) is learned
+during the first `CPS_LEARN` seconds, like the OT model. The IT sensor also turns on legitimate
+periodic diagnostics on the HMI and the app's access log. Its findings carry the `ot_finding`
+shape (`detector="it"`), so the same mapping and responder consume them: the early steps become
+*confirmed*, and two IT countermeasures become available — `kill_proc_tree` (end the RCE) and
+`block_web_src` (block the attacking source). With the IT sensor, a confirmed early step triggers
+an early response (rules: `it_exec` → `kill_proc_tree` + `block_flow`; `it_access` → `block_web_src`).
+
+```bash
+make cps-attack CPS_OUT=output/cps/it CPS_ATTACK_DRIVER=planner CPS_DWELL=3     CPS_IT=1 CPS_RESPOND=rules SEED=1
+```
+
+With a dwell, this stops the attack *before* the plant is touched: in a seed-1 run the same
+opportunistic attack reaches the plant with the OT sensor alone (`stage_reached=impact`), but is
+stopped at `it_access` with the IT sensor (`prevented`, no write). `cps-metrics` adds an `it`
+detection row and a `prevented before the plant was touched` line.
+
 The responder writes these files to the run directory:
 - `response.jsonl`, with kinds `response_up`, `tree_state`, `decision`, `approval` and
   `action` (with per-command return codes);

@@ -103,6 +103,31 @@ class Mapping(unittest.TestCase):
         self.assertEqual(snap["nodes"]["ot_foothold"]["state"], mapping.INFERRED)
         self.assertNotIn("pivot", snap["nodes"])
 
+    def it_finding(self, klass, node, t, src=None, conf=0.9):
+        return {"i": 0, "t": t, "kind": "ot_finding", "detector": "it", "klass": klass,
+                "reasons": [klass], "confidence": conf, "maps_to": node,
+                "entities": {"src": src, "dst": None, "unit": None, "register": None,
+                             "name": None}, "evidence": {}}
+
+    def test_it_findings_confirm_early_steps(self):
+        # The IT sensor observes the early steps directly: they become confirmed,
+        # not merely inferred, before any plant manipulation.
+        snap = self.run_findings([
+            self.it_finding("web_injection_pattern", "it_access", 1.0, src="10.10.0.10"),
+            self.it_finding("web_child_process", "it_exec", 2.0),
+        ])
+        self.assertEqual(snap["nodes"]["it_access"]["state"], mapping.CONFIRMED)
+        self.assertEqual(snap["nodes"]["it_exec"]["state"], mapping.CONFIRMED)
+        # no impact is fabricated from IT evidence alone
+        for leaf in mapping.IMPACT_LEAVES:
+            self.assertNotEqual(snap["nodes"].get(leaf, {}).get("state"), mapping.CONFIRMED)
+        self.assertIn("attacker", snap["hosts_implicated"])
+
+    def test_it_pivot_confirmed_lifts_access(self):
+        snap = self.run_findings([self.it_finding("unexpected_modbus_client", "pivot", 1.0)])
+        self.assertEqual(snap["nodes"]["pivot"]["state"], mapping.CONFIRMED)
+        self.assertEqual(snap["nodes"]["it_access"]["state"], mapping.INFERRED)
+
     def test_non_findings_ignored(self):
         st = mapping.CampaignState(self.tree, self.g)
         self.assertEqual(st.update({"kind": "ot_alert", "state": "raised"}), [])

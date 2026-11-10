@@ -131,6 +131,27 @@ class Responder(unittest.TestCase):
         self.assertTrue(actions and not any(a["ok"] for a in actions))
         self.assertEqual(actions[0]["commands"][0]["rc"], 1)
 
+    def test_it_source_triggers_early_response(self):
+        # With IT telemetry, a confirmed it_exec from the HMI sensor triggers an
+        # early response before any OT write.
+        it_exec = {"i": 0, "t": 2.0, "kind": "ot_finding", "detector": "it",
+                   "klass": "web_child_process", "reasons": ["web_child_process"],
+                   "confidence": 0.9, "maps_to": "it_exec",
+                   "entities": {"src": cps.HMI_IP, "dst": None, "unit": None,
+                                "register": None, "name": None}, "evidence": {}}
+        ot_lab = FakeLab([{"i": 0, "t": 0.5, "kind": "sensor_up"}])
+        it_lab = FakeLab([it_exec], chunk=10)
+        r = cr.Responder(None, {}, "rules", self.dir, it=True,
+                         exec_fn=ot_lab.exec, read_fn=ot_lab.read, it_read_fn=it_lab.read)
+        for _ in range(3):
+            r.poll_once()
+        r.record.close()
+        acted = {m for m, _c in ot_lab.cmds}
+        self.assertIn("hmi", acted)        # kill_proc_tree runs on the HMI
+        ids = [x["id"] for x in read_jsonl(os.path.join(self.dir, "response.jsonl"))
+               if x["kind"] == "action"]
+        self.assertIn("kill_proc_tree", ids)
+
     def test_delayed_approval(self):
         r, lab = self.make([], approval="delay:0")
         d = policy.Decision(1.0, "test", ["isolate_hmi"], {}, {}, "test")
