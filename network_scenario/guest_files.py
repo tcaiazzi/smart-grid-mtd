@@ -68,3 +68,50 @@ SCMC_FILES = [
 ROUTER_FILES = [
     ("traffic_generator/replay_background.sh", "/replay_background.sh"),
 ]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cyber-physical (OT/Modbus) scenario manifests — doc steps 1–4. These ride on
+# the kathara/cps image (docker/cps/Dockerfile), separate from the MQTT lab.
+# ot_registers.py is the shared "plant contract" copied onto every node that
+# speaks or inspects Modbus; the DPI sensor stays stdlib/numpy-only.
+
+# Physical engine node: pandapower twin behind a Modbus/TCP server.
+ENGINE_FILES = [
+    ("traffic_generator/agents/modbus_engine.py", "/modbus_engine.py"),
+    ("traffic_generator/agents/grid_sim.py", "/grid_sim.py"),
+    ("defense_plane/ot_registers.py", "/ot_registers.py"),
+]
+
+# PLC node: Modbus master / controller (the legitimate industrial traffic).
+PLC_FILES = [
+    ("traffic_generator/agents/plc_controller.py", "/plc_controller.py"),
+    ("defense_plane/ot_registers.py", "/ot_registers.py"),
+]
+
+# Defense sensor node: passive Modbus-DPI -> findings, served on the mgmt NIC.
+SENSOR_FILES = [
+    ("defense_plane/agents/ot_sensor.py", "/ot_sensor.py"),
+    ("defense_plane/agents/ot_model.py", "/ot_model.py"),
+    ("defense_plane/ot_registers.py", "/ot_registers.py"),
+    ("defense_plane/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
+    ("defense_plane/agents/mtd_dashboard.py", "/mtd_dashboard.py"),
+    ("defense_plane/agents/mtd_dashboard.html", "/mtd_dashboard.html"),
+]
+
+# IT HMI / SCADA host: the ONE IT client the boundary firewall lets reach the
+# engine (legitimate polling + operator dispatches), which also runs the
+# deliberately-vulnerable diagnostics web app — the attacker's foothold — and the
+# raw-stdlib Modbus writer the pivot uses after RCE.
+HMI_FILES = [
+    ("traffic_generator/agents/hmi_client.py", "/hmi_client.py"),
+    ("attack_plane/agents/vuln_app.py", "/vuln_app.py"),
+    ("attack_plane/agents/ot_write.py", "/ot_write.py"),
+    ("defense_plane/ot_registers.py", "/ot_registers.py"),
+]
+
+# Attacker node: drives the exploit over HTTP against the HMI host.
+ATTACKER_CPS_FILES = [
+    ("attack_plane/agents/exploit_client.py", "/exploit_client.py"),
+    ("defense_plane/ot_registers.py", "/ot_registers.py"),
+]

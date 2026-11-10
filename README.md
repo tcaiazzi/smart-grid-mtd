@@ -190,3 +190,113 @@ address the SCMC uses, or tries to use, until the broker receives nanogrid data
 again), never from what the detector itself sees. KPIs are cross-validated by run and
 reported for the MLP and for a plain threshold rule. Load `telemetry.jsonl` and
 `ground_truth.jsonl` together in the dashboard to compare alerts with the truth.
+
+---
+
+## Cyber-physical (OT/Modbus) scenario
+
+A second scenario emulates a small industrial plant and the full chain *IT
+intrusion → pivot to OT → unauthorized Modbus write → physical effect →
+detection* (the Mashfrog prototype, doc steps 1–4). It is independent of the
+MQTT/MTD pipeline above and runs on its own node image.
+
+Three zones joined by an IT/OT boundary firewall that forwards **only HMI → engine
+Modbus**: the attacker cannot reach the plant directly, it has to compromise the HMI
+and pivot from it, so its writes come from an allowed host.
+
+```
+IT 10.10.0.0/24           firewall            OT 10.20.0.0/24         DEF 10.30.0.0/24
+  attacker 10.10.0.10   10.10.0.1|10.20.0.1    plc    10.20.0.10        sensor 10.30.0.10
+  hmi      10.10.0.20    (FORWARD DROP,        engine 10.20.0.20       (mgmt / findings)
+                          HMI->engine Modbus    sensor eth0 (passive sniff)
+                          allowed)
+```
+
+- **Physical engine** (`traffic_generator/agents/grid_sim.py` + `modbus_engine.py`):
+  a pandapower LV-feeder digital twin behind a Modbus/TCP server. Sensors are input
+  registers; actuators (DG setpoint, feeder breaker, **control mode** auto/manual)
+  are holding registers — the register map, access policy per role and control
+  constants are the plant contract in `defense_plane/ot_registers.py`. The feeder is
+  sized so a full-rated 60 kW DG — an *in-range* command — overvolts the DG bus.
+- **PLC** (`traffic_generator/agents/plc_controller.py`): the Modbus master. In AUTO
+  it regulates the worst bus voltage, rejects out-of-envelope setpoints in force and
+  relaxes back to the 20 kW nominal; in MANUAL (operator authority) it hands off.
+- **HMI** (`traffic_generator/agents/hmi_client.py`): the legitimate IT client — one
+  persistent session polling sensors/actuators, and every ~12 s a safe operator
+  dispatch (MANUAL, 15–35 kW for 5 s, back to AUTO). This is the normal behaviour
+  the sensor must tell the attack apart from.
+- **Active attacker** (`attack_plane/agents/vuln_app.py` on the HMI host,
+  `exploit_client.py`, `ot_write.py`; driver `attack_plane/active_attack.py`):
+  exploits the vulnerable diagnostics app (real OS command injection → RCE), pivots
+  across the boundary from the HMI's IP, then (`CPS_ATTACK_MODE`):
+  - `setpoint-overvoltage` — DG setpoint out of range (loud; the PLC rejects it and
+    the plant recovers),
+  - `breaker-open` — opens the feeder breaker (loss of supply; a policy violation),
+  - `manual-hijack` — takes MANUAL authority and dispatches 60 kW: every value is
+    legal and the source is the HMI, so source/range rules cannot see it, and the
+    overvoltage **persists** after the attacker leaves because the PLC stands down.
+
+  Every write is recorded in `ground_truth.jsonl` with the time it was issued.
+  **The app is intentionally insecure and lab-only.**
+- **DPI sensor** (`defense_plane/agents/ot_sensor.py` + `ot_model.py`, stdlib + numpy):
+  passively parses Modbus requests *and* responses on the OT link, reconstructing
+  the plant state from the read responses. Two detectors, each finding tagged with
+  `detector`:
+  - **rules** — out-of-range command, unknown client (write/read), role policy
+    violation, `unsafe_command` (a sensitive write followed by the observed voltage
+    leaving the band), `manual_mode_excursion` (MANUAL while out of band);
+  - **model** — per-second behavioural features (session churn, setpoint jump size,
+    time in MANUAL, observed voltages, …) scored by a robust median/MAD model
+    calibrated online on the first `CPS_LEARN` seconds of the normal phase.
+
+  Alerts are raised once and cleared when the condition ends. Findings ride the
+  reused telemetry/dashboard bus.
+
+### Commands
+
+```bash
+make cps-selftest      # physics, Modbus, PLC, sensor rules+model, attack chain — NO Kathará
+make cps-image         # build the kathara/cps node image (pandapower + pymodbus)
+make cps-lab    CPS_OUT=output/cps/normal SEED=1                        # normal operation only
+make cps-attack CPS_OUT=output/cps/hijack CPS_ATTACK_MODE=manual-hijack SEED=1
+make cps-metrics CPS_OUT=output/cps/hijack  # per-detector detection, impact, energy
+```
+
+`make cps-selftest` needs no Docker: it runs the pandapower twin, a real Modbus
+round-trip, the PLC decision logic, both detectors off-wire, and the
+exploit→pivot→write chain end to end against a live engine + PLC on the host.
+Knobs: `CPS_NORMAL` (normal phase, default 60 s), `CPS_LEARN` (model calibration,
+default 45 s — must end ≥ 5 s before the attack), `CPS_POST` (post-attack observation,
+30 s), `CPS_DETECTORS` (`rules,model`). `cps-metrics` reports, per detector
+(rules / model / combined), detection, latency from the attack start and from the
+first malicious write, whether it fired before the physical impact, and false alarms
+(and how many fell inside legitimate operator windows); and, on the plant,
+time-to-impact, impact duration, whether it persists after the attack / recovered,
+and time spent in MANUAL. `DASHBOARD_PORT=8090` serves the live findings dashboard
+off the sensor's mgmt NIC.
+
+### Campaigns and the progress dashboard
+
+```bash
+make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5      # 4 modes x 5 seeds = 20 runs (~30 min)
+make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5 DRY=1   # print the grid and the planned time
+make cps-dashboard                                    # http://127.0.0.1:8765 (CPS_DASH_PORT)
+```
+
+`cps-campaign` (`network_scenario/cps_campaign.py`) runs `CPS_MODES` (default
+`normal,setpoint-overvoltage,breaker-open,manual-hijack`) x `CPS_SEEDS`, seed-major, one
+lab at a time, under `output/cps/campaigns/<name>/`: each run in `runs/<mode>-s<seed>/`
+is scored as it finishes (`metrics.json`/`metrics.md`) and the aggregate is refreshed
+(`summary.md`, `summary.csv` per mode x detector, `impact.csv` per mode). Re-running the
+same `CPS_CAMPAIGN` resumes it (scored runs are skipped); a failed run is retried once,
+then recorded and skipped; Ctrl-C undeploys the lab and marks the campaign interrupted.
+
+Everything is written to a progress ledger, `progress.jsonl` (`monitor/progress.py`; a
+standalone `make cps-lab`/`cps-attack` writes one in its `CPS_OUT` too): phases, the
+live plant state and the sensor's findings pulled from the containers every ~2 s, the
+attacker's writes, each run's metrics and the aggregate. `cps-dashboard`
+(`monitor/cps_dashboard.py`, stdlib, read-only, 127.0.0.1) follows every ledger under
+`output/cps`: campaign progress and ETA, the queue with per-run detection latencies and
+impact, the current run's phase timeline, live bus voltages with the attack and the
+first finding of each detector marked, findings by class, and the aggregated results.
+It can be started before, during or after a campaign.

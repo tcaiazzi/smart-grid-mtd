@@ -175,7 +175,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -503,6 +503,65 @@ detector-final: detector-dataset
 	$(PYTHON) -m defense_plane.train_delivery_detector --mode final $(DET_SPLIT) \
 		--model $(DET_MODEL) --features $(DET_FEATURES) --hidden $(DET_HIDDEN) --smoothing $(DET_SMOOTHING) \
 		--data $(DET_ROOT)/windows.csv --out-dir $(DET_ROOT)
+
+# ── Cyber-physical (OT/Modbus) scenario — doc steps 1–4 ──────────────────────
+# Variables for the OT scenario. The lab needs the kathara/cps image (cps-image).
+CPS_OUT          ?= $(OUTPUT_ROOT)/cps/run-1
+CPS_NORMAL       ?= 60
+CPS_LEARN        ?= 45
+CPS_POST         ?= 30
+CPS_STEP         ?= 1.0
+CPS_DETECTORS    ?= rules,model
+# setpoint-overvoltage (loud, PLC recovers) | breaker-open (policy violation)
+# | manual-hijack (stealthy: in-range writes from the HMI, impact persists)
+CPS_ATTACK_MODE  ?= setpoint-overvoltage
+CPS_SEED_FLAG    := $(if $(SEED),--seed $(SEED))
+# Campaigns (cps-campaign): reuse the same CPS_CAMPAIGN name to resume one.
+CPS_CAMPAIGN     ?= $(shell date +%Y%m%d-%H%M)
+CPS_SEEDS        ?= 1-5
+CPS_MODES        ?= normal,setpoint-overvoltage,breaker-open,manual-hijack
+CPS_DASH_PORT    ?= 8765
+
+cps-image:                 ## build the OT node image (pandapower + pymodbus)
+	docker build -t kathara/cps docker/cps/
+
+cps-selftest:              ## CPS physics, Modbus, PLC, sensor rules+model, attack chain, metrics — NO Kathará
+	$(PYTHON) -m unittest -v tests.test_grid_sim tests.test_modbus_roundtrip \
+		tests.test_plc_control tests.test_ot_sensor tests.test_ot_model \
+		tests.test_active_attack tests.test_cps_topology tests.test_cps_metrics \
+		tests.test_progress tests.test_cps_campaign tests.test_cps_dashboard
+
+cps-engine:                ## run engine + PLC locally over loopback Modbus (Ctrl-C to stop)
+	@echo "Start the engine and PLC in two shells:"
+	@echo "  PYTHONPATH=traffic_generator/agents:defense_plane $(PYTHON) -m modbus_engine --frame-log engine_frames.jsonl"
+	@echo "  PYTHONPATH=traffic_generator/agents:defense_plane $(PYTHON) -m plc_controller --engine-host 127.0.0.1"
+
+cps-lab:                   ## deploy the 3-zone lab, normal operation only
+	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
+		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
+		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG)
+
+cps-attack:                ## deploy the lab and drive the active attack chain (CPS_ATTACK_MODE)
+	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
+		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
+		--detectors $(CPS_DETECTORS) --post-attack-duration $(CPS_POST) \
+		--step-interval $(CPS_STEP) --attack --attack-mode $(CPS_ATTACK_MODE) \
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG)
+
+cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + aggregated (resumable)
+	$(PYTHON) -m network_scenario.cps_campaign --name $(CPS_CAMPAIGN) \
+		--modes $(CPS_MODES) --seeds $(CPS_SEEDS) \
+		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
+		--post-attack-duration $(CPS_POST) --step-interval $(CPS_STEP) \
+		--detectors $(CPS_DETECTORS) $(if $(DRY),--dry-run)
+
+cps-dashboard:             ## progress dashboard for CPS runs/campaigns on http://127.0.0.1:$(CPS_DASH_PORT)
+	$(PYTHON) -m monitor.cps_dashboard --root $(OUTPUT_ROOT)/cps --port $(CPS_DASH_PORT)
+
+cps-metrics:               ## score a finished run (detection latency, deviation, energy)
+	$(PYTHON) -m monitor.cps_metrics --out-dir $(CPS_OUT) --report $(CPS_OUT)/metrics.md
+
 
 clean:
 	rm -rf output

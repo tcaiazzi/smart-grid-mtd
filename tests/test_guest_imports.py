@@ -30,10 +30,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from network_scenario.guest_files import (  # noqa: E402
+    ATTACKER_CPS_FILES,
+    ENGINE_FILES,
+    HMI_FILES,
+    PLC_FILES,
     ROUTER_FILES,
     SCMC_FILES,
     SEMP_FILES,
     SEMP_RL_FILES,
+    SENSOR_FILES,
 )
 
 # One entry per Kathara machine that receives guest files. SEMP gets both the
@@ -43,6 +48,12 @@ MACHINES = {
     "semp": SEMP_FILES + SEMP_RL_FILES,
     "scmc": SCMC_FILES,
     "router": ROUTER_FILES,
+    # Cyber-physical (OT/Modbus) scenario nodes.
+    "engine": ENGINE_FILES,
+    "plc": PLC_FILES,
+    "sensor": SENSOR_FILES,
+    "hmi": HMI_FILES,
+    "attacker_cps": ATTACKER_CPS_FILES,
 }
 
 PROJECT_PACKAGES = ("network_scenario", "defense_plane", "attack_plane", "monitor", "traffic_generator")
