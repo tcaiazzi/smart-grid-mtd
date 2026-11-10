@@ -300,3 +300,91 @@ attacker's writes, each run's metrics and the aggregate. `cps-dashboard`
 impact, the current run's phase timeline, live bus voltages with the attack and the
 first finding of each detector marked, findings by class, and the aggregated results.
 It can be started before, during or after a campaign.
+
+For the selected run, a **Topology · knowledge graph · attack tree** card draws three
+views in SVG with no libraries (`monitor/cps_graph.js`). It reads the run's `kg.json` /
+`tree.json` via `GET /api/structure?id=&run=`; every run writes both files. For runs that
+predate them, the structure is rebuilt from today's lab model and the card says so.
+- **Topology:** zones as columns, with the firewall and the sensor on their zone
+  boundaries; the sensor's passive tap is dashed. It also shows addresses, services and
+  the boundary allow rule.
+- **Knowledge graph:** all typed nodes in layers, with edges coloured by relation.
+  Hovering a node shows its attributes.
+- **Attack tree:** the state of each node (suspected / confirmed / inferred), with the
+  countermeasures that prevent (⊘) or restore (↺) it.
+
+With the responder on, the response state is overlaid on all three views:
+- implicated hosts;
+- blocked flow and attacker-write count;
+- restored / isolated hosts;
+- active impacts;
+- applied countermeasures.
+
+A time slider replays the state event by event, and the decisions are listed with their
+justification. `?view=topology|kg|tree&run=<run_id>` opens a view directly.
+
+### Response (SOAR prototype)
+
+A first end-to-end data → detection → response loop on top of the sensor
+(`defense_plane/soar/`, host-side; runtime in `network_scenario/cps_responder.py`).
+It is off by default (`CPS_RESPOND=off`), which leaves the scenario unchanged.
+
+- **Knowledge graph** (`soar/kg.py`, networkx). It is built from the Kathará Lab model:
+  hosts, zones and the `addresses` meta that `build_lab` sets on each machine, plus
+  services, the plant's registers and role permissions (`ot_registers.ROLE_POLICY`) and
+  the boundary FORWARD rules. `reachable(g, src, dst, port)` decides whether a host can
+  reach a port on another from zones, addresses and rules.
+- **Attack tree** (`soar/trees.py`). A template of the CPS chain, grounded on the graph:
+  - steps: access to the HMI's web app (T1190) → execution on the HMI (T1059) → the
+    sanctioned HMI→plant flow → one of three impacts: setpoint out of range (T0855),
+    breaker open (T0855) or MANUAL hijack (T0831);
+  - preconditions are checked on the graph, so removing the allow rule makes the
+    branch infeasible;
+  - the ATT&CK mapping still has open review notes.
+- **Countermeasures**, the defense tree. Each one *prevents* or *restores* tree nodes:
+  - `block_flow`: an iptables DROP inserted at the top of FORWARD on the firewall;
+  - `isolate_hmi`: link down on the HMI; needs operator approval;
+  - `force_auto`: back to AUTO plus the nominal setpoint;
+  - `restore_breaker`: re-close the breaker;
+  - `force_auto` and `restore_breaker` are local Modbus writes on 127.0.0.1 inside the
+    engine container, so the sensor does not see them and the plant contract is
+    unchanged.
+- **Mapping** (`soar/mapping.py`). Findings become weighted evidence on tree nodes:
+  - command-level evidence (a wrong write) is kept apart from consequence evidence
+    (the voltage left the band);
+  - once a leaf is confirmed by a wrong write, voltage-derived evidence for the other
+    leaves is discounted. An open breaker also makes the operator's routine dispatch
+    "unsafe", and that is not a hijack;
+  - the unobservable IT steps are *inferred* from an observed OT step;
+  - `CampaignState.snapshot()` is the belief handed to the policy.
+- **Policies** (`soar/policy.py`):
+  - `rules` is the static playbook and the baseline: confirmed leaf → fixed
+    countermeasures, each fired once;
+  - `solver` picks the countermeasure subset that minimises expected loss plus weighted
+    operational, time and energy cost, by exhaustive enumeration over at most 32
+    subsets, and also returns the Pareto front;
+  - every decision carries its justification: the covered tree nodes and the cost terms.
+
+```bash
+make cps-attack CPS_OUT=output/cps/resp CPS_ATTACK_MODE=manual-hijack CPS_RESPOND=rules SEED=1
+make cps-metrics CPS_OUT=output/cps/resp                 # adds a "Response" section
+make cps-replay CPS_OUT=output/cps/v2b-manual-hijack CPS_RESPOND=solver   # offline, no lab
+make cps-campaign CPS_CAMPAIGN=c-solver CPS_RESPOND=solver   # one policy per campaign
+```
+
+`CPS_APPROVAL` controls countermeasures that need an operator: `auto`, `deny` (never
+proposed) or `delay:<s>` (simulated operator latency).
+
+The responder writes these files to the run directory:
+- `response.jsonl`, with kinds `response_up`, `tree_state`, `decision`, `approval` and
+  `action` (with per-command return codes);
+- `kg.json` and `tree.json`.
+
+`cps-metrics` then reports:
+- MTM: first malicious write → plant back in band for good;
+- decision latency;
+- accuracy against the countermeasures each mode needs, plus over-response;
+- attacker writes that still succeeded after the block;
+- false responses;
+- explained-decision coverage;
+- seconds the operator HMI was cut off.

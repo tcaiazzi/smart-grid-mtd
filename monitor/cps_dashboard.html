@@ -105,6 +105,14 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
 .err { color: var(--critical); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; }
 .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
 .tabs button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.gbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 4px; }
+.gbar .tabs { margin-bottom: 0; }
+.gbar label { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+#g-time { width: min(320px, 100%); }
+.gwrap { position: relative; overflow-x: auto; }
+.gview svg.graph { display: block; width: 100%; height: auto; }
+.gwrap .tip { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
+td.wrap { white-space: normal; min-width: 280px; }
 </style>
 </head>
 <body>
@@ -143,10 +151,32 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
     </section>
   </div>
 
+  <section class="card" id="graph-card" style="margin-top:16px">
+    <h2>Topology · knowledge graph · attack tree</h2>
+    <p class="sub" id="g-sub">Select a run.</p>
+    <div class="gbar">
+      <div class="tabs" id="g-tabs" role="group" aria-label="Structure view">
+        <button type="button" data-view="topology" aria-pressed="true">Topology</button>
+        <button type="button" data-view="kg" aria-pressed="false">Knowledge graph</button>
+        <button type="button" data-view="tree" aria-pressed="false">Attack tree</button>
+      </div>
+      <label class="sub" id="g-inputs-wrap"><input type="checkbox" id="g-inputs" checked> hide input registers</label>
+      <span class="spacer"></span>
+      <label class="sub" for="g-time">response state at <b id="g-tlabel">live</b></label>
+      <input type="range" id="g-time" min="0" max="0" value="0" step="1">
+      <button type="button" id="g-live" title="Follow the latest state">Live</button>
+    </div>
+    <div class="legend" id="g-legend"></div>
+    <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
+    <h2 style="margin-top:12px">Response decisions</h2>
+    <p class="sub">Decisions taken up to the selected time, with the justification the policy gave.</p>
+    <div class="scroll"><table id="g-decisions"></table></div>
+  </section>
+
   <section class="card" style="margin-top:16px">
     <h2>Results</h2>
     <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
-    <div class="tabs" role="group" aria-label="Results table">
+    <div class="tabs" id="r-tabs" role="group" aria-label="Results table">
       <button type="button" data-tab="detection" aria-pressed="true">Detection</button>
       <button type="button" data-tab="impact" aria-pressed="false">Physical impact</button>
     </div>
@@ -154,6 +184,7 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
   </section>
 </main>
 
+<script src="graph.js"></script>
 <script>
 "use strict";
 // ── state & reducer ─────────────────────────────────────────────────────────
@@ -170,7 +201,8 @@ function runOf(id) {
   if (!S.runs[id]) {
     S.runs[id] = { id, mode: null, seed: null, status: "pending", attempt: 1, phases: [],
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
-      start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null };
+      start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
+      states: [], decisions: [], actions: [], respond: null };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -180,7 +212,8 @@ function resetRunDetail(r, ev) {
   Object.assign(r, { status: "running", attempt: ev.attempt || 1, mode: ev.mode, seed: ev.seed,
     phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, start_t: null, end_t: null, ok: null })),
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
-    duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null });
+    duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
+    states: [], decisions: [], actions: [], respond: ev.respond || null });
 }
 
 function apply(ev) {
@@ -209,6 +242,9 @@ function apply(ev) {
     case "alert": r.alerts.push(ev); break;
     case "model_fitted": r.threshold = ev.threshold; break;
     case "attack_write": r.writes.push({ t: ev.write_t || ev.t, register: ev.register_name || ev.register, value: ev.value }); break;
+    case "tree_state": r.states.push({ t: ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
+    case "decision": r.decisions.push({ t: ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
+    case "action": r.actions.push({ t: ev.t, id: ev.id, ok: ev.ok, machine: ev.machine }); break;
     case "run_retry": r.status = "retrying"; r.error = ev.error; break;
     case "run_end":
       r.end_t = ev.t; r.duration = ev.duration_s; r.error = ev.error;
@@ -293,7 +329,8 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 function render() {
   const lst = ledgerStatus();
   $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
-  renderTiles(lst); renderQueue(); renderDetail(); renderResults();
+  if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
+  renderTiles(lst); renderQueue(); renderDetail(); renderResults(); renderGraph();
 }
 
 function counts() {
@@ -555,6 +592,81 @@ function renderResults() {
   $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. Rates are shares of runs (0–1).`;
 }
 
+// ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
+const QS = new URLSearchParams(location.search);
+let wantRun = QS.get("run"), gView = ["topology", "kg", "tree"].includes(QS.get("view")) ? QS.get("view") : "topology";
+let gHideInputs = true, gTimeIdx = null, gSig = "";
+const gStruct = {};
+const gTip = {
+  show(ev, title, rows) {
+    const tip = $("g-tip"), wrap = tip.parentElement.getBoundingClientRect();
+    tip.replaceChildren(h("div", {}, h("b", {}, title)), ...rows.map(r => h("div", { class: "muted" }, r)));
+    tip.style.display = "block";
+    tip.style.left = `${Math.min(ev.clientX - wrap.left + 12, wrap.width - 300)}px`;
+    tip.style.top = `${ev.clientY - wrap.top + 12}px`;
+  },
+  hide() { $("g-tip").style.display = "none"; },
+};
+async function loadStructure(lid, id) {
+  const k = `${lid}|${id}`;
+  if (gStruct[k]) return;
+  gStruct[k] = "loading";
+  try { gStruct[k] = await getJSON(`/api/structure?id=${encodeURIComponent(lid)}&run=${encodeURIComponent(id)}`); }
+  catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
+  gSig = ""; renderGraph();
+}
+function relLabel(r, t) {
+  if (t == null) return "live";
+  const w0 = r.writes[0]?.t;
+  return w0 != null ? `${t - w0 >= 0 ? "+" : ""}${num(t - w0, 2)} s from the first malicious write`
+    : (r.start_t ? `+${dur(t - r.start_t)} into the run` : clock(t));
+}
+function renderGraph() {
+  if (!window.CPSGraph) return;
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  document.querySelectorAll("#g-tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === gView)));
+  $("g-inputs-wrap").style.display = gView === "kg" ? "" : "none";
+  if (!r) {
+    if (gSig !== "none") { gSig = "none"; $("g-sub").textContent = "Select a run."; ["g-view", "g-legend", "g-decisions"].forEach(x => $(x).replaceChildren()); }
+    return;
+  }
+  const k = `${cur.id}|${id}`, st = gStruct[k];
+  if (!st) loadStructure(cur.id, id);
+  const marks = CPSGraph.marks(r), N = marks.length;
+  const idx = gTimeIdx == null ? N : Math.min(gTimeIdx, N);
+  const t = idx >= N ? null : (idx === 0 ? (marks[0] ? marks[0].t - 1e-3 : null) : marks[idx - 1].t);
+  const slider = $("g-time");
+  slider.max = String(N); slider.value = String(idx); slider.disabled = N === 0;
+  $("g-tlabel").textContent = idx >= N ? "live" : idx === 0 ? "before the first event" : `${relLabel(r, t)} (${marks[idx - 1].kind})`;
+  const width = $("g-view").clientWidth;
+  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, gHideInputs, idx, N,
+    r.states.length, r.actions.length, r.writes.length, Math.round(width / 40)]);
+  if (sig === gSig) return;
+  gSig = sig;
+  const policy = r.respond && r.respond !== "off" ? r.respond : (r.decisions[0]?.policy || null);
+  const resp = policy ? `response policy: ${policy}` : "response: off (structure only)";
+  if (!st || st === "loading") { $("g-sub").textContent = `${resp} · loading the structure…`; return; }
+  if (st.error) { $("g-sub").textContent = `${resp} · ${st.error}`; $("g-view").replaceChildren(); return; }
+  $("g-sub").textContent = `${resp} · ${st.source === "rebuilt"
+    ? "structure rebuilt from today's lab model: this run predates kg.json, it may differ from what ran"
+    : "structure recorded with the run (kg.json, tree.json)"}`;
+  const ov = CPSGraph.overlayAt(r, t);
+  const draw = { topology: CPSGraph.drawTopology, kg: CPSGraph.drawKG, tree: CPSGraph.drawTree }[gView];
+  let legend = [];
+  try { legend = draw($("g-view"), st, ov, { width, hideInputs: gHideInputs, tip: gTip }) || []; }
+  catch (e) { $("g-view").replaceChildren(h("div", { class: "err" }, `could not draw: ${e.message}`)); }
+  $("g-legend").replaceChildren(...legend.map(([c, label]) => h("span", {}, h("span", { class: "lk", style: `background:${c};height:3px` }), label)));
+  const w0 = r.writes[0]?.t ?? r.start_t;
+  const rows = ov.decisions.map(d => h("tr", {},
+    h("td", { class: "num" }, w0 ? `${d.t - w0 >= 0 ? "+" : ""}${num(d.t - w0, 2)} s` : clock(d.t)),
+    h("td", {}, d.policy || "—"), h("td", {}, d.actions.join(", ") || "—"),
+    h("td", { class: "wrap" }, d.rationale || "—")));
+  $("g-decisions").replaceChildren(
+    h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "policy"), h("th", {}, "actions"), h("th", {}, "justification"))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" },
+      policy ? "No decision yet" : "No responder in this run"))));
+}
+
 // ── polling ─────────────────────────────────────────────────────────────────
 async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); }
 
@@ -593,7 +705,11 @@ async function pollEvents() {
 }
 
 $("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
-document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => { resultsTab = b.dataset.tab; renderResults(); }));
+document.querySelectorAll("#r-tabs button").forEach(b => b.addEventListener("click", () => { resultsTab = b.dataset.tab; renderResults(); }));
+document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
+$("g-inputs").addEventListener("change", e => { gHideInputs = e.target.checked; renderGraph(); });
+$("g-time").addEventListener("input", e => { const v = +e.target.value; gTimeIdx = v >= +e.target.max ? null : v; renderGraph(); });
+$("g-live").addEventListener("click", () => { gTimeIdx = null; renderGraph(); });
 $("theme").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
     ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

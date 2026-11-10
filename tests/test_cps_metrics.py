@@ -157,6 +157,59 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertTrue(m["recovered"])
         self.assertFalse(m["impact_ongoing_at_end"])
         self.assertAlmostEqual(m["recovery_s"], 5.0, places=3)
+        # MTM: first normal frame after the last abnormal one, from the first write.
+        self.assertAlmostEqual(m["mitigated_s"], 6.0, places=3)
+        self.assertIsNone(m["response"])          # no responder ran
+
+    def test_response_metrics(self):
+        # Responder: block at write+1.0 (a later attacker write still lands
+        # before it, one after it fails), back to AUTO at write+1.2.
+        with open(self.d / "ground_truth.jsonl", "a") as f:
+            f.write(json.dumps({"t": self.write_t + 0.8, "kind": "modbus_write",
+                                "register": 0, "value": 60.0, "ok": True}) + "\n")
+            f.write(json.dumps({"t": self.write_t + 1.5, "kind": "modbus_write",
+                                "register": 0, "value": 60.0, "ok": False}) + "\n")
+        covers = {"block_flow": {"prevents": ["pivot"], "restores": []},
+                  "force_auto": {"prevents": [], "restores": ["mode_hijack"]}}
+        end_t = 2000.0 + 60
+        _write(self.d / "response.jsonl", [
+            {"t": 2000.0, "kind": "response_up", "policy": "rules", "approval": "auto"},
+            {"t": self.write_t + 0.7, "kind": "decision", "actions": ["notify"],
+             "covers": {"notify": {"prevents": [], "restores": []}}, "rationale": "suspicion"},
+            {"t": self.write_t + 0.9, "kind": "decision", "actions": ["block_flow", "force_auto"],
+             "covers": covers, "rationale": "mode_hijack confirmed"},
+            {"t": self.write_t + 1.0, "kind": "action", "id": "block_flow", "ok": True,
+             "issued_t": self.write_t + 0.95, "done_t": self.write_t + 1.0},
+            {"t": self.write_t + 1.2, "kind": "action", "id": "force_auto", "ok": True,
+             "issued_t": self.write_t + 1.1, "done_t": self.write_t + 1.2},
+        ])
+        r = compute_metrics(str(self.d))["response"]
+        self.assertEqual(r["policy"], "rules")
+        self.assertEqual(r["actions"], ["block_flow", "force_auto"])
+        self.assertTrue(r["accurate"])
+        self.assertEqual(r["over_response"], [])
+        self.assertEqual(r["attacker_writes_after_block"], 0)   # the late write failed
+        self.assertEqual(r["false_responses"], 0)
+        self.assertEqual((r["decisions"], r["explained_decisions"]), (2, 2))
+        # first finding of the attack at write+0.6 -> first countermeasure at write+1.0
+        self.assertAlmostEqual(r["decision_latency_s"], 0.4, places=3)
+        self.assertAlmostEqual(r["hmi_unavailable_s"], end_t - (self.write_t + 1.0), places=3)
+        self.assertIn("## Response (policy: rules", format_report(compute_metrics(str(self.d))))
+
+    def test_response_inaccurate_and_false(self):
+        _write(self.d / "response.jsonl", [
+            {"t": 2000.0, "kind": "response_up", "policy": "solver", "approval": "auto"},
+            {"t": 2005.0, "kind": "action", "id": "restore_breaker", "ok": True,
+             "issued_t": 2005.0, "done_t": 2005.0},           # before the attack
+            {"t": self.write_t + 1.0, "kind": "action", "id": "block_flow", "ok": False,
+             "issued_t": self.write_t + 1.0, "done_t": self.write_t + 1.0},
+        ])
+        r = compute_metrics(str(self.d))["response"]
+        self.assertFalse(r["accurate"])                       # force_auto missing, block failed
+        self.assertEqual(r["false_responses"], 1)
+        self.assertEqual(r["over_response"], ["restore_breaker"])
+        self.assertEqual(r["failed_actions"], ["block_flow"])
+        self.assertIsNone(r["attacker_writes_after_block"])
 
 
 if __name__ == "__main__":

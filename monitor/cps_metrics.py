@@ -19,7 +19,18 @@ Impact, measured on the plant (independent of the attacker's knobs):
   - impact_ongoing_at_end  : the plant is still abnormal at the end of the run
   - recovered / recovery_s : came back in band, and how long after the impact began
   - manual_mode_s          : time control authority spent in MANUAL after the attack
+  - mitigated_s (MTM)      : first malicious write -> the plant is back in band for
+                             good (None while the impact persists)
   - max_abs_deviation_pu / v range / energy
+Response (only when <out>/response.jsonl exists — the SOAR prototype):
+  - policy, decisions, explained_decisions (coverage of the justification)
+  - decision_latency_s     : first finding of the attack -> first countermeasure done
+  - actions / failed_actions, expected_actions, accurate (expected ⊆ applied),
+    over_response (applied − expected)
+  - attacker_writes_after_block : malicious writes that still succeeded after
+                             the boundary block took effect
+  - false_responses        : countermeasures before the attack (or in a normal run)
+  - hmi_unavailable_s      : operator HMI cut off by the response
 
 Run: `python -m monitor.cps_metrics --out-dir output/cps/run-1`.
 """
@@ -110,10 +121,66 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
     }
 
 
+# Countermeasures each attack mode needs (response accuracy). The setpoint
+# attack needs no restore: the PLC rejects the value and recovers on its own.
+EXPECTED_RESPONSE = {
+    "setpoint-overvoltage": {"block_flow"},
+    "breaker-open": {"block_flow", "restore_breaker"},
+    "manual-hijack": {"block_flow", "force_auto"},
+    None: set(),
+}
+HMI_CUTTING = ("block_flow", "isolate_hmi")
+
+
+def _explained(decision):
+    acts = [a for a in decision.get("actions") or [] if a != "notify"]
+    covers = decision.get("covers") or {}
+    return bool(decision.get("rationale")) and all(
+        (covers.get(a) or {}).get("prevents") or (covers.get(a) or {}).get("restores")
+        for a in acts)
+
+
+def _response(resp, gt, findings, attack_start, mode, end_t):
+    up = next((r for r in resp if r.get("kind") == "response_up"), {})
+    decisions = [r for r in resp if r.get("kind") == "decision"]
+    actions = [r for r in resp if r.get("kind") == "action"]
+    applied = [a for a in actions if a.get("ok")]
+    applied_ids = {a["id"] for a in applied}
+    expected = EXPECTED_RESPONSE.get(mode, set())
+    hits = [e["t"] for e in findings
+            if attack_start is not None and e["t"] >= attack_start - SLACK_S]
+    real = [a for a in applied if a["id"] != "notify"]
+    first_action = min((a["done_t"] for a in real), default=None)
+    block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
+    ok_writes = [e for e in gt if e.get("kind") == "modbus_write" and e.get("ok")]
+    pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
+    return {
+        "policy": up.get("policy"),
+        "approval": up.get("approval"),
+        "decisions": len(decisions),
+        "explained_decisions": sum(1 for d in decisions if _explained(d)),
+        "explained_coverage": _rate(sum(1 for d in decisions if _explained(d)), len(decisions)),
+        "decision_latency_s": (round(first_action - min(hits), 3)
+                               if first_action is not None and hits else None),
+        "actions": sorted(applied_ids - {"notify"}),
+        "failed_actions": sorted({a["id"] for a in actions if not a.get("ok")}),
+        "expected_actions": sorted(expected),
+        "accurate": expected <= applied_ids if attack_start is not None else not pre,
+        "over_response": sorted(applied_ids - expected - {"notify"}),
+        "attacker_writes_after_block": (sum(1 for e in ok_writes if e["t"] > block_t)
+                                        if block_t is not None else None),
+        "false_responses": len(pre),
+        "hmi_unavailable_s": (round(max(0.0, end_t - block_t), 3)
+                              if block_t is not None and end_t is not None else 0.0),
+    }
+
+
 def compute_metrics(out_dir: str) -> dict:
     frames = _read_jsonl(_find(out_dir, "engine.engine_frames.jsonl", "engine_frames.jsonl"))
     events = _read_jsonl(_find(out_dir, "sensor.telemetry.jsonl", "telemetry.jsonl"))
     gt = _read_jsonl(_find(out_dir, "ground_truth.jsonl"))
+    resp_path = os.path.join(out_dir, "response.jsonl")
+    resp = _read_jsonl(resp_path) if os.path.exists(resp_path) else None
     frames.sort(key=lambda fr: fr.get("timestamp", 0))
 
     attack_start = next((e["t"] for e in gt if e.get("kind") == "attack_start"), None)
@@ -155,6 +222,13 @@ def compute_metrics(out_dir: str) -> dict:
     fitted = next((e for e in events if e.get("kind") == "model_fitted"), None)
 
     comb = per["combined"]
+    # MTM: back in band for good = the first normal frame after the last abnormal one.
+    mitigated_t = None
+    if abn and not ongoing:
+        mitigated_t = next((fr["timestamp"] for fr in win
+                            if fr.get("timestamp", 0) > last_abn and not fr.get("abnormal")), None)
+    response = (_response(resp, gt, findings, attack_start, mode,
+                          ts[-1] + dt if ts else None) if resp is not None else None)
     return {
         "attack": attack_start is not None,
         "attack_mode": mode,
@@ -178,6 +252,9 @@ def compute_metrics(out_dir: str) -> dict:
         "recovered": bool(abn) and not ongoing,
         "recovery_s": round(last_abn + dt - first_abn, 3) if abn and not ongoing else None,
         "manual_mode_s": round(manual_after, 3),
+        "mitigated_s": (round(mitigated_t - first_write, 3)
+                        if mitigated_t is not None and first_write is not None else None),
+        "response": response,
         "max_abs_deviation_pu": round(max((abs(v - V_NOMINAL) for v in vs), default=0.0), 4),
         "v_min": round(min(vs), 4) if vs else None,
         "v_max": round(max(vs), 4) if vs else None,
@@ -215,8 +292,25 @@ def format_report(m: dict) -> str:
                  f"ongoing at end={m['impact_ongoing_at_end']}, "
                  f"recovered={m['recovered']} (recovery {m['recovery_s']}s)")
     lines.append(f"- control authority in MANUAL after the attack: {m['manual_mode_s']}s")
+    lines.append(f"- mitigated (MTM, from first write): {m.get('mitigated_s')}s")
     lines.append(f"- energy: total={m['energy_kwh_total']} kWh, "
                  f"during attack={m['energy_kwh_during_attack']} kWh")
+    r = m.get("response")
+    if r:
+        lines += ["", f"## Response (policy: {r['policy']}, approval: {r['approval']})", ""]
+        lines.append(f"- countermeasures applied: {', '.join(r['actions']) or '—'} "
+                     f"(expected: {', '.join(r['expected_actions']) or '—'}; "
+                     f"accurate: {r['accurate']}; over-response: "
+                     f"{', '.join(r['over_response']) or '—'}; failed: "
+                     f"{', '.join(r['failed_actions']) or '—'})")
+        lines.append(f"- decision latency (first finding -> first countermeasure done): "
+                     f"{r['decision_latency_s']}s")
+        lines.append(f"- decisions: {r['decisions']}, explained: {r['explained_decisions']} "
+                     f"(coverage {r['explained_coverage']})")
+        lines.append(f"- attacker writes that succeeded after the block: "
+                     f"{r['attacker_writes_after_block']}")
+        lines.append(f"- false responses: {r['false_responses']}; "
+                     f"HMI unavailable: {r['hmi_unavailable_s']}s")
     return "\n".join(lines) + "\n"
 
 
@@ -281,8 +375,30 @@ def aggregate(rows):
             "impact_duration_median_s": _median(m.get("impact_duration_s") for m in runs),
             "max_dev_median_pu": _median(m.get("max_abs_deviation_pu") for m in runs),
             "manual_mode_median_s": _median(m.get("manual_mode_s") for m in runs),
+            "mitigated_median_s": _median(m.get("mitigated_s") for m in runs),
         })
-    return {"detection": detection, "impact": impact}
+    response = []
+    for mode in modes:
+        rs = [r["metrics"]["response"] for r in rows
+              if r["mode"] == mode and (r["metrics"].get("response") or None)]
+        if not rs:
+            continue
+        n = len(rs)
+        dec = sum(r.get("decisions", 0) for r in rs)
+        response.append({
+            "mode": mode, "policy": ",".join(sorted({str(r.get("policy")) for r in rs})),
+            "runs": n,
+            "accuracy": _rate(sum(1 for r in rs if r.get("accurate")), n),
+            "over_response_runs": sum(1 for r in rs if r.get("over_response")),
+            "decision_latency_median_s": _median(r.get("decision_latency_s") for r in rs),
+            "explained_coverage": _rate(sum(r.get("explained_decisions", 0) for r in rs), dec),
+            "attacker_writes_after_block_median":
+                _median(r.get("attacker_writes_after_block") for r in rs),
+            "false_responses": sum(r.get("false_responses", 0) for r in rs),
+            "failed_action_runs": sum(1 for r in rs if r.get("failed_actions")),
+            "hmi_unavailable_median_s": _median(r.get("hmi_unavailable_s") for r in rs),
+        })
+    return {"detection": detection, "impact": impact, "response": response}
 
 
 def _fmt(v):
@@ -314,6 +430,19 @@ def format_aggregate(agg) -> str:
                      f"| {_fmt(r['persists_rate'])} | {_fmt(r['recovered_rate'])} "
                      f"| {_fmt(r['time_to_impact_median_s'])} | {_fmt(r['impact_duration_median_s'])} "
                      f"| {_fmt(r['max_dev_median_pu'])} | {_fmt(r['manual_mode_median_s'])} |")
+    if agg.get("response"):
+        lines += ["", "## Response", "",
+                  "| mode | policy | runs | accuracy | over-response (runs) "
+                  "| decision latency (median s) | explained | writes after block (median) "
+                  "| false responses | failed (runs) | HMI unavailable (median s) |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+        for r in agg["response"]:
+            lines.append(f"| {r['mode']} | {r['policy']} | {r['runs']} | {_fmt(r['accuracy'])} "
+                         f"| {r['over_response_runs']} | {_fmt(r['decision_latency_median_s'])} "
+                         f"| {_fmt(r['explained_coverage'])} "
+                         f"| {_fmt(r['attacker_writes_after_block_median'])} "
+                         f"| {r['false_responses']} | {r['failed_action_runs']} "
+                         f"| {_fmt(r['hmi_unavailable_median_s'])} |")
     return "\n".join(lines) + "\n"
 
 
@@ -338,8 +467,11 @@ def write_aggregate(campaign_dir, rows=None):
     agg = aggregate(rows if rows is not None else load_campaign_rows(campaign_dir))
     with open(os.path.join(campaign_dir, "summary.md"), "w") as f:
         f.write(format_aggregate(agg))
-    for name, key in (("summary.csv", "detection"), ("impact.csv", "impact")):
-        table = agg[key]
+    for name, key in (("summary.csv", "detection"), ("impact.csv", "impact"),
+                      ("response.csv", "response")):
+        table = agg.get(key) or []
+        if key == "response" and not table:
+            continue
         with open(os.path.join(campaign_dir, name), "w", newline="") as f:
             if table:
                 w = csv.DictWriter(f, fieldnames=list(table[0]))

@@ -79,6 +79,9 @@ class Grammar(unittest.TestCase):
         n = cc.run_args(cfg("/tmp"), {"run_id": "normal-s1", "mode": "normal", "seed": 1,
                                       "attack": False}, "/y")
         self.assertFalse(n.attack)
+        self.assertEqual((a.respond, a.approval), ("off", "auto"))   # default: no responder
+        r = cc.run_args(cfg("/tmp", respond="solver", approval="delay:2"), e, "/x")
+        self.assertEqual((r.respond, r.approval), ("solver", "delay:2"))
 
 
 class Campaign(unittest.TestCase):

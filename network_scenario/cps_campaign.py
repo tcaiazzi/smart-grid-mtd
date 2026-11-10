@@ -89,7 +89,11 @@ def run_args(cfg, entry, out_dir):
         attack_repeat=None, attack_interval=0.5,
         post_attack_duration=cfg.post_attack_duration,
         dashboard_port=cfg.dashboard_port, poll_interval=cfg.poll_interval,
-        progress_file=None)
+        progress_file=None,
+        # One response policy per campaign: compare policies across campaigns.
+        respond=getattr(cfg, "respond", "off"),
+        respond_interval=getattr(cfg, "respond_interval", 0.5),
+        approval=getattr(cfg, "approval", "auto"))
 
 
 def _default_run_fn(args, progress):
@@ -216,6 +220,10 @@ def main():
     ap.add_argument("--detectors", default="rules,model")
     ap.add_argument("--poll-interval", type=float, default=2.0)
     ap.add_argument("--dashboard-port", type=int, default=0)
+    ap.add_argument("--respond", default="off", choices=("off", "rules", "solver"),
+                    help="response policy for every run of the campaign (SOAR prototype)")
+    ap.add_argument("--respond-interval", type=float, default=0.5)
+    ap.add_argument("--approval", default="auto", help="auto | deny | delay:<seconds>")
     ap.add_argument("--retries", type=int, default=1)
     ap.add_argument("--no-resume", dest="resume", action="store_false")
     ap.add_argument("--dry-run", action="store_true")

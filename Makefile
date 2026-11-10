@@ -175,7 +175,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -521,6 +521,11 @@ CPS_CAMPAIGN     ?= $(shell date +%Y%m%d-%H%M)
 CPS_SEEDS        ?= 1-5
 CPS_MODES        ?= normal,setpoint-overvoltage,breaker-open,manual-hijack
 CPS_DASH_PORT    ?= 8765
+# SOAR prototype: response policy (off | rules | solver) and operator approval
+# for high-impact countermeasures (auto | deny | delay:<s>).
+CPS_RESPOND      ?= off
+CPS_APPROVAL     ?= auto
+CPS_RESPOND_FLAGS := --respond $(CPS_RESPOND) --approval $(CPS_APPROVAL)
 
 cps-image:                 ## build the OT node image (pandapower + pymodbus)
 	docker build -t kathara/cps docker/cps/
@@ -529,7 +534,9 @@ cps-selftest:              ## CPS physics, Modbus, PLC, sensor rules+model, atta
 	$(PYTHON) -m unittest -v tests.test_grid_sim tests.test_modbus_roundtrip \
 		tests.test_plc_control tests.test_ot_sensor tests.test_ot_model \
 		tests.test_active_attack tests.test_cps_topology tests.test_cps_metrics \
-		tests.test_progress tests.test_cps_campaign tests.test_cps_dashboard
+		tests.test_progress tests.test_cps_campaign tests.test_cps_dashboard \
+		tests.test_soar_kg tests.test_soar_trees tests.test_soar_mapping \
+		tests.test_soar_policy tests.test_cps_responder
 
 cps-engine:                ## run engine + PLC locally over loopback Modbus (Ctrl-C to stop)
 	@echo "Start the engine and PLC in two shells:"
@@ -540,27 +547,31 @@ cps-lab:                   ## deploy the 3-zone lab, normal operation only
 	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS)
 
 cps-attack:                ## deploy the lab and drive the active attack chain (CPS_ATTACK_MODE)
 	$(PYTHON) -m network_scenario.cps_experiment --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --post-attack-duration $(CPS_POST) \
 		--step-interval $(CPS_STEP) --attack --attack-mode $(CPS_ATTACK_MODE) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS)
 
 cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + aggregated (resumable)
 	$(PYTHON) -m network_scenario.cps_campaign --name $(CPS_CAMPAIGN) \
 		--modes $(CPS_MODES) --seeds $(CPS_SEEDS) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--post-attack-duration $(CPS_POST) --step-interval $(CPS_STEP) \
-		--detectors $(CPS_DETECTORS) $(if $(DRY),--dry-run)
+		--detectors $(CPS_DETECTORS) $(CPS_RESPOND_FLAGS) $(if $(DRY),--dry-run)
 
 cps-dashboard:             ## progress dashboard for CPS runs/campaigns on http://127.0.0.1:$(CPS_DASH_PORT)
 	$(PYTHON) -m monitor.cps_dashboard --root $(OUTPUT_ROOT)/cps --port $(CPS_DASH_PORT)
 
-cps-metrics:               ## score a finished run (detection latency, deviation, energy)
+cps-metrics:               ## score a finished run (detection, impact, response)
 	$(PYTHON) -m monitor.cps_metrics --out-dir $(CPS_OUT) --report $(CPS_OUT)/metrics.md
+
+cps-replay:                ## what a response policy WOULD have done on a finished run (CPS_RESPOND)
+	$(PYTHON) -m network_scenario.cps_responder --replay $(CPS_OUT) \
+		--policy $(if $(filter off,$(CPS_RESPOND)),rules,$(CPS_RESPOND)) --approval $(CPS_APPROVAL)
 
 
 clean:

@@ -274,7 +274,7 @@ WP3  Defense orchestration        ##############################
  T3.3 Policy solver                         ================
  T3.4 Orchestrazione                          ==============
  T3.5 Validazione TRL5                                  ========
-Supporto WP4/WP6/WP7                                          ..................
+Supporto WP4/WP6/WP7                                      ..................
 Milestone                             ^     ^     ^     ^     ^
                                      MS1   MS2   MS3   MS4   MS5
 ```

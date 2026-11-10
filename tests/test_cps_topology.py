@@ -59,6 +59,17 @@ class Topology(unittest.TestCase):
         # No IP on the OT subnet -> unreachable from OT while still sniffing it.
         self.assertFalse(any("10.20." in c for c in cmds))
 
+    def test_addresses_meta_matches_startups(self):
+        for name, mach in self.m.items():
+            meta = mach.meta.get("addresses")
+            self.assertEqual(meta, cps.ADDRESSES[name], name)
+            for iface, cidr in meta.items():
+                self.assertIn(f"ip address add {cidr} dev {iface}", self.startups[name])
+                # Every addressed interface exists on the Lab model.
+                self.assertIn(int(iface[3:]), mach.interfaces, f"{name} {iface}")
+        # The sensor's passive OT NIC carries no address.
+        self.assertNotIn("eth0", self.m["sensor"].meta["addresses"])
+
     def test_authorized_writer_is_plc(self):
         # The sensor must treat the PLC as the only legitimate writer.
         self.assertEqual(cps.PLC_IP, "10.20.0.10")

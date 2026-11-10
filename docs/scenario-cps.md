@@ -188,12 +188,27 @@ Una valutazione statistica su più seed è affidata alle campagne.
 ## 9. Perimetro e sviluppi futuri
 
 Lo scenario copre le fasi **1–4** del prototipo: fondamenta, emulazione OT,
-confine IT/OT e rilevamento. Restano **fuori perimetro**, per un successivo
-rilascio:
+confine IT/OT e rilevamento.
 
-- orchestrazione SOAR e risposta automatica al confine;
-- approvazione dell'operatore nel ciclo di risposta;
-- knowledge graph degli asset e degli eventi.
+Sopra queste fasi c'è ora un **primo prototipo di risposta**
+(`defense_plane/soar/`, attivabile con `CPS_RESPOND=rules|solver`; dettagli nel
+README, sezione "Response (SOAR prototype)"). Comprende:
+
+- un knowledge graph del lab;
+- l'albero di attacco della catena;
+- il mapping dai finding ai nodi dell'albero;
+- le contromisure eseguibili nel lab;
+- due policy: un playbook a regole fisse e un primo risolutore a costo
+  atteso;
+- un'approvazione dell'operatore simulata.
+
+È un prototipo in piccolo, pensato per fissare le interfacce di WP2 e WP3
+(vedi [piano-wp2-wp3.md](piano-wp2-wp3.md)). Restano da fare:
+
+- la generazione automatica degli alberi;
+- il modello a gioco stocastico;
+- la misura energetica reale delle contromisure;
+- un nodo SOAR dentro il lab al posto del risponditore lato host.
 
 ## 10. Riferimenti rapidi
 

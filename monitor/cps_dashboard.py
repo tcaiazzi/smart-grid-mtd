@@ -10,11 +10,17 @@ ThreadingHTTPServer, the page polls, no CDN), but over files on the host.
 
 Endpoints:
   GET /                         the page
+  GET /graph.js                 topology / knowledge-graph / attack-tree drawing
   GET /api/ledgers              [{id, kind, name, status, …}] newest first
   GET /api/events?id=&since=    {"next": seq, "events": [...]} (seq >= since)
+  GET /api/structure?id=&run=   {"source": "recorded"|"rebuilt", "kg", "tree"}
+                                — the run's kg.json / tree.json (SOAR prototype);
+                                rebuilt from the current lab model when the run
+                                predates them
 
 Only ledgers discovered under --root are served (the id is looked up, never
-joined into a path), and the server binds 127.0.0.1 by default.
+joined into a path); a run is served only if the ledger names it, and its
+directory must resolve under --root. The server binds 127.0.0.1 by default.
 
 Run: python -m monitor.cps_dashboard --root output/cps --port 8765
 """
@@ -22,12 +28,16 @@ Run: python -m monitor.cps_dashboard --root output/cps --port 8765
 import argparse
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cps_dashboard.html")
+GRAPH_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cps_graph.js")
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+STRUCTURE_FILES = ("kg.json", "tree.json")
 LEDGER_NAME = "progress.jsonl"
 STALE_S = 30.0          # an unfinished ledger idle this long is "interrupted"
 
@@ -106,6 +116,8 @@ class LedgerStore:
         self.root = os.path.abspath(root)
         self._lock = threading.Lock()
         self._ledgers = {}           # id (relative path) -> _Ledger
+        self._structures = {}        # (run dir, mtimes) -> loaded structure
+        self._rebuilt = None
 
     def discover(self):
         found = {}
@@ -159,6 +171,79 @@ class LedgerStore:
         return {"next": nxt, "events": evs}
 
 
+    # ── run structure (kg.json / tree.json) ─────────────────────────────────
+    def run_dir(self, lid, run_id):
+        """Directory of run ``run_id`` of ledger ``lid``, or None. The run must
+        be named by the ledger's own events; a campaign keeps its runs under
+        runs/<run_id>/, a standalone run lives next to its ledger."""
+        if not run_id or not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+            return None
+        led = self.get(lid)
+        if led is None:
+            self.discover()
+            led = self.get(lid)
+        if led is None:
+            return None
+        with self._lock:
+            events = list(led.events)
+        known = {e.get("run_id") for e in events if e.get("run_id")}
+        base = os.path.dirname(led.path)
+        if events and events[0].get("kind") == "campaign_start":
+            if run_id not in known:
+                return None
+            d = os.path.join(base, "runs", run_id)
+        else:
+            if run_id not in known | {os.path.basename(base)}:
+                return None
+            d = base
+        real, root = os.path.realpath(d), os.path.realpath(self.root)
+        if real != root and not real.startswith(root + os.sep):
+            return None
+        return d
+
+    def structure(self, lid, run_id):
+        """{"source", "kg", "tree"} for a run; None if the run is unknown;
+        {"error": ...} if it has no recorded structure and none can be built."""
+        d = self.run_dir(lid, run_id)
+        if d is None:
+            return None
+        paths = [os.path.join(d, f) for f in STRUCTURE_FILES]
+        try:
+            key = (d,) + tuple(os.path.getmtime(p) for p in paths)
+        except OSError:
+            return self.rebuilt_structure()
+        with self._lock:
+            hit = self._structures.get(key)
+        if hit is None:
+            try:
+                loaded = []
+                for p in paths:
+                    with open(p) as f:
+                        loaded.append(json.load(f))
+            except (OSError, json.JSONDecodeError):
+                return self.rebuilt_structure()
+            hit = {"source": "recorded", "kg": loaded[0], "tree": loaded[1]}
+            with self._lock:
+                self._structures = {k: v for k, v in self._structures.items() if k[0] != d}
+                self._structures[key] = hit
+        return hit
+
+    def rebuilt_structure(self):
+        """The current lab's structure, for runs recorded before kg.json existed.
+        Imported lazily: it pulls in networkx and the Kathará lab model."""
+        if self._rebuilt is None:
+            try:
+                from defense_plane.soar import kg as soar_kg
+                from defense_plane.soar import trees as soar_trees
+                g = soar_kg.build_cps_kg()
+                self._rebuilt = {"source": "rebuilt", "kg": soar_kg.to_json(g),
+                                 "tree": soar_trees.to_json(soar_trees.cps_attack_tree(g),
+                                                            soar_trees.cps_countermeasures(g))}
+            except Exception as e:   # no networkx / Kathará on this host
+                return {"error": f"no recorded structure and it cannot be rebuilt: {e}"}
+        return self._rebuilt
+
+
 class ProgressDashboard:
     def __init__(self, root, port=8765, host="127.0.0.1", page=PAGE):
         self.store = LedgerStore(root)
@@ -194,6 +279,20 @@ class ProgressDashboard:
                             self._send(f.read(), "text/html; charset=utf-8")
                     except OSError:
                         self.send_error(404, "cps_dashboard.html missing")
+                elif url.path == "/graph.js":
+                    try:
+                        with open(GRAPH_JS, "rb") as f:
+                            self._send(f.read(), "text/javascript; charset=utf-8")
+                    except OSError:
+                        self.send_error(404, "cps_graph.js missing")
+                elif url.path == "/api/structure":
+                    res = server.store.structure(q.get("id", [""])[0], q.get("run", [""])[0])
+                    if res is None:
+                        self.send_error(404, "unknown run")
+                    elif "error" in res:
+                        self.send_error(404, res["error"][:200])
+                    else:
+                        self._json(res)
                 elif url.path == "/api/ledgers":
                     self._json({"root": server.store.root, "now": time.time(),
                                 "ledgers": server.store.listing()})

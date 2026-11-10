@@ -52,6 +52,7 @@ from network_scenario.run_experiment import (
 from network_scenario.detection_scenario import GroundTruth
 from attack_plane import active_attack
 from monitor.progress import ProgressLog
+from network_scenario import cps_responder
 
 log = logging.getLogger("cps_experiment")
 
@@ -69,6 +70,18 @@ SENSOR_DEF_IP = "10.30.0.10"
 IT_NET, OT_NET, DEF_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT  = 5020
 APP_PORT     = 8080
+# Interface addresses per machine: the single source for the startup files and
+# for the "addresses" meta that build_lab puts on each Machine, so tools that
+# walk the Lab model (e.g. the SOAR knowledge graph) need not parse commands.
+# The sensor's OT NIC (eth0) is passive and deliberately has no address.
+ADDRESSES = {
+    "attacker": {"eth0": f"{ATTACKER_IP}/24"},
+    "hmi":      {"eth0": f"{HMI_IP}/24"},
+    "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24"},
+    "plc":      {"eth0": f"{PLC_IP}/24"},
+    "engine":   {"eth0": f"{ENGINE_IP}/24"},
+    "sensor":   {"eth1": f"{SENSOR_DEF_IP}/24"},
+}
 DASHBOARD_GUEST_PORT = 8080
 ATTACK_MODES = ("setpoint-overvoltage", "breaker-open", "manual-hijack")
 LEARN_MARGIN_S = 5.0   # the model's calibration must end this long before the attack
@@ -134,25 +147,22 @@ def build_lab(args):
 
     # Startup (interface/route setup + the boundary ruleset). Kept in a dict so
     # the exact commands are inspectable/testable without materialising the fs.
+    def addr(name):
+        return [f"ip address add {cidr} dev {iface}"
+                for iface, cidr in ADDRESSES[name].items()]
+
     startups = {
-        "attacker": [
-            f"ip address add {ATTACKER_IP}/24 dev eth0",
+        "attacker": addr("attacker") + [
             f"ip route add default via {FW_IT_IP} dev eth0",
         ],
-        "hmi": [
-            f"ip address add {HMI_IP}/24 dev eth0",
+        "hmi": addr("hmi") + [
             f"ip route add default via {FW_IT_IP} dev eth0",
         ],
-        "firewall": [
-            f"ip address add {FW_IT_IP}/24 dev eth0",
-            f"ip address add {FW_OT_IP}/24 dev eth1",
-        ] + firewall_rules(),
-        "plc": [
-            f"ip address add {PLC_IP}/24 dev eth0",
+        "firewall": addr("firewall") + firewall_rules(),
+        "plc": addr("plc") + [
             f"ip route add default via {FW_OT_IP} dev eth0",
         ],
-        "engine": [
-            f"ip address add {ENGINE_IP}/24 dev eth0",
+        "engine": addr("engine") + [
             f"ip route add default via {FW_OT_IP} dev eth0",
         ],
         # Sensor: passive promiscuous NIC on OT (no IP -> unreachable from OT),
@@ -160,8 +170,7 @@ def build_lab(args):
         "sensor": [
             "ip link set eth0 promisc on",
             "ip link set eth0 up",
-            f"ip address add {SENSOR_DEF_IP}/24 dev eth1",
-        ],
+        ] + addr("sensor"),
     }
     machines = {
         "attacker": attacker, "hmi": hmi, "firewall": firewall,
@@ -169,6 +178,8 @@ def build_lab(args):
     }
     for name, cmds in startups.items():
         lab.create_startup_file_from_list(machines[name], cmds)
+        # Plain dict meta: Kathará stores unknown meta keys verbatim.
+        machines[name].add_meta("addresses", dict(ADDRESSES[name]))
 
     return lab, machines, startups
 
@@ -181,6 +192,10 @@ def validate_args(args):
             f"--normal-duration ({args.normal_duration}s) must be >= --learn-seconds "
             f"({args.learn_seconds}s) + {LEARN_MARGIN_S}s: the sensor's model calibrates "
             f"on the first --learn-seconds and must not see the attack")
+    try:
+        cps_responder.parse_approval(getattr(args, "approval", "auto"))
+    except ValueError as e:
+        raise SystemExit(f"--approval: {e}")
 
 
 def planned_phases(args):
@@ -233,7 +248,8 @@ def run(args, progress=None):
     emit("run_start", mode=args.attack_mode if attack else "normal", seed=args.seed,
          attack=attack, out_dir=args.out_dir, learn_s=args.learn_seconds,
          poll_s=getattr(args, "poll_interval", DEFAULT_POLL_S),
-         phases=planned_phases(args), planned_s=planned_run_s(args))
+         phases=planned_phases(args), planned_s=planned_run_s(args),
+         respond=getattr(args, "respond", "off") or "off")
 
     t0 = time.time()
     status, error = "failed", None
@@ -242,6 +258,7 @@ def run(args, progress=None):
         manager = Kathara.get_instance()
         Setting.get_instance().load_from_dict({"network_plugin": "kathara/katharanp_vde"})
         lab, m, _startups = build_lab(args)
+        _write_structure(lab, args.out_dir)
         with phase(emit, "deploy"):
             log.info("Undeploying any existing lab")
             manager.undeploy_lab(lab=lab)
@@ -266,6 +283,16 @@ def run(args, progress=None):
         emit("run_end", status=status, duration_s=round(time.time() - t0, 3), error=error)
         if own:
             ledger.close()
+
+
+def _write_structure(lab, out_dir):
+    """kg.json / tree.json for the progress dashboard, on every run (the
+    responder rewrites the same content when it is on). Never fails a run."""
+    try:
+        from defense_plane.soar import kg as soar_kg
+        cps_responder.write_structure(out_dir, soar_kg.build_cps_kg(lab))
+    except Exception as e:
+        log.warning("could not write the lab structure (kg.json/tree.json): %s", e)
 
 
 def _exec_text(manager, machine, cmd):
@@ -383,33 +410,50 @@ def _run_episode(manager, m, args, emit):
         manager.exec_obj(m["hmi"], with_console_log(
             f"python3 vuln_app.py --host 0.0.0.0 --port {APP_PORT}", "vuln_app.log"), wait=False)
 
-    log.info("Normal operation for %.0fs (model calibration: first %.0fs)",
-             args.normal_duration, args.learn_seconds)
-    with phase(emit, "normal", learn_s=args.learn_seconds):
-        _observe(manager, m, args.normal_duration, emit, live, poll_s)
+    # Response loop (SOAR prototype): its own thread, because the attack phase
+    # blocks this one. Off by default — the scenario is unchanged without it.
+    responder = None
+    respond = getattr(args, "respond", "off") or "off"
+    if respond != "off":
+        responder = cps_responder.Responder(
+            manager, m, respond, args.out_dir, emit=emit,
+            interval=getattr(args, "respond_interval", 0.5),
+            approval=getattr(args, "approval", "auto"))
+        responder.start()
+        log.info("Responder up: policy=%s approval=%s", respond, getattr(args, "approval", "auto"))
 
-    gt_path = os.path.join(args.out_dir, "ground_truth.jsonl")
-    gt = GroundTruth(gt_path)
-    gt.record("run_meta", scenario="cps", seed=args.seed, attack=bool(args.attack),
-              attack_mode=args.attack_mode, engine_ip=ENGINE_IP, plc_ip=PLC_IP,
-              hmi_ip=HMI_IP, authorized_writer=PLC_IP, learn_seconds=args.learn_seconds,
-              detectors=args.detectors)
     try:
-        if args.attack:
-            with phase(emit, "attack", mode=args.attack_mode):
-                active_attack.drive_attack(
-                    manager, m["attacker"], gt,
-                    target_url=f"http://{HMI_IP}:{APP_PORT}",
-                    engine_ip=ENGINE_IP, engine_port=MODBUS_PORT,
-                    attack_mode=args.attack_mode, repeat=args.attack_repeat,
-                    interval=args.attack_interval)
-            _emit_attack_writes(gt_path, emit)
-            log.info("Post-attack observation for %.0fs", args.post_attack_duration)
-            with phase(emit, "post_attack"):
-                _observe(manager, m, args.post_attack_duration, emit, live, poll_s)
+        log.info("Normal operation for %.0fs (model calibration: first %.0fs)",
+                 args.normal_duration, args.learn_seconds)
+        with phase(emit, "normal", learn_s=args.learn_seconds):
+            _observe(manager, m, args.normal_duration, emit, live, poll_s)
+
+        gt_path = os.path.join(args.out_dir, "ground_truth.jsonl")
+        gt = GroundTruth(gt_path)
+        gt.record("run_meta", scenario="cps", seed=args.seed, attack=bool(args.attack),
+                  attack_mode=args.attack_mode, engine_ip=ENGINE_IP, plc_ip=PLC_IP,
+                  hmi_ip=HMI_IP, authorized_writer=PLC_IP, learn_seconds=args.learn_seconds,
+                  detectors=args.detectors, respond=respond,
+                  approval=getattr(args, "approval", "auto"))
+        try:
+            if args.attack:
+                with phase(emit, "attack", mode=args.attack_mode):
+                    active_attack.drive_attack(
+                        manager, m["attacker"], gt,
+                        target_url=f"http://{HMI_IP}:{APP_PORT}",
+                        engine_ip=ENGINE_IP, engine_port=MODBUS_PORT,
+                        attack_mode=args.attack_mode, repeat=args.attack_repeat,
+                        interval=args.attack_interval)
+                _emit_attack_writes(gt_path, emit)
+                log.info("Post-attack observation for %.0fs", args.post_attack_duration)
+                with phase(emit, "post_attack"):
+                    _observe(manager, m, args.post_attack_duration, emit, live, poll_s)
+        finally:
+            gt.record("run_end")
+            gt.close()
     finally:
-        gt.record("run_end")
-        gt.close()
+        if responder is not None:
+            responder.stop()
 
 
 def _download_artifacts(manager, m, out_dir, attack=True):
@@ -453,6 +497,13 @@ def main():
                          "(0 = no live view)")
     ap.add_argument("--progress-file", default=None,
                     help="progress ledger path (default <out-dir>/progress.jsonl)")
+    ap.add_argument("--respond", default="off", choices=cps_responder.POLICIES,
+                    help="response policy driving countermeasures in the lab (SOAR prototype)")
+    ap.add_argument("--respond-interval", type=float, default=0.5,
+                    help="seconds between the responder's sensor pulls")
+    ap.add_argument("--approval", default="auto",
+                    help="operator approval for high-impact countermeasures: "
+                         "auto | deny | delay:<seconds>")
     args = ap.parse_args()
     run(args)
 

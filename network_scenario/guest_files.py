@@ -81,6 +81,9 @@ ENGINE_FILES = [
     ("traffic_generator/agents/modbus_engine.py", "/modbus_engine.py"),
     ("traffic_generator/agents/grid_sim.py", "/grid_sim.py"),
     ("defense_plane/ot_registers.py", "/ot_registers.py"),
+    # Stdlib Modbus writer, reused defensively: the SOAR prototype's local
+    # override (back to AUTO, re-close the breaker) writes on 127.0.0.1 here.
+    ("attack_plane/agents/ot_write.py", "/ot_write.py"),
 ]
 
 # PLC node: Modbus master / controller (the legitimate industrial traffic).

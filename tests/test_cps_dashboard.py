@@ -17,6 +17,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def write_campaign(root, name, finish=True, done=2):
     return os.path.join(root, "campaigns", name, "progress.jsonl")
 
 
-class Server(unittest.TestCase):
+class _Fixture(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="cps-dash-")
         self.done = write_campaign(self.root, "finished")
@@ -72,6 +73,7 @@ class Server(unittest.TestCase):
     def ledgers(self):
         return {l["id"]: l for l in json.loads(self.get("/api/ledgers")[2])["ledgers"]}
 
+class Server(_Fixture):
     def test_discovery_and_status(self):
         ls = self.ledgers()
         ids = {os.path.join("campaigns", n, "progress.jsonl") for n in ("finished", "live", "dead")}
@@ -120,6 +122,59 @@ class Server(unittest.TestCase):
         self.assertIn(b"CPS experiment progress", body)
         for ext in (b'src="http', b"src='http", b'href="http', b"@import"):
             self.assertNotIn(ext, body)                            # self-contained, no CDN
+
+
+class Structure(_Fixture):
+    """GET /api/structure: a run's kg.json / tree.json, resolved safely."""
+
+    KG = {"directed": True, "multigraph": True, "graph": {},
+          "nodes": [{"id": "host:hmi", "type": "host"}], "links": []}
+    TREE = {"attack_tree": {"id": "impact", "children": []}, "defense": {},
+            "countermeasures": []}
+
+    def put(self, d):
+        os.makedirs(d, exist_ok=True)
+        for name, obj in (("kg.json", self.KG), ("tree.json", self.TREE)):
+            with open(os.path.join(d, name), "w") as f:
+                json.dump(obj, f)
+
+    def structure(self, lid, run):
+        q = urllib.parse.urlencode({"id": lid, "run": run})
+        return json.loads(self.get("/api/structure?" + q)[2])
+
+    def test_recorded_campaign_run(self):
+        self.put(os.path.join(self.root, "campaigns", "finished", "runs", "manual-hijack-s1"))
+        res = self.structure("campaigns/finished/progress.jsonl", "manual-hijack-s1")
+        self.assertEqual(res["source"], "recorded")
+        self.assertEqual(res["kg"]["nodes"][0]["id"], "host:hmi")
+        self.assertEqual(res["tree"]["attack_tree"]["id"], "impact")
+
+    def test_recorded_standalone_run(self):
+        self.put(os.path.join(self.root, "manual-run"))
+        res = self.structure("manual-run/progress.jsonl", "manual-run")
+        self.assertEqual(res["source"], "recorded")
+
+    def test_missing_files_are_rebuilt(self):
+        res = self.structure("campaigns/finished/progress.jsonl", "normal-s1")
+        self.assertEqual(res["source"], "rebuilt")
+        ids = {n["id"] for n in res["kg"]["nodes"]}
+        self.assertIn("host:firewall", ids)
+        self.assertEqual(res["tree"]["attack_tree"]["id"], "impact")
+
+    def test_unknown_or_traversing_runs_refused(self):
+        lid = "campaigns/finished/progress.jsonl"
+        for run in ("nope-s9", "../live", "..", "manual-hijack-s1/../../live", ""):
+            with self.assertRaises(urllib.error.HTTPError, msg=run) as cm:
+                self.structure(lid, run)
+            self.assertEqual(cm.exception.code, 404)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.structure("../../etc/progress.jsonl", "x")
+
+    def test_graph_js_served(self):
+        status, ctype, body = self.get("/graph.js")
+        self.assertEqual(status, 200)
+        self.assertIn("javascript", ctype)
+        self.assertIn(b"drawTopology", body)
 
 
 class Summary(unittest.TestCase):
