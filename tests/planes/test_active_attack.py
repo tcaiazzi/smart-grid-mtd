@@ -21,28 +21,32 @@ import time
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
-from tests.helpers import guest_paths       # noqa: E402
+from tests.helpers import guest_paths  # noqa: E402
 
 AGENTS_T = guest_paths.TRAFFIC_AGENTS
 AGENTS_A = guest_paths.ATTACK_AGENTS
 sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(AGENTS_A))
 
-import ot_registers as reg          # noqa: E402
-from cyberrange.planes.attack.active_attack import parse_exploit_events   # noqa: E402
+import ot_registers as reg  # noqa: E402
+from cyberrange.planes.attack.active_attack import parse_exploit_events  # noqa: E402
 
 try:
     from pymodbus.client import ModbusTcpClient
-    import exploit_client            # noqa: E402  (imports ot_registers)
+    import exploit_client  # noqa: E402  (imports ot_registers)
+
     HAVE = True
 except Exception:
     HAVE = False
 
 
 def _free_port():
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
 
 
 def _wait_port(port, timeout=15.0):
@@ -74,15 +78,32 @@ class ActiveAttackChain(unittest.TestCase):
         self.eng_port = _free_port()
         self.app = subprocess.Popen(
             [sys.executable, "vuln_app.py", "--port", str(self.app_port)],
-            cwd=str(self.stage), env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cwd=str(self.stage),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         eng_env = dict(os.environ)
         eng_env["PYTHONPATH"] = os.pathsep.join([str(AGENTS_T), str(guest_paths.DEFENSE)])
         self.engine = subprocess.Popen(
-            [sys.executable, "-m", "modbus_engine", "--port", str(self.eng_port),
-             "--interval", "0.3", "--duration", "25", "--seed", "7"],
-            cwd=str(AGENTS_T), env=eng_env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            [
+                sys.executable,
+                "-m",
+                "modbus_engine",
+                "--port",
+                str(self.eng_port),
+                "--interval",
+                "0.3",
+                "--duration",
+                "25",
+                "--seed",
+                "7",
+            ],
+            cwd=str(AGENTS_T),
+            env=eng_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.assertTrue(_wait_port(self.app_port), "vuln_app did not start")
         self.assertTrue(_wait_port(self.eng_port), "engine did not start")
         time.sleep(0.6)
@@ -102,15 +123,16 @@ class ActiveAttackChain(unittest.TestCase):
         out = exploit_client.rce(url, "echo PWNED-$((6*7))")
         self.assertIn("PWNED-42", out)
 
-        # engine normal before the attack
-        c = ModbusTcpClient("127.0.0.1", port=self.eng_port); self.assertTrue(c.connect())
+        # Engine normal before the attack.
+        c = ModbusTcpClient("127.0.0.1", port=self.eng_port)
+        self.assertTrue(c.connect())
         try:
             rr = c.read_input_registers(0, reg.SENSOR_COUNT, slave=reg.UNIT_ID)
             self.assertEqual(rr.registers[reg.IR_ABNORMAL], 0)
 
             # 2+3) pivot + manipulate: app server writes the DG setpoint out of range
             raw = reg.encode(200.0, reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1])
-            poke = f"python3 ot_write.py 127.0.0.1 {self.eng_port} {reg.HR_DG_SETPOINT} {raw} {reg.UNIT_ID}"
+            poke = f"python3 ot_write.py 127.0.0.1 {self.eng_port} {reg.HR_DG_SETPOINT} {raw} {reg.UNIT_ID}"  # noqa: E501  (verbatim fixture: wrapping changes the data)
             abnormal = False
             for _ in range(10):
                 resp = exploit_client.rce(url, poke)
@@ -144,22 +166,62 @@ class AttackVsPLC(unittest.TestCase):
         eng_env = dict(os.environ)
         eng_env["PYTHONPATH"] = os.pathsep.join([str(AGENTS_T), str(guest_paths.DEFENSE)])
         self.app_port, self.eng_port = _free_port(), _free_port()
-        self.procs = [subprocess.Popen(
-            [sys.executable, "vuln_app.py", "--port", str(self.app_port)], cwd=str(self.stage),
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
-        self.procs.append(subprocess.Popen(
-            [sys.executable, "-m", "modbus_engine", "--port", str(self.eng_port),
-             "--interval", str(self.STEP), "--duration", "40", "--seed", "7"],
-            cwd=str(AGENTS_T), env=eng_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.procs = [
+            subprocess.Popen(
+                [sys.executable, "vuln_app.py", "--port", str(self.app_port)],
+                cwd=str(self.stage),
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        ]
+        self.procs.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "modbus_engine",
+                    "--port",
+                    str(self.eng_port),
+                    "--interval",
+                    str(self.STEP),
+                    "--duration",
+                    "40",
+                    "--seed",
+                    "7",
+                ],
+                cwd=str(AGENTS_T),
+                env=eng_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
         self.assertTrue(_wait_port(self.app_port), "vuln_app did not start")
         self.assertTrue(_wait_port(self.eng_port), "engine did not start")
-        self.procs.append(subprocess.Popen(
-            [sys.executable, "-m", "plc_controller", "--engine-host", "127.0.0.1",
-             "--port", str(self.eng_port), "--interval", str(self.STEP), "--duration", "40"],
-            cwd=str(AGENTS_T), env=eng_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        self.procs.append(
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "plc_controller",
+                    "--engine-host",
+                    "127.0.0.1",
+                    "--port",
+                    str(self.eng_port),
+                    "--interval",
+                    str(self.STEP),
+                    "--duration",
+                    "40",
+                ],
+                cwd=str(AGENTS_T),
+                env=eng_env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        )
         self.c = ModbusTcpClient("127.0.0.1", port=self.eng_port)
         self.assertTrue(self.c.connect())
-        time.sleep(1.5)   # PLC settles at nominal
+        time.sleep(1.5)  # PLC settles at nominal
 
     def tearDown(self):
         self.c.close()
@@ -174,19 +236,34 @@ class AttackVsPLC(unittest.TestCase):
     def state(self):
         ir = self.c.read_input_registers(0, reg.SENSOR_COUNT, slave=reg.UNIT_ID).registers
         hr = self.c.read_holding_registers(0, reg.ACTUATOR_COUNT, slave=reg.UNIT_ID).registers
-        return {"abnormal": ir[reg.IR_ABNORMAL],
-                "mode": hr[reg.HR_CTRL_MODE],
-                "setpoint": reg.decode(hr[reg.HR_DG_SETPOINT], 10.0)}
+        return {
+            "abnormal": ir[reg.IR_ABNORMAL],
+            "mode": hr[reg.HR_CTRL_MODE],
+            "setpoint": reg.decode(hr[reg.HR_DG_SETPOINT], 10.0),
+        }
 
     def attack(self, mode, repeat=None):
-        cmd = [sys.executable, "exploit_client.py", "--target-url",
-               f"http://127.0.0.1:{self.app_port}", "--engine-ip", "127.0.0.1",
-               "--engine-port", str(self.eng_port), "--attack", mode, "--interval", "0.2",
-               "--ot-write-path", str(self.stage / "ot_write.py")]
+        cmd = [
+            sys.executable,
+            "exploit_client.py",
+            "--target-url",
+            f"http://127.0.0.1:{self.app_port}",
+            "--engine-ip",
+            "127.0.0.1",
+            "--engine-port",
+            str(self.eng_port),
+            "--attack",
+            mode,
+            "--interval",
+            "0.2",
+            "--ot-write-path",
+            str(self.stage / "ot_write.py"),
+        ]
         if repeat is not None:
             cmd += ["--repeat", str(repeat)]
-        out = subprocess.run(cmd, cwd=str(self.stage), env=self.env, capture_output=True,
-                             text=True, timeout=60)
+        out = subprocess.run(
+            cmd, cwd=str(self.stage), env=self.env, capture_output=True, text=True, timeout=60
+        )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
         return parse_exploit_events(out.stdout)
 
@@ -201,13 +278,15 @@ class AttackVsPLC(unittest.TestCase):
         st = self.state()
         self.assertEqual(st["abnormal"], 0, st)
         self.assertEqual(st["mode"], reg.CTRL_AUTO)
-        self.assertEqual(st["setpoint"], 20.0)   # back to nominal, not curtailed
+        self.assertEqual(st["setpoint"], 20.0)  # back to nominal, not curtailed
 
     def test_manual_hijack_persists_with_plc_running(self):
         events = self.attack("manual-hijack")
         writes = [e for e in events if e["phase"] == "modbus_write"]
-        self.assertEqual([(w["register"], w["value"]) for w in writes],
-                         [(reg.HR_CTRL_MODE, 1.0), (reg.HR_DG_SETPOINT, 60.0)])
+        self.assertEqual(
+            [(w["register"], w["value"]) for w in writes],
+            [(reg.HR_CTRL_MODE, 1.0), (reg.HR_DG_SETPOINT, 60.0)],
+        )
         self.assertTrue(all(w["ok"] for w in writes))
         self.assertTrue(any(e["phase"] == "rce" for e in events))
         time.sleep(3 * self.STEP)

@@ -5,9 +5,9 @@ import each other bare (``from ot_registers import ...``). A test that exercises
 one has to reproduce that, by putting the directories that hold them on
 ``sys.path`` — or on a subprocess's ``PYTHONPATH``.
 
-Ten test modules used to spell those directories out themselves, which meant a
-plane could not move without ten edits and ten chances to miss one. They are
-named here once instead; moving a plane is a change to this file.
+The directories are named here once, and the ten test modules that need them
+import them from here: moving a plane is a change to this file, not ten edits
+with ten chances to miss one.
 """
 
 from tests.helpers import REPO_ROOT
@@ -29,6 +29,7 @@ TRAFFIC_AGENTS = TRAFFIC / "agents"
 def add(*directories):
     """Put ``directories`` at the front of sys.path, as a container's root is."""
     import sys
+
     for directory in directories:
         entry = str(directory)
         if entry in sys.path:
@@ -39,6 +40,7 @@ def add(*directories):
 def pythonpath(*directories, base=None):
     """``PYTHONPATH`` value for a subprocess that runs a guest module."""
     import os
+
     parts = [str(d) for d in directories]
     if base:
         parts.append(base)

@@ -53,15 +53,17 @@ def scenario_panels():
     for name in registry.names():
         try:
             path = registry.get(name).panel_js()
-        except Exception:                      # a scenario that cannot import
+        except Exception:  # a scenario that cannot import
             continue
         if path and os.path.exists(path):
             with open(path, "rb") as f:
                 out.append(f.read())
     return out
+
+
 STRUCTURE_FILES = ("kg.json", "tree.json")
 LEDGER_NAME = "progress.jsonl"
-STALE_S = 30.0          # an unfinished ledger idle this long is "interrupted"
+STALE_S = 30.0  # an unfinished ledger idle this long is "interrupted"
 
 
 class _Ledger:
@@ -79,7 +81,7 @@ class _Ledger:
             size = os.path.getsize(self.path)
         except OSError:
             return
-        if size < self.offset:                       # truncated / rewritten
+        if size < self.offset:  # truncated / rewritten
             self.offset, self.tail, self.events = 0, b"", []
         if size == self.offset:
             return
@@ -89,7 +91,7 @@ class _Ledger:
         self.offset = size
         data = self.tail + chunk
         lines = data.split(b"\n")
-        self.tail = lines.pop()                      # b"" if data ended with \n
+        self.tail = lines.pop()  # b"" if data ended with \n
         for raw in lines:
             raw = raw.strip()
             if not raw:
@@ -105,11 +107,16 @@ def summarize(events, mtime, now=None):
     now = time.time() if now is None else now
     first = events[0] if events else {}
     kind = "campaign" if first.get("kind") == "campaign_start" else "run"
-    s = {"kind": kind, "events": len(events), "mtime": round(mtime, 3),
-         "started": first.get("t"), "last_t": events[-1].get("t") if events else None}
+    s = {
+        "kind": kind,
+        "events": len(events),
+        "mtime": round(mtime, 3),
+        "started": first.get("t"),
+        "last_t": events[-1].get("t") if events else None,
+    }
     if kind == "campaign":
         starts = [i for i, e in enumerate(events) if e.get("kind") == "campaign_start"]
-        cur = events[starts[-1]:]
+        cur = events[starts[-1] :]
         head = cur[0]
         s["name"] = head.get("name")
         s["scenario"] = head.get("scenario") or "cps"
@@ -139,8 +146,8 @@ class LedgerStore:
     def __init__(self, root):
         self.root = os.path.abspath(root)
         self._lock = threading.Lock()
-        self._ledgers = {}           # id (relative path) -> _Ledger
-        self._structures = {}        # (run dir, mtimes) -> loaded structure
+        self._ledgers = {}  # id (relative path) -> _Ledger
+        self._structures = {}  # (run dir, mtimes) -> loaded structure
         self._rebuilt = None
 
     def discover(self):
@@ -193,7 +200,6 @@ class LedgerStore:
             evs = [e for e in led.events if e.get("seq", 0) >= since]
         nxt = (evs[-1].get("seq", since) + 1) if evs else since
         return {"next": nxt, "events": evs}
-
 
     # ── run structure (kg.json / tree.json) ─────────────────────────────────
     def run_dir(self, lid, run_id):
@@ -277,7 +283,7 @@ class LedgerStore:
                 if built is None:
                     return {"error": f"scenario {scenario!r} has no structure to rebuild"}
                 self._rebuilt = {"source": "rebuilt", **built}
-            except Exception as e:   # no networkx / Kathará on this host
+            except Exception as e:  # no networkx / Kathará on this host
                 return {"error": f"no recorded structure and it cannot be rebuilt: {e}"}
         return self._rebuilt
 
@@ -332,8 +338,13 @@ class ProgressDashboard:
                     else:
                         self._json(res)
                 elif url.path == "/api/ledgers":
-                    self._json({"root": server.store.root, "now": time.time(),
-                                "ledgers": server.store.listing()})
+                    self._json(
+                        {
+                            "root": server.store.root,
+                            "now": time.time(),
+                            "ledgers": server.store.listing(),
+                        }
+                    )
                 elif url.path == "/api/events":
                     lid = q.get("id", [""])[0]
                     try:
@@ -373,8 +384,10 @@ def main():
     args = ap.parse_args()
     os.makedirs(args.root, exist_ok=True)
     dash = ProgressDashboard(args.root, port=args.port, host=args.host)
-    print(f"Progress dashboard: http://{args.host}:{dash.port}/  (root: {dash.store.root})",
-          flush=True)
+    print(
+        f"Progress dashboard: http://{args.host}:{dash.port}/  (root: {dash.store.root})",
+        flush=True,
+    )
     try:
         dash.serve_forever()
     except KeyboardInterrupt:

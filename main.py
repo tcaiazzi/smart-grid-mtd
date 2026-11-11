@@ -39,36 +39,68 @@ Usage:
 import argparse
 import sys
 
-from cyberrange.scenarios.mqtt_mtd.campaign import (
-    FIGURES, build_campaign, compare_dir, say,
-)
+from cyberrange.scenarios.mqtt_mtd.campaign import FIGURES, build_campaign, compare_dir, say
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mbps", type=int, default=2, metavar="MBPS",
-                   help="Background trace replay rate in Mbit/s (default: 2, "
-                        "the rate the paper's reported numbers were generated at).")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print every command that would run, without running it.")
-    p.add_argument("--runs", type=int, default=1, metavar="N",
-                   help="Repeat the evaluation N times, run i under output/run-<i>/ "
-                        "with SEED=<seed-base>+i (default: 1, the single-run layout).")
-    p.add_argument("--seed-base", type=int, default=None, metavar="S",
-                   help="Seed of run 0 (default: 0 with --runs > 1; with a single run, "
-                        "setting it seeds that run under output/run-0/).")
-    p.add_argument("--first-run", type=int, default=0, metavar="I",
-                   help="Index of the first run, to extend an existing set of runs "
-                        "(default: 0). Run i always gets SEED=<seed-base>+i.")
-    p.add_argument("--retries", type=int, default=2, metavar="K",
-                   help="Retries for a failed lab step (dataset generation, attack); "
-                        "default: 2.")
-    p.add_argument("--resume", action="store_true",
-                   help="Skip attacks that already have metrics.json (default: rerun them).")
-    p.add_argument("--name", default=None,
-                   help="campaign name (default paper-mbps<M>): ledger + summary under "
-                        "output/campaigns/<name>/")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--mbps",
+        type=int,
+        default=2,
+        metavar="MBPS",
+        help="Background trace replay rate in Mbit/s (default: 2, "
+        "the rate the paper's reported numbers were generated at).",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print every command that would run, without running it.",
+    )
+    p.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Repeat the evaluation N times, run i under output/run-<i>/ "
+        "with SEED=<seed-base>+i (default: 1, the single-run layout).",
+    )
+    p.add_argument(
+        "--seed-base",
+        type=int,
+        default=None,
+        metavar="S",
+        help="Seed of run 0 (default: 0 with --runs > 1; with a single run, "
+        "setting it seeds that run under output/run-0/).",
+    )
+    p.add_argument(
+        "--first-run",
+        type=int,
+        default=0,
+        metavar="I",
+        help="Index of the first run, to extend an existing set of runs "
+        "(default: 0). Run i always gets SEED=<seed-base>+i.",
+    )
+    p.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        metavar="K",
+        help="Retries for a failed lab step (dataset generation, attack); default: 2.",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip attacks that already have metrics.json (default: rerun them).",
+    )
+    p.add_argument(
+        "--name",
+        default=None,
+        help="campaign name (default paper-mbps<M>): ledger + summary under "
+        "output/campaigns/<name>/",
+    )
     args = p.parse_args()
     if args.runs < 1:
         p.error("--runs must be >= 1")
@@ -78,16 +110,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     campaign, contexts = build_campaign(
-        mbps=args.mbps, runs=args.runs, seed_base=args.seed_base, first_run=args.first_run,
-        retries=args.retries, name=args.name, resume=args.resume,
-        out=lambda line: print(line, flush=True))
+        mbps=args.mbps,
+        runs=args.runs,
+        seed_base=args.seed_base,
+        first_run=args.first_run,
+        retries=args.retries,
+        name=args.name,
+        resume=args.resume,
+        out=lambda line: print(line, flush=True),
+    )
     if args.dry_run:
         campaign.dry_run()
         print(say("=== Done (dry run) ==="))
         return
     from cyberrange.core import lifecycle
+
     try:
-        lifecycle.preflight()          # every unit needs a lab: fail fast, not 3 retries each
+        lifecycle.preflight()  # every unit needs a lab: fail fast, not 3 retries each
     except lifecycle.LabUnavailable as e:
         print(say(f"cannot start: {e}"), flush=True)
         sys.exit(lifecycle.EXIT_NO_LAB)
@@ -95,8 +134,12 @@ def main() -> None:
     for ctx in contexts:
         for label, pdf in FIGURES:
             print(say(f"  {label} -> {compare_dir(args.mbps, ctx)}/{pdf}"))
-    print(say(f"=== {res['status']} (ok={res['ok']} failed={res['failed']} "
-              f"skipped={res['skipped']}) — summary: {campaign.root}/summary.md ==="))
+    print(
+        say(
+            f"=== {res['status']} (ok={res['ok']} failed={res['failed']} "
+            f"skipped={res['skipped']}) — summary: {campaign.root}/summary.md ==="
+        )
+    )
     if res["failed_units"]:
         print(say(f"failed or blocked: {', '.join(res['failed_units'])}"))
     sys.exit(0 if res["status"] == "done" else 1)

@@ -6,12 +6,9 @@ passive-sensor wiring are correct.
 Run: `.venv/bin/python -m unittest tests.test_cps_topology`.
 """
 
-import sys
 import types
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 from cyberrange.scenarios.cps.scenario import CpsScenario  # noqa: E402
@@ -26,8 +23,9 @@ class Topology(unittest.TestCase):
         self.lab, self.m, self.startups = cps.build_lab(types.SimpleNamespace(dashboard_port=0))
 
     def test_six_machines_on_cps_image(self):
-        self.assertEqual(sorted(self.lab.machines),
-                         ["attacker", "engine", "firewall", "hmi", "plc", "sensor"])
+        self.assertEqual(
+            sorted(self.lab.machines), ["attacker", "engine", "firewall", "hmi", "plc", "sensor"]
+        )
         for name, mach in self.lab.machines.items():
             self.assertEqual(mach.get_image(), cps.IMAGE, name)
 

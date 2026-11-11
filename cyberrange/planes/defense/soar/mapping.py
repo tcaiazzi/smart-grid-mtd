@@ -28,14 +28,17 @@ from cyberrange.planes.defense.soar import trees
 CONFIRMED, SUSPECTED, INFERRED, UNKNOWN = "confirmed", "suspected", "inferred", "unknown"
 CONFIRM_AT = 0.75
 SUSPECT_AT = 0.30
-MODEL_WEIGHT = 0.5        # the behavioural model alone never confirms a step
-EXPLAINED_AWAY = 0.4      # discount on consequence evidence once another leaf is confirmed
+MODEL_WEIGHT = 0.5  # the behavioural model alone never confirms a step
+EXPLAINED_AWAY = 0.4  # discount on consequence evidence once another leaf is confirmed
 COMMAND, CONSEQUENCE = "command", "consequence"
 IMPACT_LEAVES = ("setpoint_oor", "breaker_open", "mode_hijack")
 
 # IT-sensor finding class -> the attack-tree step it directly confirms.
-_IT_KLASS_NODE = {"web_injection_pattern": "it_access", "web_child_process": "it_exec",
-                  "unexpected_modbus_client": "pivot"}
+_IT_KLASS_NODE = {
+    "web_injection_pattern": "it_access",
+    "web_child_process": "it_exec",
+    "unexpected_modbus_client": "pivot",
+}
 _IT_NODES = set(_IT_KLASS_NODE.values())
 # Early steps whose confirmation implies the pivot is likely next (forward belief).
 FORWARD_STEPS = ("it_access", "it_exec")
@@ -47,7 +50,7 @@ _FEATURE_HINTS = {
     "max_dsetpoint": ("setpoint_oor", "mode_hijack"),
     "mode_writes": ("mode_hijack",),
     "manual_run_s": ("mode_hijack",),
-    "plc_writes": ("mode_hijack",),       # the PLC going quiet = it handed off
+    "plc_writes": ("mode_hijack",),  # the PLC going quiet = it handed off
     "v_min": ("breaker_open",),
     "v_max": ("setpoint_oor", "mode_hijack"),
 }
@@ -72,8 +75,10 @@ def evidence_from_finding(f, g):
         return [(node, conf, COMMAND)] if node in _IT_NODES else []
 
     if det == "model":
-        top_z = {t.get("feature"): float(t.get("z") or 0.0)
-                 for t in (f.get("evidence") or {}).get("top") or []}
+        top_z = {
+            t.get("feature"): float(t.get("z") or 0.0)
+            for t in (f.get("evidence") or {}).get("top") or []
+        }
         top = list(top_z)
         # z is |deviation|: an overvoltage moves v_min too. Read v_min as an
         # undervoltage (open breaker) only when it clearly dominates v_max.
@@ -165,8 +170,7 @@ class CampaignState:
 
     # ── read ─────────────────────────────────────────────────────────────────
     def _command_confirmed(self):
-        return {n for n in IMPACT_LEAVES if n in self.idx
-                and self.ev[n][COMMAND] >= CONFIRM_AT}
+        return {n for n in IMPACT_LEAVES if n in self.idx and self.ev[n][COMMAND] >= CONFIRM_AT}
 
     def observed_scores(self):
         """Direct score per node after explaining away."""
@@ -196,14 +200,15 @@ class CampaignState:
         # Forward belief: a confirmed early IT step means the chain is under way,
         # so the pivot (the gateway to the plant) is likely next — a discounted,
         # never-confirming score so the response can act before the manipulation.
-        early = max((obs.get(n, 0.0) for n in FORWARD_STEPS if obs.get(n, 0.0) >= CONFIRM_AT),
-                    default=0.0)
+        early = max(
+            (obs.get(n, 0.0) for n in FORWARD_STEPS if obs.get(n, 0.0) >= CONFIRM_AT), default=0.0
+        )
         if early and "pivot" in self.idx:
             fwd = min(FORWARD_WEIGHT * early, CONFIRM_AT - 0.01)
             if fwd > s.get("pivot", 0.0):
                 s["pivot"] = fwd
                 inferred["pivot"] = True
-        for node in reversed(list(self.tree.walk())):   # children before parents
+        for node in reversed(list(self.tree.walk())):  # children before parents
             if node.children:
                 s[node.id] = max([s.get(node.id, 0.0)] + [s[c.id] for c in node.children])
         return s, inferred
@@ -222,21 +227,29 @@ class CampaignState:
         for n in self.idx:
             if s[n] <= 0.0:
                 continue
-            nodes[n] = {"score": round(s[n], 3),
-                        "state": self.node_state(s[n], inferred.get(n, False) and obs[n] < s[n]),
-                        "classes": list(self.classes[n]),
-                        "first_seen": self.first_seen.get(n),
-                        "last_seen": self.last_seen.get(n)}
+            nodes[n] = {
+                "score": round(s[n], 3),
+                "state": self.node_state(s[n], inferred.get(n, False) and obs[n] < s[n]),
+                "classes": list(self.classes[n]),
+                "first_seen": self.first_seen.get(n),
+                "last_seen": self.last_seen.get(n),
+            }
         active = [n for n in IMPACT_LEAVES if n in nodes and s[n] >= SUSPECT_AT]
-        hosts = sorted(h for h in self.sources
-                       if self.g.nodes[f"host:{h}"]["role"] not in ("plc", "plant"))
+        hosts = sorted(
+            h for h in self.sources if self.g.nodes[f"host:{h}"]["role"] not in ("plc", "plant")
+        )
         if any(n in nodes for n in ("it_exec", "pivot")):
             hmi = trees.cps_context(self.g)["hmi"]
             if hmi not in hosts:
                 hosts.append(hmi)
-        return {"t": t, "findings": self.n_findings, "nodes": nodes,
-                "active_impacts": active, "hosts_implicated": sorted(hosts),
-                "next": self._next_steps(s, active)}
+        return {
+            "t": t,
+            "findings": self.n_findings,
+            "nodes": nodes,
+            "active_impacts": active,
+            "hosts_implicated": sorted(hosts),
+            "next": self._next_steps(s, active),
+        }
 
     def _next_steps(self, s, active):
         """Impact leaves not yet seen on an active branch: what may come next."""

@@ -27,7 +27,7 @@ import numpy as np
 # so carry an availability cost; padding and frequency are cheap (no reconnect).
 KNOBS = ["port", "ip", "src", "pad", "freq"]
 N_KNOBS = len(KNOBS)
-N_RECONNECT = 3                       # port, ip, src
+N_RECONNECT = 3  # port, ip, src
 PAD_IDX = KNOBS.index("pad")
 FREQ_IDX = KNOBS.index("freq")
 
@@ -38,7 +38,7 @@ FREQ_IDX = KNOBS.index("freq")
 # compare_coordinators bills the *observed* actuations against it — both need
 # the same five floats, and this module (numpy-only, host- and guest-importable)
 # is where KNOBS itself already lives.
-KNOB_COST = (0.15, 0.30, 0.30, 0.01, 0.01)   # port, ip, src, pad, freq
+KNOB_COST = (0.15, 0.30, 0.30, 0.01, 0.01)  # port, ip, src, pad, freq
 
 # Padding is a "regime" knob: sub-action 0 = keep the current regime, 1..K_PAD-1
 # select a diversity level (more buckets = wider packet-size spread).
@@ -58,13 +58,13 @@ ACTION_DIMS = [2, 2, 2, K_PAD, K_FREQ]
 #   [5:10]  per-knob hop rate   (EWMA of how often the knob fires, already [0,1])
 #   [10:15] per-knob pool size  (number of options, normalised; <=1 ⇒ knob unusable)
 OBS_DIM = 3 * N_KNOBS
-DWELL_NORM = 30.0                     # dwell saturates at ~30 ticks
-POOL_NORM = 8.0                       # pool size saturates at ~8 options
+DWELL_NORM = 30.0  # dwell saturates at ~30 ticks
+POOL_NORM = 8.0  # pool size saturates at ~8 options
 
 # Initial/decay constants for the dwell + EWMA-rate state, shared by the training
 # env and the live coordinator so the policy sees identically-derived features.
-DWELL_INIT = 30.0                     # start each knob "stale" (no recent hop)
-EWMA_ALPHA = 0.1                      # hop-rate EWMA smoothing
+DWELL_INIT = 30.0  # start each knob "stale" (no recent hop)
+EWMA_ALPHA = 0.1  # hop-rate EWMA smoothing
 
 
 def build_observation(dwell, rate, pool_sizes) -> np.ndarray:
@@ -81,11 +81,13 @@ def build_observation(dwell, rate, pool_sizes) -> np.ndarray:
     dwell = np.asarray(dwell, dtype=np.float32)
     rate = np.asarray(rate, dtype=np.float32)
     pool = np.asarray(pool_sizes, dtype=np.float32)
-    obs = np.concatenate([
-        np.clip(dwell / DWELL_NORM, 0.0, 1.0),
-        np.clip(rate, 0.0, 1.0),
-        np.clip(pool / POOL_NORM, 0.0, 1.0),
-    ]).astype(np.float32)
+    obs = np.concatenate(
+        [
+            np.clip(dwell / DWELL_NORM, 0.0, 1.0),
+            np.clip(rate, 0.0, 1.0),
+            np.clip(pool / POOL_NORM, 0.0, 1.0),
+        ]
+    ).astype(np.float32)
     return obs
 
 
@@ -103,13 +105,14 @@ def decode_action(action) -> dict:
         "port": bool(a[0]),
         "ip": bool(a[1]),
         "src": bool(a[2]),
-        # padding regime 0 = keep; 1..K_PAD-1 map to diversity levels 0..K_PAD-2
+        # Padding regime 0 = keep; 1..K_PAD-1 map to diversity levels 0..K_PAD-2.
         "pad_level": (pad_raw - 1) if pad_raw > 0 else None,
         "freq_rotate": bool(a[FREQ_IDX]),
     }
 
 
 # ── Numpy MLP policy (deployment-side inference) ────────────────────────────────
+
 
 class NumpyMLPPolicy:
     """Replays an SB3 PPO MlpPolicy actor with numpy only (no torch).
@@ -121,9 +124,9 @@ class NumpyMLPPolicy:
     """
 
     def __init__(self, hidden, out_w, out_b, action_dims):
-        self.hidden = hidden          # list of (W, b) for the shared policy MLP
-        self.out_w = out_w            # action head weight
-        self.out_b = out_b            # action head bias
+        self.hidden = hidden  # list of (W, b) for the shared policy MLP
+        self.out_w = out_w  # action head weight
+        self.out_b = out_b  # action head bias
         self.action_dims = list(action_dims)
 
     @classmethod
@@ -138,14 +141,14 @@ class NumpyMLPPolicy:
         x = np.asarray(obs, dtype=np.float32)
         for w, b in self.hidden:
             x = np.tanh(x @ w.T + b)
-        return x @ self.out_w.T + self.out_b      # raw logits
+        return x @ self.out_w.T + self.out_b  # raw logits
 
     def predict(self, obs: np.ndarray) -> np.ndarray:
         """Greedy action: argmax within each MultiDiscrete sub-action's logits."""
         logits = self._forward(obs)
         action, off = [], 0
         for dim in self.action_dims:
-            action.append(int(np.argmax(logits[off:off + dim])))
+            action.append(int(np.argmax(logits[off : off + dim])))
             off += dim
         return np.array(action, dtype=np.int64)
 
@@ -158,7 +161,6 @@ def export_sb3_policy(model, path: str) -> None:
     plain arrays NumpyMLPPolicy can replay. Assumes the default tanh activation
     (set net_arch with activation_fn=Tanh in training, which is SB3's default).
     """
-    import torch  # host-side only; never imported in the container
 
     sd = model.policy.state_dict()
     hidden_w, hidden_b = [], []

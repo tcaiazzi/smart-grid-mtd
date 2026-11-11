@@ -24,11 +24,11 @@ import unittest
 import urllib.request
 from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE_AGENTS))
-sys.path.insert(0, str(guest_paths.DEFENSE))   # flat rl_policy, as on semp
+sys.path.insert(0, str(guest_paths.DEFENSE))  # flat rl_policy, as on semp
 
 from mtd_coordinator import SEMPCoordinator  # noqa: E402
 from mtd_dashboard import DashboardServer  # noqa: E402
@@ -72,8 +72,16 @@ class FakeExecutor:
 
 def _coordinator(tmp, **kw):
     kw.setdefault("pad_buckets", [])
-    return SEMPCoordinator(0, ["10.1.0.2", "10.1.0.4"], [8883, 8884], 0.05, no_nat=True,
-                           telemetry_path=os.path.join(tmp, "telemetry.jsonl"), seed=1, **kw)
+    return SEMPCoordinator(
+        0,
+        ["10.1.0.2", "10.1.0.4"],
+        [8883, 8884],
+        0.05,
+        no_nat=True,
+        telemetry_path=os.path.join(tmp, "telemetry.jsonl"),
+        seed=1,
+        **kw,
+    )
 
 
 def _outcomes(coord) -> dict:
@@ -93,15 +101,15 @@ class BrokerHopOutcomes(unittest.TestCase):
         _start(coord._action_watchdog_loop)
 
         cls.seqs = []
-        msg = ex.recv()                       # 1: applied
+        msg = ex.recv()  # 1: applied
         cls.seqs.append(msg["seq"])
         ex.send("HOP_ACK", msg["seq"])
         ex.send("HOP_DONE", msg["seq"])
-        msg = ex.recv()                       # 2: failed → rolled back
+        msg = ex.recv()  # 2: failed → rolled back
         cls.seqs.append(msg["seq"])
         ex.send("HOP_ACK", msg["seq"])
         ex.send("HOP_FAILED", msg["seq"])
-        msg = ex.recv()                       # 3: no answer → watchdog timeout
+        msg = ex.recv()  # 3: no answer → watchdog timeout
         cls.seqs.append(msg["seq"])
         with coord._lock:
             coord._hop_deadline[msg["seq"]] = 0.0
@@ -110,7 +118,7 @@ class BrokerHopOutcomes(unittest.TestCase):
     def test_outcomes_and_cost(self):
         out = _outcomes(self.coord)
         applied, failed, timed_out = (out[s] for s in self.seqs)
-        both = COST["ip"] + COST["port"]     # 10.1.0.2:8883 → 10.1.0.4:8884
+        both = COST["ip"] + COST["port"]  # 10.1.0.2:8883 → 10.1.0.4:8884
         self.assertEqual((applied["status"], applied["rolled_back"]), ("applied", False))
         self.assertAlmostEqual(applied["cost"], both)
         # The executor attempted the failed hop (it logs it), so it is charged too.
@@ -123,16 +131,18 @@ class BrokerHopOutcomes(unittest.TestCase):
         events = self.coord.telemetry.events()
         sched = {e["seq"]: e for e in events if e["kind"] == "action_scheduled"}
         first = sched[self.seqs[0]]
-        self.assertEqual((first["action"], first["knobs"], first["awaited"]),
-                         ("hop", ["port", "ip"], ["scmc1"]))
+        self.assertEqual(
+            (first["action"], first["knobs"], first["awaited"]), ("hop", ["port", "ip"], ["scmc1"])
+        )
         self.assertEqual(first["params"]["new_port"], 8884)
         replies = [(e["seq"], e["phase"]) for e in events if e["kind"] == "reply"]
         self.assertIn((self.seqs[0], "DONE"), replies)
         self.assertIn((self.seqs[1], "FAILED"), replies)
         self.assertTrue(all(e["latency_s"] >= 0 for e in events if e["kind"] == "reply"))
         # While hop 3 was pending the hop loop kept ticking and had to skip.
-        self.assertTrue(any(e["kind"] == "action_skipped" and e["reason"] == "in_progress"
-                            for e in events))
+        self.assertTrue(
+            any(e["kind"] == "action_skipped" and e["reason"] == "in_progress" for e in events)
+        )
         self.assertEqual(events[0]["kind"], "run_info")
         self.assertEqual([e["i"] for e in events], list(range(len(events))))
 
@@ -166,8 +176,9 @@ class SoftKnobOutcomes(unittest.TestCase):
 
     def test_freq_applied_and_pad_lost(self):
         tmp = tempfile.mkdtemp()
-        coord = _coordinator(tmp, freq_pool=[0.5, 2.0], freq_interval=0.05,
-                             pad_buckets=[128, 256], pad_interval=0.05)
+        coord = _coordinator(
+            tmp, freq_pool=[0.5, 2.0], freq_interval=0.05, pad_buckets=[128, 256], pad_interval=0.05
+        )
         ex = FakeExecutor(coord)
         _start(coord._freq_loop)
         msg = ex.recv()
@@ -182,7 +193,7 @@ class SoftKnobOutcomes(unittest.TestCase):
         self.assertEqual(coord.telemetry.publish_interval, msg["interval"])
 
         _start(coord._pad_loop)
-        while True:                           # skip further SET_INTERVALs
+        while True:  # skip further SET_INTERVALs
             pad = ex.recv()
             if pad["type"] == "SET_PADDING":
                 break
@@ -191,8 +202,12 @@ class SoftKnobOutcomes(unittest.TestCase):
         self.assertTrue(_wait_for(lambda: pad["seq"] in _outcomes(coord)))
         lost = _outcomes(coord)[pad["seq"]]
         self.assertEqual((lost["status"], lost["cost"]), ("client_lost", 0.0))
-        self.assertTrue(any(e["kind"] == "client" and e["event"] == "disconnected"
-                            for e in coord.telemetry.events()))
+        self.assertTrue(
+            any(
+                e["kind"] == "client" and e["event"] == "disconnected"
+                for e in coord.telemetry.events()
+            )
+        )
 
 
 class BroadcastToDeadClient(unittest.TestCase):
@@ -202,7 +217,7 @@ class BroadcastToDeadClient(unittest.TestCase):
     def test_pending_released(self):
         coord = _coordinator(tempfile.mkdtemp(), pad_buckets=[128, 256], pad_interval=0.05)
         coord_end, scmc_end = socket.socketpair()
-        coord._register("scmc1", coord_end)    # no reader thread: only the send sees it
+        coord._register("scmc1", coord_end)  # no reader thread: only the send sees it
         scmc_end.close()
         _start(coord._pad_loop)
         self.assertTrue(_wait_for(lambda: _outcomes(coord)))
@@ -211,10 +226,12 @@ class BroadcastToDeadClient(unittest.TestCase):
         with coord._lock:
             self.assertEqual((coord._pending_pad_done, coord._clients), ({}, {}))
         events = coord.telemetry.events()
-        self.assertTrue(any(e["kind"] == "client" and e["event"] == "broadcast_failed"
-                            for e in events))
-        self.assertFalse(any(e["kind"] == "action_skipped" and e["reason"] == "in_progress"
-                             for e in events))
+        self.assertTrue(
+            any(e["kind"] == "client" and e["event"] == "broadcast_failed" for e in events)
+        )
+        self.assertFalse(
+            any(e["kind"] == "action_skipped" and e["reason"] == "in_progress" for e in events)
+        )
 
 
 class SoftActionWatchdog(unittest.TestCase):
@@ -222,17 +239,19 @@ class SoftActionWatchdog(unittest.TestCase):
     to a blackhole) times out, and its loop resumes instead of skipping forever."""
 
     def test_interval_times_out_and_loop_resumes(self):
-        coord = _coordinator(tempfile.mkdtemp(), freq_pool=[0.01, 0.02],
-                             freq_interval=0.05, hop_timeout=0.1)
+        coord = _coordinator(
+            tempfile.mkdtemp(), freq_pool=[0.01, 0.02], freq_interval=0.05, hop_timeout=0.1
+        )
         ex = FakeExecutor(coord)
         _start(coord._freq_loop)
         _start(coord._action_watchdog_loop)
         first = ex.recv()
-        ex.send("INTERVAL_ACK", first["seq"])          # ACK, but never DONE
+        ex.send("INTERVAL_ACK", first["seq"])  # ACK, but never DONE
         self.assertTrue(_wait_for(lambda: first["seq"] in _outcomes(coord)))
         out = _outcomes(coord)[first["seq"]]
-        self.assertEqual((out["status"], out["timed_out"], out["cost"]),
-                         ("timed_out", ["scmc1"], 0.0))
+        self.assertEqual(
+            (out["status"], out["timed_out"], out["cost"]), ("timed_out", ["scmc1"], 0.0)
+        )
         nxt = ex.recv()
         self.assertEqual(nxt["type"], "SET_INTERVAL")
         self.assertGreater(nxt["seq"], first["seq"])
@@ -246,6 +265,7 @@ class LateConfirmation(unittest.TestCase):
 
     def test_late_done_is_charged(self):
         from mtd_telemetry import Telemetry
+
         tel = Telemetry(knob_cost=COST)
         tel.scheduled(7, "src", ["src"], 10, ["scmc1"], new_src_ip="10.0.0.8")
         tel.finished(7, timed_out=["scmc1"])
@@ -255,7 +275,7 @@ class LateConfirmation(unittest.TestCase):
         self.assertEqual((out["status"], out["cost"]), ("timed_out", 0.0))
         self.assertEqual(len(late), 1)
         self.assertAlmostEqual(late[0]["cost"], COST["src"])
-        tel.reply(7, "scmc1", "DONE")                    # a duplicate is not charged twice
+        tel.reply(7, "scmc1", "DONE")  # a duplicate is not charged twice
         self.assertEqual(len([e for e in tel.events() if e["kind"] == "action_late"]), 1)
 
 
@@ -267,12 +287,20 @@ class LateHopDone(unittest.TestCase):
 
     def setUp(self):
         import mtd_rl_coordinator
+
         original = mtd_rl_coordinator.NumpyMLPPolicy.load
         mtd_rl_coordinator.NumpyMLPPolicy.load = staticmethod(lambda _path: None)
         self.addCleanup(setattr, mtd_rl_coordinator.NumpyMLPPolicy, "load", original)
         self.coord = mtd_rl_coordinator.RLSEMPCoordinator(
-            0, ["10.1.0.2", "10.1.0.4", "10.1.0.5"], [8883, 8884, 8885], 30.0,
-            no_nat=True, pad_buckets=[], policy_path="unused", hop_timeout=60)
+            0,
+            ["10.1.0.2", "10.1.0.4", "10.1.0.5"],
+            [8883, 8884, 8885],
+            30.0,
+            no_nat=True,
+            pad_buckets=[],
+            policy_path="unused",
+            hop_timeout=60,
+        )
         self.ex = FakeExecutor(self.coord)
         self.assertTrue(_wait_for(lambda: self.coord._clients))
 
@@ -285,8 +313,8 @@ class LateHopDone(unittest.TestCase):
             return self.coord.current_ip, self.coord.current_port
 
     def test_late_done_moves_coordinator(self):
-        s1 = self.hop()                                    # → 10.1.0.4:8884
-        self.coord._expire_actions(float("inf"))           # timed out → rolled back
+        s1 = self.hop()  # → 10.1.0.4:8884
+        self.coord._expire_actions(float("inf"))  # timed out → rolled back
         self.assertEqual(self.endpoint(), ("10.1.0.2", 8883))
         self.ex.send("HOP_DONE", s1)
         self.assertTrue(_wait_for(lambda: self.endpoint() == ("10.1.0.4", 8884)))
@@ -294,12 +322,12 @@ class LateHopDone(unittest.TestCase):
         self.assertIn("action_late", kinds)
 
     def test_rollback_returns_to_confirmed_endpoint(self):
-        s1 = self.hop()                                    # → 10.1.0.4:8884, rolled back
+        s1 = self.hop()  # → 10.1.0.4:8884, rolled back
         self.coord._expire_actions(float("inf"))
-        s2 = self.hop()                                    # → 10.1.0.4:8884 again
-        self.ex.send("HOP_DONE", s1)                       # late: executor IS there
+        s2 = self.hop()  # → 10.1.0.4:8884 again
+        self.ex.send("HOP_DONE", s1)  # late: executor IS there
         self.assertTrue(_wait_for(lambda: self.coord._confirmed_seq == s1))
-        self.coord._expire_actions(float("inf"))           # s2 times out
+        self.coord._expire_actions(float("inf"))  # s2 times out
         self.assertEqual(self.endpoint(), ("10.1.0.4", 8884))
         self.assertGreater(s2, s1)
 
@@ -307,27 +335,33 @@ class LateHopDone(unittest.TestCase):
         """The full campaign's fixed-cnn-s2 / rl-oracle-s2: s1's DONE arrives late, while
         s2 — scheduled from the rolled-back endpoint — targets where the executor
         already is. s2 must cost nothing, as client.log (no field changes) says."""
-        s1 = self.hop()                                    # 10.1.0.2:8883 → 10.1.0.4:8884
-        self.coord._expire_actions(float("inf"))           # rolled back
-        s2 = self.hop()                                    # scheduled 2:8883 → 4:8884 (0.45)
-        self.ex.send("HOP_DONE", s1)                       # late: executor moved with s1
+        s1 = self.hop()  # 10.1.0.2:8883 → 10.1.0.4:8884
+        self.coord._expire_actions(float("inf"))  # rolled back
+        s2 = self.hop()  # scheduled 2:8883 → 4:8884 (0.45)
+        self.ex.send("HOP_DONE", s1)  # late: executor moved with s1
         self.assertTrue(_wait_for(lambda: self.coord._confirmed_seq == s1))
         self.ex.send("HOP_DONE", s2)
         self.assertTrue(_wait_for(lambda: s2 in _outcomes(self.coord)))
         late = [e for e in self.coord.telemetry.events() if e["kind"] == "action_late"]
-        self.assertEqual([(e["seq"], e["cost"]) for e in late],
-                         [(s1, round(COST["ip"] + COST["port"], 4))])
+        self.assertEqual(
+            [(e["seq"], e["cost"]) for e in late], [(s1, round(COST["ip"] + COST["port"], 4))]
+        )
         self.assertEqual(_outcomes(self.coord)[s2]["cost"], 0.0)
 
     def test_stale_late_done_is_ignored(self):
-        s1 = self.hop()                                    # → 10.1.0.4:8884, rolled back
+        s1 = self.hop()  # → 10.1.0.4:8884, rolled back
         self.coord._expire_actions(float("inf"))
-        s2 = self.hop(ip=False)                            # → 10.1.0.2:8884, confirmed
+        s2 = self.hop(ip=False)  # → 10.1.0.2:8884, confirmed
         self.ex.send("HOP_DONE", s2)
         self.assertTrue(_wait_for(lambda: self.coord._confirmed_seq == s2))
-        self.ex.send("HOP_DONE", s1)                       # older than s2: stale
-        self.assertTrue(_wait_for(lambda: any(
-            e["kind"] == "reply" and e["seq"] == s1 for e in self.coord.telemetry.events())))
+        self.ex.send("HOP_DONE", s1)  # older than s2: stale
+        self.assertTrue(
+            _wait_for(
+                lambda: any(
+                    e["kind"] == "reply" and e["seq"] == s1 for e in self.coord.telemetry.events()
+                )
+            )
+        )
         self.assertEqual(self.endpoint(), ("10.1.0.2", 8884))
 
 
@@ -343,17 +377,17 @@ class ReorderedHandover(unittest.TestCase):
         self.coord.RECONNECT_GRACE_S = 0.5
         self.old = FakeExecutor(self.coord)
         _start(self.coord._pad_loop)
-        self.pad = self.old.recv()                        # SET_PADDING, now pending
+        self.pad = self.old.recv()  # SET_PADDING, now pending
 
     def events(self, kind):
         return [e for e in self.coord.telemetry.events() if e["kind"] == kind]
 
     def test_fin_before_hello_is_a_handover(self):
-        self.old.sock.close()                             # FIN first...
+        self.old.sock.close()  # FIN first...
         self.assertTrue(_wait_for(lambda: "scmc1" in self.coord._departing))
-        new = FakeExecutor(self.coord)                    # ...then the new HELLO
+        new = FakeExecutor(self.coord)  # ...then the new HELLO
         self.assertTrue(_wait_for(lambda: "scmc1" in self.coord._clients))
-        time.sleep(0.8)                                   # past the grace
+        time.sleep(0.8)  # past the grace
         with self.coord._lock:
             self.assertIn("scmc1", self.coord._pending_pad_done.get(self.pad["seq"], set()))
         new.send("PAD_DONE", self.pad["seq"])
@@ -380,12 +414,17 @@ class CostMatchesPostHoc(unittest.TestCase):
         log_lines = []
         for i in range(4):
             msg = ex.recv()
-            sched = next(e for e in reversed(coord.telemetry.events())
-                         if e["kind"] == "action_scheduled" and e["seq"] == msg["seq"])
+            sched = next(
+                e
+                for e in reversed(coord.telemetry.events())
+                if e["kind"] == "action_scheduled" and e["seq"] == msg["seq"]
+            )
             p = sched["params"]
             # The line mtd_executor.SCMCExecutor._do_hop logs for this hop.
-            log_lines.append(f"2026-10-26T10:00:{i:02d}  [scmc1] hop seq={msg['seq']}  "
-                             f"{p['old_ip']}:{p['old_port']} → {p['new_ip']}:{p['new_port']}")
+            log_lines.append(
+                f"2026-10-26T10:00:{i:02d}  [scmc1] hop seq={msg['seq']}  "
+                f"{p['old_ip']}:{p['old_port']} → {p['new_ip']}:{p['new_port']}"
+            )
             ex.send("HOP_DONE", msg["seq"])
         self.assertTrue(_wait_for(lambda: len(_outcomes(coord)) == 4))
 

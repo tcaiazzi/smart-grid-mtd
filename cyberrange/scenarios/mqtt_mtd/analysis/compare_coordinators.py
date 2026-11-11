@@ -42,10 +42,8 @@ Usage:
 """
 
 import argparse
-import datetime
 import glob
 import os
-import re
 
 import matplotlib
 
@@ -83,7 +81,7 @@ COORDINATORS = [
 ]
 # Colours for extra tagged RL policies (--rl-tags), e.g. the entropy-max policy.
 TAG_COLORS = ["#8e44ad", "#e67e22", "#16a085", "#c0392b"]
-ENTROPY_METRICS = ["flow"] + FIELD_ORDER     # headline flow entropy + per-field
+ENTROPY_METRICS = ["flow"] + FIELD_ORDER  # headline flow entropy + per-field
 
 
 def resolve(root: str, slug: str, mbps: int, rl_tags=()) -> list:
@@ -93,20 +91,24 @@ def resolve(root: str, slug: str, mbps: int, rl_tags=()) -> list:
     tag in rl_tags (dir prefix mtdrl-<tag>, e.g. the entropy-max policy)."""
     specs = list(COORDINATORS)
     for i, tag in enumerate(rl_tags):
-        specs.append((f"MTD-RL-{tag}", f"mtdrl-{tag}", "mtd",
-                      TAG_COLORS[i % len(TAG_COLORS)]))
+        specs.append((f"MTD-RL-{tag}", f"mtdrl-{tag}", "mtd", TAG_COLORS[i % len(TAG_COLORS)]))
     coords = []
     for label, prefix, model_src, color in specs:
-        exp_dir = (os.path.join(root, f"baseline-mbps{mbps}") if prefix == "baseline"
-                   else os.path.join(root, f"{prefix}-{slug}"))
-        coords.append({
-            "label": label,
-            "color": color,
-            "exp_dir": exp_dir,
-            "pred_csv": os.path.join(exp_dir, "eval", f"model-{model_src}", "predictions.csv"),
-            "entropy_csv": os.path.join(exp_dir, "entropy.csv"),
-            "ts_csv": os.path.join(exp_dir, "entropy_timeseries.csv"),
-        })
+        exp_dir = (
+            os.path.join(root, f"baseline-mbps{mbps}")
+            if prefix == "baseline"
+            else os.path.join(root, f"{prefix}-{slug}")
+        )
+        coords.append(
+            {
+                "label": label,
+                "color": color,
+                "exp_dir": exp_dir,
+                "pred_csv": os.path.join(exp_dir, "eval", f"model-{model_src}", "predictions.csv"),
+                "entropy_csv": os.path.join(exp_dir, "entropy.csv"),
+                "ts_csv": os.path.join(exp_dir, "entropy_timeseries.csv"),
+            }
+        )
     return coords
 
 
@@ -156,8 +158,9 @@ def _attack_capture_dir(exp_dir: str):
     preferred = os.path.join(exp_dir, "attack", "model-baseline")
     candidates = [preferred] + sorted(glob.glob(os.path.join(exp_dir, "attack", "model-*")))
     for d in candidates:
-        if (os.path.exists(os.path.join(d, "scmc_capture.pcap"))
-                and os.path.exists(os.path.join(d, "router_capture.pcap"))):
+        if os.path.exists(os.path.join(d, "scmc_capture.pcap")) and os.path.exists(
+            os.path.join(d, "router_capture.pcap")
+        ):
             return d
     return None
 
@@ -216,9 +219,11 @@ def load_detection(exp_dir: str) -> dict:
     IPs are the nanogrid, i.e. the coordinator diffuses the signal better.
     """
     attack_dir = _attack_capture_dir(exp_dir)
-    ranking_csv = (os.path.join(attack_dir, "nanogrid_ranking.csv")
-                   if attack_dir else os.path.join(exp_dir, "attack", "model-baseline",
-                                                   "nanogrid_ranking.csv"))
+    ranking_csv = (
+        os.path.join(attack_dir, "nanogrid_ranking.csv")
+        if attack_dir
+        else os.path.join(exp_dir, "attack", "model-baseline", "nanogrid_ranking.csv")
+    )
     pool = load_scmc_pool(exp_dir, DEFAULT_SCMC_IP)
     frac, n_ips = ranking_nanogrid_detection(ranking_csv, pool)
     if np.isnan(frac):
@@ -228,6 +233,7 @@ def load_detection(exp_dir: str) -> dict:
 
 
 # ── Plots ──────────────────────────────────────────────────────────────────────
+
 
 def plot_security(coords: list, out_path: str) -> None:
     """Grouped bars: fingerprint AUC and nanogrid recall per coordinator (↓ better)."""
@@ -242,13 +248,23 @@ def plot_security(coords: list, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     for i, c in enumerate(have):
         vals = [c.get(m[0], float("nan")) for m in metrics]
-        bars = ax.bar(x + (i - (len(have) - 1) / 2) * w, vals, w,
-                      color=c["color"], edgecolor="black",
-                      label=c["label"].replace("\n", " "))
+        bars = ax.bar(
+            x + (i - (len(have) - 1) / 2) * w,
+            vals,
+            w,
+            color=c["color"],
+            edgecolor="black",
+            label=c["label"].replace("\n", " "),
+        )
         for bar, v in zip(bars, vals):
             if not np.isnan(v):
-                ax.annotate(f"{v:.2f}", (bar.get_x() + bar.get_width() / 2, v),
-                            ha="center", va="bottom", fontsize=8)
+                ax.annotate(
+                    f"{v:.2f}",
+                    (bar.get_x() + bar.get_width() / 2, v),
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
 
     ax.axhline(0.5, ls="--", color="gray", lw=1, label="random (AUC 0.5)")
     ax.set_xticks(x)
@@ -259,7 +275,7 @@ def plot_security(coords: list, out_path: str) -> None:
     ax.legend(fontsize=9)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] security comparison -> {out_path}")
 
@@ -276,20 +292,25 @@ def plot_entropy(coords: list, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(11, 4))
     for i, c in enumerate(have):
         vals = [c["entropy"].get(m, float("nan")) for m in ENTROPY_METRICS]
-        ax.bar(x + (i - (len(have) - 1) / 2) * w, vals, w,
-               color=c["color"], edgecolor="black",
-               label=c["label"].replace("\n", " "))
+        ax.bar(
+            x + (i - (len(have) - 1) / 2) * w,
+            vals,
+            w,
+            color=c["color"],
+            edgecolor="black",
+            label=c["label"].replace("\n", " "),
+        )
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", "-") for m in ENTROPY_METRICS])
     ax.set_ylabel("Shannon entropy (bits)", fontsize=20)
-    ax.tick_params(axis="x", labelsize=20)  
-    ax.tick_params(axis="y", labelsize=20)  
+    ax.tick_params(axis="x", labelsize=20)
+    ax.tick_params(axis="y", labelsize=20)
 
     ax.legend(fontsize=14)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] entropy comparison -> {out_path}")
 
@@ -308,13 +329,16 @@ def plot_detection(coords: list, out_path: str) -> None:
     vals = [c["detect"]["nanogrid_detect"] for c in have]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    bars = ax.bar(x, vals, width=0.6, edgecolor="black",
-                  color=[c["color"] for c in have])
+    bars = ax.bar(x, vals, width=0.6, edgecolor="black", color=[c["color"] for c in have])
 
     for bar, c in zip(bars, have):
-        ax.annotate(f"({c['detect']['n_nanogrid_ips']} IPs)",
-                    (bar.get_x() + bar.get_width() / 2, c["detect"]["nanogrid_detect"]),
-                    ha="center", va="bottom", fontsize=16)
+        ax.annotate(
+            f"({c['detect']['n_nanogrid_ips']} IPs)",
+            (bar.get_x() + bar.get_width() / 2, c["detect"]["nanogrid_detect"]),
+            ha="center",
+            va="bottom",
+            fontsize=16,
+        )
 
     ax.set_xticks(x)
     ax.set_xticklabels([c["label"].replace("\n", " ") for c in have])
@@ -325,7 +349,7 @@ def plot_detection(coords: list, out_path: str) -> None:
     ax.legend(fontsize=18)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] detection comparison -> {out_path}")
 
@@ -343,15 +367,16 @@ def plot_timeseries(coords: list, out_path: str) -> None:
     fig, ax = plt.subplots(figsize=(10, 5))
     for c in have:
         ts = c["ts"]
-        ax.plot(ts["t"], ts["H_flow_bits"], lw=2, color=c["color"],
-                label=c["label"].replace("\n", " "))
+        ax.plot(
+            ts["t"], ts["H_flow_bits"], lw=2, color=c["color"], label=c["label"].replace("\n", " ")
+        )
     ax.set_xlabel("time since first nanogrid packet (s)")
     ax.set_ylabel("windowed flow entropy (bits)  (↑ = harder to fingerprint)")
     ax.set_title("Flow entropy over time — RL vs fixed MTD")
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] entropy timeseries comparison -> {out_path}")
 
@@ -371,8 +396,9 @@ def plot_timeseries_fields(coords: list, out_path: str) -> None:
         for c in have:
             ts = c["ts"]
             if col in ts.columns:
-                ax.plot(ts["t"], ts[col], lw=1.6, color=c["color"],
-                        label=c["label"].replace("\n", " "))
+                ax.plot(
+                    ts["t"], ts[col], lw=1.6, color=c["color"], label=c["label"].replace("\n", " ")
+                )
         ax.set_title(name, fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_ylabel("bits")
@@ -406,10 +432,17 @@ def plot_availability(coords: list, out_path: str) -> None:
         cum = np.arange(1, len(rel) + 1, dtype=float)
         rel = np.concatenate(([0.0], rel, [t_max]))
         cum = np.concatenate(([0.0], cum, [cum[-1]]))
-        ratio = c["avail"]["delivery_ratio"]
         label = f"{c['label'].replace(chr(10), ' ')}"
-        ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
-                ls=styles[i % len(styles)], label=label)
+        ax.step(
+            rel,
+            cum,
+            where="post",
+            lw=2.2,
+            alpha=0.85,
+            color=c["color"],
+            ls=styles[i % len(styles)],
+            label=label,
+        )
 
     ax.set_xlabel("Time (s)", fontsize=20)
     ax.set_ylabel("Cumulative Updates Delivered", fontsize=20)
@@ -418,7 +451,7 @@ def plot_availability(coords: list, out_path: str) -> None:
     ax.legend(loc="upper left", fontsize=18)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] availability comparison -> {out_path}")
 
@@ -443,12 +476,20 @@ def plot_availability_cost(coords: list, out_path: str) -> None:
         events = c["cost"]["rel_events"]
         rel = np.array([t for t, _ in events], dtype=float)
         cum = np.cumsum([cost for _, cost in events]) if events else np.array([])
-        # frame at (0, 0) and hold the final total flat to the longest run
+        # Frame at (0, 0) and hold the final total flat to the longest run.
         rel = np.concatenate(([0.0], rel, [t_max]))
         cum = np.concatenate(([0.0], cum, [cum[-1] if len(cum) else 0.0]))
         label = f"{c['label'].replace(chr(10), ' ')}  (cost {c['cost']['total_cost']:.2f})"
-        ax.step(rel, cum, where="post", lw=2.2, alpha=0.85, color=c["color"],
-                ls=styles[i % len(styles)], label=label)
+        ax.step(
+            rel,
+            cum,
+            where="post",
+            lw=2.2,
+            alpha=0.85,
+            color=c["color"],
+            ls=styles[i % len(styles)],
+            label=label,
+        )
 
     ax.set_xlabel("Time (s)", fontsize=20)
     ax.set_ylabel("Cumulative Availability Cost", fontsize=20)
@@ -457,7 +498,7 @@ def plot_availability_cost(coords: list, out_path: str) -> None:
     ax.legend(loc="upper left", fontsize=18)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches='tight')
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot] availability-cost comparison -> {out_path}")
 
@@ -483,17 +524,30 @@ def build_table(coords: list) -> pd.DataFrame:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Compare RL vs fixed MTD coordinators (model-free)")
-    p.add_argument("--slug", required=True,
-                   help="MTD parameter slug shared by the mtd-/mtdrl- dirs, e.g. "
-                        "hop4-padint3-ips6-ports7-pads7-srcips6-mbps2-freqint5-freqs6")
-    p.add_argument("--bg-replay-mbps", type=int, default=2,
-                   help="Selects the baseline-mbps<M> dir (default: 2).")
+    p.add_argument(
+        "--slug",
+        required=True,
+        help="MTD parameter slug shared by the mtd-/mtdrl- dirs, e.g. "
+        "hop4-padint3-ips6-ports7-pads7-srcips6-mbps2-freqint5-freqs6",
+    )
+    p.add_argument(
+        "--bg-replay-mbps",
+        type=int,
+        default=2,
+        help="Selects the baseline-mbps<M> dir (default: 2).",
+    )
     p.add_argument("--output-root", default="output")
-    p.add_argument("--out-dir", default=None,
-                   help="Where to write the comparison (default: output/compare-<slug>).")
-    p.add_argument("--rl-tags", default="",
-                   help="Comma-separated extra RL policy tags to add as their own "
-                        "coordinators (dir prefix mtdrl-<tag>), e.g. 'entropy'.")
+    p.add_argument(
+        "--out-dir",
+        default=None,
+        help="Where to write the comparison (default: output/compare-<slug>).",
+    )
+    p.add_argument(
+        "--rl-tags",
+        default="",
+        help="Comma-separated extra RL policy tags to add as their own "
+        "coordinators (dir prefix mtdrl-<tag>), e.g. 'entropy'.",
+    )
     return p.parse_args()
 
 

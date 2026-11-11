@@ -20,24 +20,25 @@ Two halves, deliberately treated differently:
   runs old code).
 
 Run: `.venv/bin/python -m pytest tests/test_deploy_contract.py`
-Regenerate the snapshots on purpose: `UPDATE_SNAPSHOTS=1 .venv/bin/python -m pytest tests/test_deploy_contract.py`
+Regenerate the snapshots on purpose:
+`UPDATE_SNAPSHOTS=1 .venv/bin/python -m pytest tests/core/test_deploy_contract.py`
 """
 
 import json
 import os
 import re
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.helpers import REPO_ROOT  # noqa: E402
 
-from cyberrange.core import cli, registry                    # noqa: E402
-from cyberrange.core.topology import export_lab_conf         # noqa: E402
-from tests.helpers.manifests import manifest_entries                       # noqa: E402
+from cyberrange.core import cli, registry  # noqa: E402
+from cyberrange.core.topology import export_lab_conf  # noqa: E402
+from tests.helpers.manifests import manifest_entries  # noqa: E402
 
 from tests.helpers import SNAPSHOT_DIR  # noqa: E402
+
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
 # Where guest modules are allowed to live. Used to spot a stale twin after a
@@ -85,13 +86,16 @@ class DeployContractFrozen(unittest.TestCase):
                     path.exists(),
                     f"missing deploy snapshot {path}. It is the only offline check that a "
                     f"scenario still deploys the same lab — regenerate it deliberately with "
-                    f"UPDATE_SNAPSHOTS=1, never by deleting it.")
+                    f"UPDATE_SNAPSHOTS=1, never by deleting it.",
+                )
                 expected = json.loads(path.read_text())
                 self.assertEqual(
-                    expected, rendered,
-                    f"the {name} lab no longer deploys what it used to: interfaces, image, "
-                    f"startup commands or guest paths changed. A pure file move must leave "
-                    f"this identical.")
+                    expected,
+                    rendered,
+                    f"the {name} lab deploys something other than the frozen contract: "
+                    f"interfaces, image, startup commands or guest paths differ. A pure "
+                    f"file move must leave this identical.",
+                )
 
 
 class HostPathsResolve(unittest.TestCase):
@@ -109,7 +113,8 @@ class HostPathsResolve(unittest.TestCase):
                 self.assertTrue(
                     (REPO_ROOT / host_path).is_file(),
                     f"{manifest} stages {guest} from {host_path}, which does not exist: "
-                    f"the container would come up without it.")
+                    f"the container would come up without it.",
+                )
 
     def test_host_paths_resolve_from_any_working_directory(self):
         """Manifest host paths are repo-relative. Resolving them against the process
@@ -127,7 +132,8 @@ class HostPathsResolve(unittest.TestCase):
                         self.assertTrue(
                             paths.resolve(host_path).is_file(),
                             f"{host_path} does not resolve when the process runs from "
-                            f"{elsewhere}: the lab would be deployed without {guest}.")
+                            f"{elsewhere}: the lab would be deployed without {guest}.",
+                        )
             finally:
                 os.chdir(cwd)
 
@@ -140,13 +146,18 @@ class HostPathsResolve(unittest.TestCase):
             for plane in PLANE_DIRS:
                 plane_dir = REPO_ROOT / plane
                 if plane_dir.is_dir():
-                    twins += [str(p.relative_to(REPO_ROOT)) for p in plane_dir.rglob(base)
-                              if "__pycache__" not in p.parts]
+                    twins += [
+                        str(p.relative_to(REPO_ROOT))
+                        for p in plane_dir.rglob(base)
+                        if "__pycache__" not in p.parts
+                    ]
             with self.subTest(module=base):
                 self.assertEqual(
-                    [host_path], sorted(twins),
+                    [host_path],
+                    sorted(twins),
                     f"{base} exists in more than one place: {sorted(twins)}. The manifest "
-                    f"stages {host_path}; another copy means a move left a twin behind.")
+                    f"stages {host_path}; another copy means a move left a twin behind.",
+                )
 
 
 class LaunchNamesMatchTheManifest(unittest.TestCase):
@@ -160,16 +171,17 @@ class LaunchNamesMatchTheManifest(unittest.TestCase):
         launched = {}
         for components in REPO_ROOT.glob("**/components.py"):
             for m in re.finditer(r"python3 (\w+\.py)", components.read_text()):
-                launched.setdefault(m.group(1), set()).add(
-                    str(components.relative_to(REPO_ROOT)))
+                launched.setdefault(m.group(1), set()).add(str(components.relative_to(REPO_ROOT)))
 
         self.assertTrue(launched, "found no `python3 <module>.py` launch strings to check")
         for module, sources in sorted(launched.items()):
             with self.subTest(module=module):
                 self.assertIn(
-                    module, staged,
+                    module,
+                    staged,
                     f"{module} is launched by {sorted(sources)} but no deploy manifest "
-                    f"stages it: that container would start it and die.")
+                    f"stages it: that container would start it and die.",
+                )
 
 
 if __name__ == "__main__":

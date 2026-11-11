@@ -7,16 +7,17 @@ log and, if there are none, deletes the run's capture and exits non-zero (so
 main.py retries it). The log lines below are verbatim formats of the two
 publishers (mtd_executor, simple_client).
 
-Run with `.venv/bin/python -m unittest tests.test_run_validation`.
+Run with `.venv/bin/python -m pytest tests/scenarios/mqtt_mtd/test_run_validation.py`.
 """
 
+# The publisher log lines below are copied verbatim from a real run: wrapping
+# them would change the fixture the parser is tested against.
+# ruff: noqa: E501
+
 import os
-import sys
 import tempfile
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from cyberrange.core.context import with_console_log  # noqa: E402
 from cyberrange.scenarios.mqtt_mtd.scenario import (  # noqa: E402
@@ -28,9 +29,9 @@ EXECUTOR_LOG = """\
 2026-10-08T11:26:39  [scmc1] Building microgrid simulator...
 2026-10-08T11:26:39  [scmc1] ctrl → 10.1.0.2:9998
 2026-10-08T11:26:39  [scmc1] MQTT → 10.1.0.2:8883 (ok)
-2026-10-08T11:26:39  [scmc1] #1 → 10.1.0.2:8883  power=  84.6 kW  freq=49.6003 Hz  volt=229.03 V  pad=[off]
+2026-10-08T11:26:39  [scmc1] #1 → 10.1.0.2:8883  power=  84.6 kW  freq=49.6003 Hz  volt=229.03 V  pad=[off]  # noqa: E501  (verbatim fixture: wrapping changes the data)
 2026-10-08T11:26:40  [scmc1] SET_PADDING seq=1  buckets=[128, 256]  in 10 msgs
-2026-10-08T11:26:40  [scmc1] #2 → 10.1.0.2:8883  power=  64.4 kW  freq=49.8552 Hz  volt=225.71 V  pad=[off]
+2026-10-08T11:26:40  [scmc1] #2 → 10.1.0.2:8883  power=  64.4 kW  freq=49.8552 Hz  volt=225.71 V  pad=[off]  # noqa: E501  (verbatim fixture: wrapping changes the data)
 """
 SIMPLE_CLIENT_LOG = """\
 2026-06-26 10:00:00,000  [scmc1] Connected to broker

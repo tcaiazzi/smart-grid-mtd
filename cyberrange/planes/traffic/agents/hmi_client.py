@@ -50,8 +50,9 @@ def diag_loop(base_url, every, jitter, rng, stop):
         except Exception as e:
             log.debug("diagnostic failed: %s", e)
 
+
 DG_SCALE = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
-SAFE_SETPOINT_KW = (15.0, 35.0)   # operator dispatches stay well inside the safe band
+SAFE_SETPOINT_KW = (15.0, 35.0)  # operator dispatches stay well inside the safe band
 
 
 def plan_actions(rng, start, horizon, every, jitter, hold):
@@ -76,8 +77,11 @@ def _read_holding(client, unit):
     if hr.isError():
         raise IOError(f"read_holding_registers failed: {hr}")
     raw = hr.registers[reg.HR_DG_SETPOINT]
-    return {"ctrl_mode": hr.registers[reg.HR_CTRL_MODE], "raw_setpoint": raw,
-            "dg_setpoint": reg.decode(raw, DG_SCALE)}
+    return {
+        "ctrl_mode": hr.registers[reg.HR_CTRL_MODE],
+        "raw_setpoint": raw,
+        "dg_setpoint": reg.decode(raw, DG_SCALE),
+    }
 
 
 def main():
@@ -91,9 +95,12 @@ def main():
     ap.add_argument("--hold", type=float, default=5.0)
     ap.add_argument("--duration", type=float, default=0.0, help="0 = forever")
     ap.add_argument("--seed", type=int, default=None)
-    ap.add_argument("--diag-url", default=None,
-                    help="base URL of the local diagnostics app; enables legitimate "
-                         "periodic diagnostic queries (the IT sensor's 'normal')")
+    ap.add_argument(
+        "--diag-url",
+        default=None,
+        help="base URL of the local diagnostics app; enables legitimate "
+        "periodic diagnostic queries (the IT sensor's 'normal')",
+    )
     ap.add_argument("--diag-every", type=float, default=9.0)
     args = ap.parse_args()
 
@@ -102,9 +109,17 @@ def main():
 
     diag_stop = threading.Event()
     if args.diag_url:
-        threading.Thread(target=diag_loop, args=(args.diag_url, args.diag_every, 2.0,
-                         random.Random((args.seed or 0) ^ 0x1D1A6), diag_stop),
-                         daemon=True).start()
+        threading.Thread(
+            target=diag_loop,
+            args=(
+                args.diag_url,
+                args.diag_every,
+                2.0,
+                random.Random((args.seed or 0) ^ 0x1D1A6),
+                diag_stop,
+            ),
+            daemon=True,
+        ).start()
 
     client = ModbusTcpClient(args.engine_host, port=args.port)
     while not client.connect():
@@ -141,18 +156,22 @@ def main():
                         _write(client, reg.HR_CTRL_MODE, reg.CTRL_AUTO, args.unit_id)
                         log.info("operator: back to AUTO")
                     else:
-                        log.info("operator: foreign setpoint %.1fkW in force, not handing back",
-                                 hr["dg_setpoint"])
+                        log.info(
+                            "operator: foreign setpoint %.1fkW in force, not handing back",
+                            hr["dg_setpoint"],
+                        )
                     manual_until = None
                 if now >= next_poll:
                     ir = client.read_input_registers(0, reg.SENSOR_COUNT, slave=args.unit_id)
                     hr = client.read_holding_registers(0, reg.ACTUATOR_COUNT, slave=args.unit_id)
                     if not ir.isError() and not hr.isError():
-                        log.info("poll v_load=%.3f v_dg=%.3f mode=%d setpoint=%.1fkW",
-                                 reg.decode(ir.registers[reg.IR_V_LOAD], 1000.0),
-                                 reg.decode(ir.registers[reg.IR_V_DG], 1000.0),
-                                 hr.registers[reg.HR_CTRL_MODE],
-                                 reg.decode(hr.registers[reg.HR_DG_SETPOINT], DG_SCALE))
+                        log.info(
+                            "poll v_load=%.3f v_dg=%.3f mode=%d setpoint=%.1fkW",
+                            reg.decode(ir.registers[reg.IR_V_LOAD], 1000.0),
+                            reg.decode(ir.registers[reg.IR_V_DG], 1000.0),
+                            hr.registers[reg.HR_CTRL_MODE],
+                            reg.decode(hr.registers[reg.HR_DG_SETPOINT], DG_SCALE),
+                        )
                     next_poll = now + args.poll_interval
             except Exception as e:  # keep the session alive across transient errors
                 log.warning("hmi error: %s", e)

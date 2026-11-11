@@ -7,11 +7,10 @@ Run: `.venv/bin/python -m unittest tests.test_it_sensor`.
 
 import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(guest_paths.DEFENSE_AGENTS))
 
@@ -29,8 +28,12 @@ class Helpers(unittest.TestCase):
             self.assertTrue(it_sensor.is_injection(bad), bad)
 
     def test_descendants(self):
-        procs = [{"pid": 10, "ppid": 1}, {"pid": 11, "ppid": 10}, {"pid": 12, "ppid": 11},
-                 {"pid": 20, "ppid": 1}]
+        procs = [
+            {"pid": 10, "ppid": 1},
+            {"pid": 11, "ppid": 10},
+            {"pid": 12, "ppid": 11},
+            {"pid": 20, "ppid": 1},
+        ]
         self.assertEqual(it_sensor.descendants(procs, {10}), {11, 12})
 
     def test_hex_endpoint(self):
@@ -48,16 +51,23 @@ class Sensor(unittest.TestCase):
 
     def test_web_injection_after_learn(self):
         s, tel = self.make()
-        # during learning: even an injection is not flagged (and legit never is)
+        # During learning: even an injection is not flagged (and legit never is)
         s.observe_web([{"src": "10.10.0.10", "target": "127.0.0.1; id", "path": "/diag"}], now=1001)
         self.assertEqual(self.findings(tel), [])
-        # after learning
-        s.observe_web([{"src": "10.10.0.10", "target": "127.0.0.1; id"},
-                       {"src": "10.10.0.20", "target": "10.20.0.20"}], now=1020)
+        # After learning
+        s.observe_web(
+            [
+                {"src": "10.10.0.10", "target": "127.0.0.1; id"},
+                {"src": "10.10.0.20", "target": "10.20.0.20"},
+            ],
+            now=1020,
+        )
         f = self.findings(tel)
         self.assertEqual(len(f), 1)
-        self.assertEqual((f[0]["klass"], f[0]["maps_to"], f[0]["detector"]),
-                         ("web_injection_pattern", "it_access", "it"))
+        self.assertEqual(
+            (f[0]["klass"], f[0]["maps_to"], f[0]["detector"]),
+            ("web_injection_pattern", "it_access", "it"),
+        )
         self.assertEqual(f[0]["entities"]["src"], "10.10.0.10")
 
     def test_web_dedup(self):
@@ -69,36 +79,57 @@ class Sensor(unittest.TestCase):
     def test_child_process_learns_ping_flags_shell(self):
         s, tel = self.make()
         app = {"pid": 100, "ppid": 1, "comm": "python3", "cmdline": "python3 /vuln_app.py"}
-        # learning window: a legitimate diagnostic spawns sh->ping
-        s.observe_procs([app, {"pid": 101, "ppid": 100, "comm": "sh", "cmdline": "sh -c ping"},
-                         {"pid": 102, "ppid": 101, "comm": "ping", "cmdline": "ping -c 1 x"}], now=1001)
+        # Learning window: a legitimate diagnostic spawns sh->ping.
+        s.observe_procs(
+            [
+                app,
+                {"pid": 101, "ppid": 100, "comm": "sh", "cmdline": "sh -c ping"},
+                {"pid": 102, "ppid": 101, "comm": "ping", "cmdline": "ping -c 1 x"},
+            ],
+            now=1001,
+        )
         self.assertEqual(self.findings(tel), [])
-        # after: an injected command runs a different child
-        s.observe_procs([app, {"pid": 110, "ppid": 100, "comm": "sh", "cmdline": "sh -c id"},
-                         {"pid": 111, "ppid": 110, "comm": "id", "cmdline": "id"}], now=1020)
+        # After: an injected command runs a different child.
+        s.observe_procs(
+            [
+                app,
+                {"pid": 110, "ppid": 100, "comm": "sh", "cmdline": "sh -c id"},
+                {"pid": 111, "ppid": 110, "comm": "id", "cmdline": "id"},
+            ],
+            now=1020,
+        )
         f = self.findings(tel)
         self.assertEqual([x["maps_to"] for x in f], ["it_exec"])
         self.assertEqual(f[0]["evidence"]["comm"], "id")
 
     def test_unexpected_modbus_client(self):
         s, tel = self.make()
-        # legit client's connection learned
-        s.observe_conns([{"laddr_port": 40000, "raddr_ip": ENGINE, "raddr_port": 5020,
-                          "state": "01"}], now=1001)
+        # Legit client's connection learned.
+        s.observe_conns(
+            [{"laddr_port": 40000, "raddr_ip": ENGINE, "raddr_port": 5020, "state": "01"}], now=1001
+        )
         self.assertEqual(self.findings(tel), [])
-        # the pivot opens a new local port to the engine
-        s.observe_conns([{"laddr_port": 40000, "raddr_ip": ENGINE, "raddr_port": 5020, "state": "01"},
-                         {"laddr_port": 55123, "raddr_ip": ENGINE, "raddr_port": 5020, "state": "02"}],
-                        now=1020)
+        # The pivot opens a new local port to the engine.
+        s.observe_conns(
+            [
+                {"laddr_port": 40000, "raddr_ip": ENGINE, "raddr_port": 5020, "state": "01"},
+                {"laddr_port": 55123, "raddr_ip": ENGINE, "raddr_port": 5020, "state": "02"},
+            ],
+            now=1020,
+        )
         f = self.findings(tel)
         self.assertEqual([x["maps_to"] for x in f], ["pivot"])
         self.assertEqual(f[0]["evidence"]["laddr_port"], 55123)
 
     def test_connections_to_other_ports_ignored(self):
         s, tel = self.make(learn=0.0)
-        s.observe_conns([{"laddr_port": 50000, "raddr_ip": ENGINE, "raddr_port": 80, "state": "01"},
-                         {"laddr_port": 50001, "raddr_ip": "10.20.0.10", "raddr_port": 5020,
-                          "state": "01"}], now=1020)
+        s.observe_conns(
+            [
+                {"laddr_port": 50000, "raddr_ip": ENGINE, "raddr_port": 80, "state": "01"},
+                {"laddr_port": 50001, "raddr_ip": "10.20.0.10", "raddr_port": 5020, "state": "01"},
+            ],
+            now=1020,
+        )
         self.assertEqual(self.findings(tel), [])
 
 

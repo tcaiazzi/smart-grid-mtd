@@ -26,7 +26,7 @@ Usage:
       --port-pool 8883,8884,8885 --real-port 18883 \\
       --scmc-ip-pool 10.0.0.2,10.0.0.4 \\
       --pad-buckets 128,256,512,1024 --freq-pool 0.2,0.5,1.0 --tick 1.0
-  # add --no-nat for host testing without iptables
+  # Add --no-nat for host testing without iptables.
 """
 
 import argparse
@@ -61,16 +61,22 @@ class RLSEMPCoordinator(SEMPCoordinator):
         # the features it was trained on. Order: port, ip, src, pad, freq.
         self._dwell = np.full(N_KNOBS, DWELL_INIT, dtype=np.float32)
         self._rate = np.zeros(N_KNOBS, dtype=np.float32)
-        self._pool_sizes = np.array([
-            len(self.port_pool),
-            len(self.ip_pool),
-            max(len(self.scmc_ip_pool), 1),
-            max(len(self.pad_buckets), 1),
-            max(len(self.freq_pool), 1),
-        ], dtype=np.float32)
-        self._freq_idx = 0       # current publish-interval index (round-robin)
-        print(f"[rl-coordinator] loaded policy {policy_path}  pools={self._pool_sizes.astype(int).tolist()}",
-              flush=True)
+        self._pool_sizes = np.array(
+            [
+                len(self.port_pool),
+                len(self.ip_pool),
+                max(len(self.scmc_ip_pool), 1),
+                max(len(self.pad_buckets), 1),
+                max(len(self.freq_pool), 1),
+            ],
+            dtype=np.float32,
+        )
+        self._freq_idx = 0  # current publish-interval index (round-robin)
+        print(
+            f"[rl-coordinator] loaded policy {policy_path}  "
+            f"pools={self._pool_sizes.astype(int).tolist()}",
+            flush=True,
+        )
 
     # ── action emitters (mirror the base coordinator's loop bodies) ──
     # Each returns whether it actually emitted, so dwell/rate only update on a real
@@ -84,7 +90,7 @@ class RLSEMPCoordinator(SEMPCoordinator):
             if not self._clients or self._pending_done:
                 if self._pending_done:
                     self.telemetry.skipped("hop", "in_progress")
-                return (False, False)          # no clients, or a hop is in flight
+                return (False, False)  # no clients, or a hop is in flight
             new_ip, new_port = self.current_ip, self.current_port
             if do_ip and len(self.ip_pool) > 1:
                 idx = (self.ip_pool.index(self.current_ip) + 1) % len(self.ip_pool)
@@ -97,8 +103,9 @@ class RLSEMPCoordinator(SEMPCoordinator):
             port_changed = new_port != self.current_port
             if not (ip_changed or port_changed):
                 return (False, False)
-            action = ("both" if ip_changed and port_changed else
-                      "ip_hop" if ip_changed else "port_hop")
+            action = (
+                "both" if ip_changed and port_changed else "ip_hop" if ip_changed else "port_hop"
+            )
 
             self._seq += 1
             seq = self._seq
@@ -112,13 +119,22 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._track_hop(seq, ip_changed, port_changed, in_messages, new_ip, new_port)
             self.current_ip, self.current_port = new_ip, new_port
 
-        self._nat_add(new_port)              # open new port before clients migrate
-        self._broadcast({
-            "type": "SCHEDULE_HOP", "seq": seq, "action": action,
-            "new_ip": new_ip, "new_port": new_port, "in_messages": in_messages,
-        })
-        print(f"[rl-coordinator] SCHEDULE_HOP seq={seq} action={action} "
-              f"→ {new_ip}:{new_port} in {in_messages} msgs", flush=True)
+        self._nat_add(new_port)  # open new port before clients migrate
+        self._broadcast(
+            {
+                "type": "SCHEDULE_HOP",
+                "seq": seq,
+                "action": action,
+                "new_ip": new_ip,
+                "new_port": new_port,
+                "in_messages": in_messages,
+            }
+        )
+        print(
+            f"[rl-coordinator] SCHEDULE_HOP seq={seq} action={action} "
+            f"→ {new_ip}:{new_port} in {in_messages} msgs",
+            flush=True,
+        )
         return (port_changed, ip_changed)
 
     def _emit_src_hop(self) -> bool:
@@ -136,15 +152,22 @@ class RLSEMPCoordinator(SEMPCoordinator):
             seq = self._seq
             in_messages = self._rng["src"].randint(5, 15)
             self._await(self._pending_src_done, seq, in_messages)
-            self.telemetry.scheduled(seq, "src", ["src"], in_messages,
-                                     self._clients, new_src_ip=new_src_ip)
+            self.telemetry.scheduled(
+                seq, "src", ["src"], in_messages, self._clients, new_src_ip=new_src_ip
+            )
 
-        self._broadcast({
-            "type": "SCHEDULE_SRC_HOP", "seq": seq,
-            "new_src_ip": new_src_ip, "in_messages": in_messages,
-        })
-        print(f"[rl-coordinator] SCHEDULE_SRC_HOP seq={seq} → src {new_src_ip} "
-              f"in {in_messages} msgs", flush=True)
+        self._broadcast(
+            {
+                "type": "SCHEDULE_SRC_HOP",
+                "seq": seq,
+                "new_src_ip": new_src_ip,
+                "in_messages": in_messages,
+            }
+        )
+        print(
+            f"[rl-coordinator] SCHEDULE_SRC_HOP seq={seq} → src {new_src_ip} in {in_messages} msgs",
+            flush=True,
+        )
         return True
 
     def _emit_padding(self, level: int) -> bool:
@@ -164,15 +187,17 @@ class RLSEMPCoordinator(SEMPCoordinator):
             seq = self._seq
             in_messages = self._rng["pad"].randint(5, 15)
             self._await(self._pending_pad_done, seq, in_messages)
-            self.telemetry.scheduled(seq, "pad", ["pad"], in_messages,
-                                     self._clients, buckets=buckets, level=level)
+            self.telemetry.scheduled(
+                seq, "pad", ["pad"], in_messages, self._clients, buckets=buckets, level=level
+            )
 
-        self._broadcast({
-            "type": "SET_PADDING", "seq": seq,
-            "buckets": buckets, "in_messages": in_messages,
-        })
-        print(f"[rl-coordinator] SET_PADDING seq={seq} buckets={buckets} "
-              f"in {in_messages} msgs", flush=True)
+        self._broadcast(
+            {"type": "SET_PADDING", "seq": seq, "buckets": buckets, "in_messages": in_messages}
+        )
+        print(
+            f"[rl-coordinator] SET_PADDING seq={seq} buckets={buckets} in {in_messages} msgs",
+            flush=True,
+        )
         return True
 
     def _emit_interval(self) -> bool:
@@ -194,15 +219,23 @@ class RLSEMPCoordinator(SEMPCoordinator):
             seq = self._seq
             in_messages = self._rng["freq"].randint(5, 15)
             self._await(self._pending_freq_done, seq, in_messages)
-            self.telemetry.scheduled(seq, "freq", ["freq"], in_messages,
-                                     self._clients, interval=new_interval)
+            self.telemetry.scheduled(
+                seq, "freq", ["freq"], in_messages, self._clients, interval=new_interval
+            )
 
-        self._broadcast({
-            "type": "SET_INTERVAL", "seq": seq,
-            "interval": new_interval, "in_messages": in_messages,
-        })
-        print(f"[rl-coordinator] SET_INTERVAL seq={seq} interval={new_interval}s "
-              f"in {in_messages} msgs", flush=True)
+        self._broadcast(
+            {
+                "type": "SET_INTERVAL",
+                "seq": seq,
+                "interval": new_interval,
+                "in_messages": in_messages,
+            }
+        )
+        print(
+            f"[rl-coordinator] SET_INTERVAL seq={seq} interval={new_interval}s "
+            f"in {in_messages} msgs",
+            flush=True,
+        )
         return True
 
     # ── policy decision loop (replaces the five fixed-timer loops) ──
@@ -234,9 +267,13 @@ class RLSEMPCoordinator(SEMPCoordinator):
 
             # What the policy saw, what it asked for, and what actually fired
             # (an asked-for knob can be blocked by an action still in flight).
-            self.telemetry.emit("rl_decision", dwell=self._dwell.tolist(),
-                                rate=[round(float(r), 4) for r in self._rate],
-                                cmd=cmd, fired=fired.astype(int).tolist())
+            self.telemetry.emit(
+                "rl_decision",
+                dwell=self._dwell.tolist(),
+                rate=[round(float(r), 4) for r in self._rate],
+                cmd=cmd,
+                fired=fired.astype(int).tolist(),
+            )
             self._dwell = np.where(fired > 0, 0.0, self._dwell + 1.0)
             self._rate = (1.0 - EWMA_ALPHA) * self._rate + EWMA_ALPHA * fired
 
@@ -256,12 +293,13 @@ class RLSEMPCoordinator(SEMPCoordinator):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(description="RL-driven MTD coordinator — runs on SEMP")
-    parser.add_argument("--policy", required=True,
-                        help="Path to the distilled numpy policy (.npz)")
-    parser.add_argument("--tick", type=float, default=1.0,
-                        help="Seconds between policy decisions (default: 1.0)")
+    parser.add_argument("--policy", required=True, help="Path to the distilled numpy policy (.npz)")
+    parser.add_argument(
+        "--tick", type=float, default=1.0, help="Seconds between policy decisions (default: 1.0)"
+    )
     parser.add_argument("--control-port", type=int, default=9998)
     parser.add_argument("--ip-pool", default="10.1.0.2")
     parser.add_argument("--port-pool", default="8883,8884,8885")
@@ -277,11 +315,18 @@ def main():
     parser.add_argument("--pad-interval", type=float, default=30.0)
     parser.add_argument("--src-hop-interval", type=float, default=30.0)
     parser.add_argument("--freq-interval", type=float, default=30.0)
-    parser.add_argument("--shared-key", default=None,
-                        help="64-char hex QKD shared key for control-channel "
-                             "AES-256-GCM encryption (omit = plaintext)")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Seed for the per-knob random draws (omit = unseeded)")
+    parser.add_argument(
+        "--shared-key",
+        default=None,
+        help="64-char hex QKD shared key for control-channel "
+        "AES-256-GCM encryption (omit = plaintext)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for the per-knob random draws (omit = unseeded)",
+    )
     add_telemetry_args(parser)
     args = parser.parse_args()
 
@@ -295,15 +340,27 @@ def main():
     freq_pool = [float(x) for x in args.freq_pool.split(",") if x.strip()]
 
     RLSEMPCoordinator(
-        args.control_port, ip_pool, port_pool, args.hop_interval,
-        real_port=args.real_port, no_nat=args.no_nat,
-        pad_buckets=pad_buckets, pad_interval=args.pad_interval,
-        scmc_ip_pool=scmc_ip_pool, src_hop_interval=args.src_hop_interval,
-        freq_pool=freq_pool, freq_interval=args.freq_interval,
-        hop_timeout=args.hop_timeout, shared_key=args.shared_key,
-        policy_path=args.policy, tick_interval=args.tick, seed=args.seed,
-        telemetry_path=args.telemetry_path, dashboard_port=args.dashboard_port,
-        detector_model=args.detector_model, observe_data=args.observe_data,
+        args.control_port,
+        ip_pool,
+        port_pool,
+        args.hop_interval,
+        real_port=args.real_port,
+        no_nat=args.no_nat,
+        pad_buckets=pad_buckets,
+        pad_interval=args.pad_interval,
+        scmc_ip_pool=scmc_ip_pool,
+        src_hop_interval=args.src_hop_interval,
+        freq_pool=freq_pool,
+        freq_interval=args.freq_interval,
+        hop_timeout=args.hop_timeout,
+        shared_key=args.shared_key,
+        policy_path=args.policy,
+        tick_interval=args.tick,
+        seed=args.seed,
+        telemetry_path=args.telemetry_path,
+        dashboard_port=args.dashboard_port,
+        detector_model=args.detector_model,
+        observe_data=args.observe_data,
     ).run()
 
 

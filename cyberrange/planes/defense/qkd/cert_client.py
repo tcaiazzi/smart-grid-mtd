@@ -30,6 +30,7 @@ from mtd_wire import send_bytes as send_msg, recv_bytes as recv_msg
 # Bundle parsing
 # ---------------------------------------------------------------------------
 
+
 def unpack_bundle(bundle: bytes):
     """
     Bundle format (set by cert_authority.py):
@@ -38,14 +39,14 @@ def unpack_bundle(bundle: bytes):
         ca_cert_pem (remainder)
     Returns (key_pem, cert_pem, ca_cert_pem).
     """
-    key_len  = struct.unpack(">I", bundle[0:4])[0]
-    key_pem  = bundle[4 : 4 + key_len]
+    key_len = struct.unpack(">I", bundle[0:4])[0]
+    key_pem = bundle[4 : 4 + key_len]
 
-    offset   = 4 + key_len
+    offset = 4 + key_len
     cert_len = struct.unpack(">I", bundle[offset : offset + 4])[0]
     cert_pem = bundle[offset + 4 : offset + 4 + cert_len]
 
-    ca_cert_pem = bundle[offset + 4 + cert_len:]
+    ca_cert_pem = bundle[offset + 4 + cert_len :]
     return key_pem, cert_pem, ca_cert_pem
 
 
@@ -53,13 +54,15 @@ def unpack_bundle(bundle: bytes):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--shared-key", required=True,
-                        help="64-char hex string (32-byte AES-256 key from QKD)")
+    parser.add_argument(
+        "--shared-key", required=True, help="64-char hex string (32-byte AES-256 key from QKD)"
+    )
     parser.add_argument("--ca-host", required=True)
     parser.add_argument("--ca-port", type=int, default=9999)
-    parser.add_argument("--cn",      default="scmc1")
+    parser.add_argument("--cn", default="scmc1")
     parser.add_argument("--out-dir", default="certs")
     args = parser.parse_args()
 
@@ -70,14 +73,14 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # Connect and send CN
+    # Connect and send CN.
     print(f"[{args.cn}] Connecting to CA at {args.ca_host}:{args.ca_port}...")
     with socket.create_connection((args.ca_host, args.ca_port), timeout=15) as sock:
         send_msg(sock, encrypt_payload(args.cn.encode(), shared_key))
         print(f"[{args.cn}] CN sent, waiting for certificates...")
         enc_bundle = recv_msg(sock)
 
-    # Decrypt and unpack
+    # Decrypt and unpack.
     bundle = decrypt_payload(enc_bundle, shared_key)
     key_pem, cert_pem, ca_cert_pem = unpack_bundle(bundle)
 
@@ -92,7 +95,7 @@ def main():
     print(f"[{args.cn}] Certificates saved:")
     print(f"  client.key → {save('client.key', key_pem, 0o600)}")
     print(f"  client.crt → {save('client.crt', cert_pem)}")
-    print(f"  ca.crt     → {save('ca.crt',     ca_cert_pem)}")
+    print(f"  ca.crt     → {save('ca.crt', ca_cert_pem)}")
 
     cert = x509.load_pem_x509_certificate(cert_pem)
     print(f"[{args.cn}] Valid until: {cert.not_valid_after_utc}")

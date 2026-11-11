@@ -1,21 +1,14 @@
 """paths.py — where the repo is, computed once.
 
-The repo root used to be derived three separate times, each by counting
-directory levels up from a module:
+The root is *found*, not counted: walk up until a directory looks like this
+repo. Every module that needs it imports it from here, so a module can move to
+any depth without changing what it gets.
 
-    core/campaign.py            Path(__file__).resolve().parents[2]
-    scenarios/mqtt_mtd/campaign.py   parents[3]
-    core/loc.py                 dirname(dirname(dirname(...)))
-
-That is a silent failure waiting for a refactor. Moving a module one level
-changes what ``parents[N]`` points at, and nothing raises: ``Path`` happily
-composes a wrong-but-plausible path, ``(root / rel).is_file()`` just answers
-False, and a campaign concludes a step was "already built" (or writes its
-output outside the repo) instead of failing. Counting levels encodes a file's
-position in its own contents.
-
-Here the root is *found* instead: walk up until a directory looks like this
-repo. A module can then move anywhere without touching this.
+Counting levels instead — ``Path(__file__).resolve().parents[2]`` — encodes a
+file's position in its own contents, and breaks silently when that position
+changes: ``Path`` composes a wrong-but-plausible path, ``(root / rel).is_file()``
+simply answers False, and a campaign concludes a step was "already built", or
+writes its output outside the repo, instead of failing.
 """
 
 from pathlib import Path
@@ -32,7 +25,8 @@ def find_repo_root(start=None) -> Path:
             return candidate
     # A checkout without any marker is not something to guess about.
     raise RuntimeError(
-        f"no repo root above {here}: expected one of {MARKERS} in a parent directory")
+        f"no repo root above {here}: expected one of {MARKERS} in a parent directory"
+    )
 
 
 REPO_ROOT = find_repo_root()

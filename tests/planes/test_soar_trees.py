@@ -5,12 +5,9 @@ Run: `.venv/bin/python -m unittest tests.test_soar_trees`.
 """
 
 import json
-import sys
 import types
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from cyberrange.planes.defense.soar import kg, trees  # noqa: E402
 from cyberrange.scenarios.cps import kg as cps_kg
@@ -47,8 +44,9 @@ class CPSTrees(unittest.TestCase):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]
         services, roles = cps_kg.catalog()
         lab, _m, _s = cps.build_lab(types.SimpleNamespace(dashboard_port=0))
-        g2 = kg.build_kg(lab, rules, services=services, roles=roles,
-                         plant_service=("engine", "modbus"))
+        g2 = kg.build_kg(
+            lab, rules, services=services, roles=roles, plant_service=("engine", "modbus")
+        )
         idx = trees.index(self.tree)
         self.assertFalse(trees.feasible(idx["via_hmi"], g2))
         self.assertFalse(trees.feasible(self.tree, g2))
@@ -61,8 +59,9 @@ class CPSTrees(unittest.TestCase):
 
     def test_countermeasures(self):
         ids = {c.id for c in self.cms}
-        self.assertEqual(ids, {"notify", "block_flow", "isolate_hmi", "force_auto",
-                               "restore_breaker"})
+        self.assertEqual(
+            ids, {"notify", "block_flow", "isolate_hmi", "force_auto", "restore_breaker"}
+        )
         nodes = trees.index(self.tree)
         for c in self.cms:
             for nid in c.prevents + c.restores:

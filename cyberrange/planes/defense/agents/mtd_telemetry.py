@@ -51,9 +51,9 @@ class Telemetry:
         self._events: list = []
         self._file = open(path, "a", buffering=1) if path else None
         self._cost = dict(knob_cost or {})
-        self._actions: dict = {}           # seq → in-flight action record
-        self._unconfirmed: dict = {}       # seq → record closed with no DONE/FAILED
-        self._listeners: list = []         # called with every event, outside the lock
+        self._actions: dict = {}  # seq → in-flight action record
+        self._unconfirmed: dict = {}  # seq → record closed with no DONE/FAILED
+        self._listeners: list = []  # called with every event, outside the lock
         # Publish interval the executors currently use; DataPlaneObserver judges
         # gaps against it. 1.0 s is the executor's default --interval.
         self.publish_interval = 1.0
@@ -78,7 +78,7 @@ class Telemetry:
 
     def events(self, since: int = 0) -> list:
         with self._lock:
-            return self._events[max(0, since):]
+            return self._events[max(0, since) :]
 
     def __len__(self) -> int:
         with self._lock:
@@ -86,18 +86,29 @@ class Telemetry:
 
     # ── MTD action ledger ──
 
-    def scheduled(self, seq: int, action: str, knobs: list, in_messages: int,
-                  awaited, **params) -> None:
+    def scheduled(
+        self, seq: int, action: str, knobs: list, in_messages: int, awaited, **params
+    ) -> None:
         """An action was broadcast. `knobs` are the KNOB_COST keys it moves
         (a broker hop lists only the fields that changed)."""
         with self._lock:
             self._actions[seq] = {
-                "t": time.time(), "action": action, "params": params,
+                "t": time.time(),
+                "action": action,
+                "params": params,
                 "cost": sum(self._cost.get(k, 0.0) for k in knobs),
-                "done": set(), "failed": set(),
+                "done": set(),
+                "failed": set(),
             }
-        self.emit("action_scheduled", seq=seq, action=action, knobs=list(knobs),
-                  in_messages=in_messages, awaited=sorted(awaited), params=params)
+        self.emit(
+            "action_scheduled",
+            seq=seq,
+            action=action,
+            knobs=list(knobs),
+            in_messages=in_messages,
+            awaited=sorted(awaited),
+            params=params,
+        )
 
     def reply(self, seq: int, scmc_id: str, phase: str) -> None:
         """An executor answered: phase is ACK, DONE or FAILED."""
@@ -121,9 +132,15 @@ class Telemetry:
         if late is not None:
             # The executor did fire it after all (its DONE was stuck, e.g. behind a
             # blackhole): charge it now, as client.log — and so the post-hoc cost — does.
-            self.emit("action_late", seq=seq, action=late["action"], scmc_id=scmc_id,
-                      phase=phase, cost=round(late["cost"], 4),
-                      delay_s=round(time.time() - late["t"], 3))
+            self.emit(
+                "action_late",
+                seq=seq,
+                action=late["action"],
+                scmc_id=scmc_id,
+                phase=phase,
+                cost=round(late["cost"], 4),
+                delay_s=round(time.time() - late["t"], 3),
+            )
 
     def finished(self, seq: int, timed_out=(), rolled_back: bool = False) -> None:
         """The coordinator stopped waiting on `seq`. Classifies the outcome:
@@ -147,12 +164,18 @@ class Telemetry:
                 self._unconfirmed[seq] = rec
                 for old in [q for q, r in self._unconfirmed.items() if time.time() - r["t"] > 600]:
                     del self._unconfirmed[old]
-        self.emit("action_outcome", seq=seq, action=rec["action"], status=status,
-                  rolled_back=rolled_back,
-                  cost=round(rec["cost"], 4) if fired else 0.0,
-                  duration_s=round(time.time() - rec["t"], 3),
-                  done=sorted(rec["done"]), failed=sorted(rec["failed"]),
-                  timed_out=sorted(timed_out))
+        self.emit(
+            "action_outcome",
+            seq=seq,
+            action=rec["action"],
+            status=status,
+            rolled_back=rolled_back,
+            cost=round(rec["cost"], 4) if fired else 0.0,
+            duration_s=round(time.time() - rec["t"], 3),
+            done=sorted(rec["done"]),
+            failed=sorted(rec["failed"]),
+            timed_out=sorted(timed_out),
+        )
 
     def reprice(self, seq: int, knobs: list) -> None:
         """Charge `seq` for these knobs instead of those it was scheduled with — the
@@ -184,14 +207,20 @@ class DataPlaneObserver:
     listener in mosquitto.conf, so it never adds traffic to the observed link.
     """
 
-    def __init__(self, telemetry: Telemetry, host: str = "127.0.0.1", port: int = 1883,
-                 period: float = 1.0, gap_factor: float = 2.0):
+    def __init__(
+        self,
+        telemetry: Telemetry,
+        host: str = "127.0.0.1",
+        port: int = 1883,
+        period: float = 1.0,
+        gap_factor: float = 2.0,
+    ):
         self.telemetry = telemetry
         self.host, self.port = host, port
         self.period, self.gap_factor = period, gap_factor
         self._lock = threading.Lock()
-        self._count: dict = {}             # scmc_id → arrivals in current window
-        self._last: dict = {}              # scmc_id → time of last arrival
+        self._count: dict = {}  # scmc_id → arrivals in current window
+        self._last: dict = {}  # scmc_id → time of last arrival
 
     def _on_message(self, _client, _userdata, msg) -> None:
         parts = msg.topic.split("/")
@@ -204,8 +233,13 @@ class DataPlaneObserver:
             last = self._last.get(scmc_id)
             self._last[scmc_id] = now
         if last is not None and now - last > self.gap_factor * expected:
-            self.telemetry.emit("data_gap", scmc_id=scmc_id, t_start=round(last, 3),
-                                gap_s=round(now - last, 3), expected_s=expected)
+            self.telemetry.emit(
+                "data_gap",
+                scmc_id=scmc_id,
+                t_start=round(last, 3),
+                gap_s=round(now - last, 3),
+                expected_s=expected,
+            )
 
     def _tick_loop(self) -> None:
         while True:
@@ -215,21 +249,24 @@ class DataPlaneObserver:
                 counts, self._count = self._count, {}
                 silence = {s: round(now - t, 3) for s, t in self._last.items()}
             if counts or silence:
-                self.telemetry.emit("data", window_s=self.period,
-                                    n={s: counts.get(s, 0) for s in silence},
-                                    silence_s=silence,
-                                    expected_s=self.telemetry.publish_interval)
+                self.telemetry.emit(
+                    "data",
+                    window_s=self.period,
+                    n={s: counts.get(s, 0) for s in silence},
+                    silence_s=silence,
+                    expected_s=self.telemetry.publish_interval,
+                )
 
     def start(self) -> None:
         import paho.mqtt.client as mqtt
+
         try:
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1,
-                                 client_id="semp-telemetry")
-        except AttributeError:             # paho < 2.0 (the image pins 1.6.1)
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id="semp-telemetry")
+        except AttributeError:  # paho < 2.0 (the image pins 1.6.1)
             client = mqtt.Client(client_id="semp-telemetry")
         client.on_connect = lambda c, *_: c.subscribe("grid/+/snapshot", qos=0)
         client.on_message = self._on_message
         client.connect_async(self.host, self.port)
-        client.loop_start()                # retries until the broker is up
+        client.loop_start()  # retries until the broker is up
         threading.Thread(target=self._tick_loop, daemon=True).start()
         print(f"[telemetry] observing data plane on {self.host}:{self.port}", flush=True)

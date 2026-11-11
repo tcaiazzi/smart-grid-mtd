@@ -16,14 +16,16 @@ PLANE = "traffic"
 class PhysicalProcess(GuestAgent):
     """The plant: grid physics stepper + Modbus/TCP server exposing it."""
 
-    def __init__(self, node, port, step_interval, seed=None,
-                 frame_log="engine_frames.jsonl"):
+    def __init__(self, node, port, step_interval, seed=None, frame_log="engine_frames.jsonl"):
         super().__init__(
             node,
             f"python3 modbus_engine.py --host 0.0.0.0 --port {port} "
             f"--interval {step_interval} --frame-log {frame_log}{seed_arg(seed)}",
-            "engine.log", plane=PLANE, name="physical_process",
-            artifacts=[Artifact(node, f"/{frame_log}", f"{node}.{frame_log}")])
+            "engine.log",
+            plane=PLANE,
+            name="physical_process",
+            artifacts=[Artifact(node, f"/{frame_log}", f"{node}.{frame_log}")],
+        )
         self.frame_log = frame_log
 
 
@@ -35,7 +37,10 @@ class PlcController(GuestAgent):
             node,
             f"python3 plc_controller.py --engine-host {engine_ip} --port {port} "
             f"--interval {interval}{seed_arg(seed)}",
-            "plc.log", plane=PLANE, name="plc")
+            "plc.log",
+            plane=PLANE,
+            name="plc",
+        )
 
 
 class HmiClient(GuestAgent):
@@ -46,9 +51,11 @@ class HmiClient(GuestAgent):
         diag = f" --diag-url {diag_url}" if diag_url else ""
         super().__init__(
             node,
-            f"python3 hmi_client.py --engine-host {engine_ip} --port {port}"
-            f"{seed_arg(seed)}{diag}",
-            "hmi.log", plane=PLANE, name="hmi")
+            f"python3 hmi_client.py --engine-host {engine_ip} --port {port}{seed_arg(seed)}{diag}",
+            "hmi.log",
+            plane=PLANE,
+            name="hmi",
+        )
 
 
 # ── MQTT smart grid ───────────────────────────────────────────────────────────
@@ -58,11 +65,16 @@ class BackgroundReplay(GuestAgent):
 
     def __init__(self, node, iface, mbps, duration=None):
         prefix = f"timeout {duration} " if duration is not None else ""
-        super().__init__(node, f"{prefix}bash ./replay_background.sh {iface} {mbps} 0",
-                         "replay.log", plane=PLANE, name="background_replay")
+        super().__init__(
+            node,
+            f"{prefix}bash ./replay_background.sh {iface} {mbps} 0",
+            "replay.log",
+            plane=PLANE,
+            name="background_replay",
+        )
 
     def start(self, ctx):
-        ctx.exec(self.node, self.command)     # its output is not worth a console log
+        ctx.exec(self.node, self.command)  # its output is not worth a console log
 
     def artifacts(self):
         return []
@@ -77,12 +89,21 @@ class ScmcPublisher(GuestAgent):
 
     BROKER_IP = "10.1.0.2"
 
-    def __init__(self, node, mtd, scmc_ip_pool, shared_key=None, seed=None,
-                 console_log="client.console.log", state=None):
+    def __init__(
+        self,
+        node,
+        mtd,
+        scmc_ip_pool,
+        shared_key=None,
+        seed=None,
+        console_log="client.console.log",
+        state=None,
+    ):
         self.mtd, self.scmc_ip_pool = mtd, scmc_ip_pool
         self.shared_key, self.seed = shared_key, seed
-        super().__init__(node, self.command_for(state), console_log, plane=PLANE,
-                         name="scmc_publisher")
+        super().__init__(
+            node, self.command_for(state), console_log, plane=PLANE, name="scmc_publisher"
+        )
 
     @property
     def log_file(self):
@@ -90,14 +111,15 @@ class ScmcPublisher(GuestAgent):
 
     def command_for(self, state=None):
         if not self.mtd:
-            return ("python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl "
-                    "--cafile certs/ca.crt --certfile certs/client.crt "
-                    "--keyfile certs/client.key --log-file simple_client.log"
-                    + seed_arg(self.seed))
+            return (
+                "python3 simple_client.py --broker 10.1.0.2 --port 8883 --ssl "
+                "--cafile certs/ca.crt --certfile certs/client.crt "
+                "--keyfile certs/client.key --log-file simple_client.log" + seed_arg(self.seed)
+            )
         state = state or {}
         broker = state.get("broker_ip", self.BROKER_IP)
         pool = [x.strip() for x in self.scmc_ip_pool.split(",")]
-        if state.get("src_ip") in pool:          # current source first = bound at start
+        if state.get("src_ip") in pool:  # current source first = bound at start
             i = pool.index(state["src_ip"])
             pool = pool[i:] + pool[:i]
         resume = ""
@@ -108,11 +130,13 @@ class ScmcPublisher(GuestAgent):
         if state.get("pad_buckets"):
             resume += f" --pad-buckets {','.join(map(str, state['pad_buckets']))}"
         key = f" --shared-key {self.shared_key}" if self.shared_key else ""
-        return (f"python3 mtd_executor.py --grid-id scmc1 --broker {broker} --ssl "
-                "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
-                f"--semp-control-ip {broker} --semp-control-port 9998 "
-                f"--scmc-ip-pool {','.join(pool)} --log-file mtd_executor.log"
-                f"{resume}{key}{seed_arg(self.seed)}")
+        return (
+            f"python3 mtd_executor.py --grid-id scmc1 --broker {broker} --ssl "
+            "--cafile certs/ca.crt --certfile certs/client.crt --keyfile certs/client.key "
+            f"--semp-control-ip {broker} --semp-control-port 9998 "
+            f"--scmc-ip-pool {','.join(pool)} --log-file mtd_executor.log"
+            f"{resume}{key}{seed_arg(self.seed)}"
+        )
 
     def artifacts(self):
         # Names are set by the scenario (prefix per capture); see mqtt_mtd.scenario.

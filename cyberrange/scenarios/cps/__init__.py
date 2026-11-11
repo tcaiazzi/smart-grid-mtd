@@ -13,11 +13,13 @@ app, an active attacker, OT/IT sensors and an optional SOAR responder."""
 # (a plane component imports it, so it cannot move in here).
 SOURCES = {
     "scenario (topology, episode, CLI, campaign, metrics, manifest)": [
-        "cyberrange/scenarios/cps/*.py"],
+        "cyberrange/scenarios/cps/*.py"
+    ],
     "dashboard panel": ["cyberrange/scenarios/cps/panel.js"],
     "host-side domain logic (SOAR, attack drivers, planner)": [
         "cyberrange/planes/defense/soar/*.py",
-        "cyberrange/planes/attack/active_attack.py", "cyberrange/planes/attack/planner/*.py"],
+        "cyberrange/planes/attack/active_attack.py",
+        "cyberrange/planes/attack/planner/*.py",
+    ],
 }
-GUEST_MANIFESTS = ("ENGINE_FILES", "PLC_FILES", "SENSOR_FILES", "HMI_FILES",
-                   "ATTACKER_CPS_FILES")
+GUEST_MANIFESTS = ("ENGINE_FILES", "PLC_FILES", "SENSOR_FILES", "HMI_FILES", "ATTACKER_CPS_FILES")

@@ -43,6 +43,7 @@ from mtd_wire import send_bytes as send_msg, recv_bytes as recv_msg
 # Key + certificate generation helpers
 # ---------------------------------------------------------------------------
 
+
 def generate_key() -> rsa.RSAPrivateKey:
     return rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
@@ -59,10 +60,12 @@ def generate_ca(out_dir: str):
     """Generate CA key and self-signed certificate. Save to out_dir."""
     ca_key = generate_key()
 
-    name = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "SmartGrid-CA"),
-        x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
-    ])
+    name = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "SmartGrid-CA"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
+        ]
+    )
 
     ca_cert = (
         x509.CertificateBuilder()
@@ -71,7 +74,9 @@ def generate_ca(out_dir: str):
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650))
+        .not_valid_after(
+            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=3650)
+        )
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
@@ -105,15 +110,21 @@ def generate_server_cert(ca_key, ca_cert, cn: str, ip: str, out_dir: str):
 
     srv_cert = (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, cn),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
-        ]))
+        .subject_name(
+            x509.Name(
+                [
+                    x509.NameAttribute(NameOID.COMMON_NAME, cn),
+                    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
+                ]
+            )
+        )
         .issuer_name(ca_cert.subject)
         .public_key(srv_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365))
+        .not_valid_after(
+            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
+        )
         .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
@@ -146,15 +157,21 @@ def generate_client_cert(ca_key, ca_cert, cn: str, client_ips):
 
     cli_cert = (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, cn),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
-        ]))
+        .subject_name(
+            x509.Name(
+                [
+                    x509.NameAttribute(NameOID.COMMON_NAME, cn),
+                    x509.NameAttribute(NameOID.ORGANIZATION_NAME, "SmartGrid Lab"),
+                ]
+            )
+        )
         .issuer_name(ca_cert.subject)
         .public_key(cli_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365))
+        .not_valid_after(
+            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)
+        )
         .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
@@ -174,28 +191,35 @@ def _save(directory: str, filename: str, data: bytes, mode: int = 0o644):
 # Client handler
 # ---------------------------------------------------------------------------
 
-def handle_client(conn: socket.socket, addr,
-                  ca_key, ca_cert, ca_cert_pem: bytes,
-                  shared_key: bytes, client_ips=None):
+
+def handle_client(
+    conn: socket.socket,
+    addr,
+    ca_key,
+    ca_cert,
+    ca_cert_pem: bytes,
+    shared_key: bytes,
+    client_ips=None,
+):
     client_ip = addr[0]
     print(f"[CA] Connection from {client_ip}:{addr[1]}")
     try:
-        # Receive encrypted CN from client
+        # Receive encrypted CN from client.
         enc_cn = recv_msg(conn)
         cn = decrypt_payload(enc_cn, shared_key).decode()
         print(f"[CA] Generating certificate for CN='{cn}'...")
 
         # Put the whole SCMC source-IP pool in the cert SAN (so it survives source
         # hops); fall back to just the connecting address when no pool is given.
-        key_pem, cert_pem = generate_client_cert(
-            ca_key, ca_cert, cn, client_ips or [client_ip]
-        )
+        key_pem, cert_pem = generate_client_cert(ca_key, ca_cert, cn, client_ips or [client_ip])
 
-        # Bundle: 4-byte key_len | key_pem | 4-byte cert_len | cert_pem | ca_cert_pem
+        # Bundle: 4-byte key_len | key_pem | 4-byte cert_len | cert_pem | ca_cert_pem.
         bundle = (
-            struct.pack(">I", len(key_pem))  + key_pem  +
-            struct.pack(">I", len(cert_pem)) + cert_pem +
-            ca_cert_pem
+            struct.pack(">I", len(key_pem))
+            + key_pem
+            + struct.pack(">I", len(cert_pem))
+            + cert_pem
+            + ca_cert_pem
         )
 
         send_msg(conn, encrypt_payload(bundle, shared_key))
@@ -211,22 +235,34 @@ def handle_client(conn: socket.socket, addr,
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--shared-key", required=True,
-                        help="64-char hex string (32-byte AES-256 key from QKD)")
-    parser.add_argument("--host",      default="0.0.0.0")
-    parser.add_argument("--port",      type=int, default=9999)
-    parser.add_argument("--out-dir",   default="/etc/mosquitto/certs",
-                        help="Where to save ca.crt, server.crt, server.key")
-    parser.add_argument("--server-cn", default="semp",
-                        help="CN for the broker certificate (default: semp)")
-    parser.add_argument("--server-ip", default="",
-                        help="IP(s) to include in the broker certificate SAN; "
-                             "comma-separated to cover an MTD IP-hop pool")
-    parser.add_argument("--client-ip", default="",
-                        help="IP(s) to include in every client certificate SAN; "
-                             "comma-separated to cover the SCMC source-IP hop pool")
+    parser.add_argument(
+        "--shared-key", required=True, help="64-char hex string (32-byte AES-256 key from QKD)"
+    )
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=9999)
+    parser.add_argument(
+        "--out-dir",
+        default="/etc/mosquitto/certs",
+        help="Where to save ca.crt, server.crt, server.key",
+    )
+    parser.add_argument(
+        "--server-cn", default="semp", help="CN for the broker certificate (default: semp)"
+    )
+    parser.add_argument(
+        "--server-ip",
+        default="",
+        help="IP(s) to include in the broker certificate SAN; "
+        "comma-separated to cover an MTD IP-hop pool",
+    )
+    parser.add_argument(
+        "--client-ip",
+        default="",
+        help="IP(s) to include in every client certificate SAN; "
+        "comma-separated to cover the SCMC source-IP hop pool",
+    )
     args = parser.parse_args()
     client_ips = [x.strip() for x in args.client_ip.split(",") if x.strip()]
 

@@ -23,7 +23,7 @@ log = logging.getLogger("core.lifecycle")
 NETWORK_PLUGIN = "kathara/katharanp_vde"
 
 
-EXIT_NO_LAB = 4    # exit code when the container engine is not reachable
+EXIT_NO_LAB = 4  # exit code when the container engine is not reachable
 
 
 class LabUnavailable(RuntimeError):
@@ -36,6 +36,7 @@ def get_manager():
     Raises LabUnavailable when the Docker daemon cannot be reached."""
     from Kathara.manager.Kathara import Kathara
     from Kathara.setting.Setting import Setting
+
     try:
         manager = Kathara.get_instance()
     except Exception as e:
@@ -43,7 +44,8 @@ def get_manager():
             raise LabUnavailable(
                 "the Docker daemon is not reachable, so no lab can be deployed. Start it "
                 "(WSL: `sudo service docker start`, or open Docker Desktop) and check "
-                "`docker ps`, then run again.") from e
+                "`docker ps`, then run again."
+            ) from e
         raise
     Setting.get_instance().load_from_dict({"network_plugin": NETWORK_PLUGIN})
     return manager
@@ -61,15 +63,22 @@ def run(scenario, args, progress=None, manager=None):
     scenario.prepare(args)
     own = progress is None
     if own:
-        ledger = ProgressLog(getattr(args, "progress_file", None)
-                             or os.path.join(out_dir, PROGRESS))
+        ledger = ProgressLog(
+            getattr(args, "progress_file", None) or os.path.join(out_dir, PROGRESS)
+        )
         emit = ledger.bind(run_id=scenario.run_id(args))
     else:
         emit = progress
     phases = scenario.phases(args)
-    emit("run_start", scenario=scenario.name, out_dir=out_dir,
-         phases=[p.to_dict() for p in phases], planned_s=scenario.planned_s(args),
-         poll_s=getattr(args, "poll_interval", 0), **scenario.run_info(args))
+    emit(
+        "run_start",
+        scenario=scenario.name,
+        out_dir=out_dir,
+        phases=[p.to_dict() for p in phases],
+        planned_s=scenario.planned_s(args),
+        poll_s=getattr(args, "poll_interval", 0),
+        **scenario.run_info(args),
+    )
 
     t0 = time.time()
     status, error, rc = "failed", None, None
@@ -83,7 +92,7 @@ def run(scenario, args, progress=None, manager=None):
         write_json(topo, os.path.join(out_dir, "topology.json"))
         try:
             scenario.write_structure(ctx)
-        except Exception as e:      # dashboard extras never fail a run
+        except Exception as e:  # dashboard extras never fail a run
             log.warning("could not write the run structure: %s", e)
         with ctx.phase("deploy"):
             log.info("Undeploying any existing lab named %r", topo.name)
@@ -112,7 +121,6 @@ def run(scenario, args, progress=None, manager=None):
         error = traceback.format_exc()[-2000:]
         raise
     finally:
-        emit("run_end", status=status, duration_s=round(time.time() - t0, 3), error=error,
-             rc=rc)
+        emit("run_end", status=status, duration_s=round(time.time() - t0, 3), error=error, rc=rc)
         if own:
             ledger.close()

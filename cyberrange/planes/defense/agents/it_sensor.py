@@ -25,7 +25,7 @@ import os
 import re
 import time
 
-from mtd_telemetry import Telemetry   # flat import; copied alongside on the guest
+from mtd_telemetry import Telemetry  # flat import; copied alongside on the guest
 
 # A legitimate /diag target is a bare host or IP; anything else is suspicious.
 PLAIN_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -55,8 +55,15 @@ def descendants(procs, root_pids):
 
 
 class ITSensor:
-    def __init__(self, engine_ip, engine_port, learn_seconds=45.0, telemetry=None,
-                 app_match="vuln_app.py", t0=None):
+    def __init__(
+        self,
+        engine_ip,
+        engine_port,
+        learn_seconds=45.0,
+        telemetry=None,
+        app_match="vuln_app.py",
+        t0=None,
+    ):
         self.engine_ip, self.engine_port = engine_ip, int(engine_port)
         self.learn_seconds = float(learn_seconds)
         # NB: an empty Telemetry is falsy (__len__ == 0), so test "is not None".
@@ -75,11 +82,15 @@ class ITSensor:
         return now < self._t0 + self.learn_seconds
 
     def _finding(self, klass, node, confidence, src, evidence):
-        return {"detector": IT_DETECTOR, "klass": klass, "reasons": [klass],
-                "confidence": round(confidence, 3), "maps_to": node,
-                "entities": {"src": src, "dst": None, "unit": None,
-                             "register": None, "name": None},
-                "evidence": evidence}
+        return {
+            "detector": IT_DETECTOR,
+            "klass": klass,
+            "reasons": [klass],
+            "confidence": round(confidence, 3),
+            "maps_to": node,
+            "entities": {"src": src, "dst": None, "unit": None, "register": None, "name": None},
+            "evidence": evidence,
+        }
 
     def _emit(self, finding, now):
         self.tel.emit("ot_finding", t=round(now, 3), **finding)
@@ -96,9 +107,16 @@ class ITSensor:
             if learning or key in self._seen_web:
                 continue
             self._seen_web.add(key)
-            self._emit(self._finding("web_injection_pattern", "it_access", 0.9,
-                                     e.get("src"), {"target": target[:120],
-                                     "path": e.get("path")}), now)
+            self._emit(
+                self._finding(
+                    "web_injection_pattern",
+                    "it_access",
+                    0.9,
+                    e.get("src"),
+                    {"target": target[:120], "path": e.get("path")},
+                ),
+                now,
+            )
 
     def observe_procs(self, procs, now=None):
         now = time.time() if now is None else now
@@ -115,15 +133,25 @@ class ITSensor:
             if comm in self.normal_comms or pid in self._seen_proc:
                 continue
             self._seen_proc.add(pid)
-            self._emit(self._finding("web_child_process", "it_exec", 0.9, None,
-                                     {"pid": pid, "comm": comm,
-                                      "cmdline": (p.get("cmdline") or "")[:120]}), now)
+            self._emit(
+                self._finding(
+                    "web_child_process",
+                    "it_exec",
+                    0.9,
+                    None,
+                    {"pid": pid, "comm": comm, "cmdline": (p.get("cmdline") or "")[:120]},
+                ),
+                now,
+            )
 
     def observe_conns(self, conns, now=None):
         now = time.time() if now is None else now
         learning = self._learning(now)
         for c in conns:
-            if c.get("raddr_ip") != self.engine_ip or int(c.get("raddr_port", 0)) != self.engine_port:
+            if (
+                c.get("raddr_ip") != self.engine_ip
+                or int(c.get("raddr_port", 0)) != self.engine_port
+            ):
                 continue
             port = int(c.get("laddr_port", 0))
             if learning:
@@ -132,8 +160,16 @@ class ITSensor:
             if port in self.normal_ports or port in self._seen_port:
                 continue
             self._seen_port.add(port)
-            self._emit(self._finding("unexpected_modbus_client", "pivot", 0.85, None,
-                                     {"laddr_port": port, "state": c.get("state")}), now)
+            self._emit(
+                self._finding(
+                    "unexpected_modbus_client",
+                    "pivot",
+                    0.85,
+                    None,
+                    {"laddr_port": port, "state": c.get("state")},
+                ),
+                now,
+            )
 
     # ── live sources (production) ────────────────────────────────────────────
     def scan_procs(self):
@@ -164,15 +200,26 @@ class ITSensor:
                     if len(cols) < 4 or cols[2].upper() != want:
                         continue
                     lp = int(cols[1].split(":")[1], 16)
-                    conns.append({"laddr_port": lp, "raddr_ip": self.engine_ip,
-                                  "raddr_port": self.engine_port, "state": cols[3]})
+                    conns.append(
+                        {
+                            "laddr_port": lp,
+                            "raddr_ip": self.engine_ip,
+                            "raddr_port": self.engine_port,
+                            "state": cols[3],
+                        }
+                    )
         except OSError:
             pass
         return conns
 
     def run(self, access_log, interval=0.5, duration=0.0):
-        self.tel.emit("sensor_up", role="it_sensor", engine=self.engine_ip,
-                      port=self.engine_port, learn_seconds=self.learn_seconds)
+        self.tel.emit(
+            "sensor_up",
+            role="it_sensor",
+            engine=self.engine_ip,
+            port=self.engine_port,
+            learn_seconds=self.learn_seconds,
+        )
         start = time.time()
         pos = 0
         while True:
@@ -223,10 +270,18 @@ def main():
     ap.add_argument("--interval", type=float, default=0.5)
     ap.add_argument("--duration", type=float, default=0.0)
     args = ap.parse_args()
-    sensor = ITSensor(args.engine_ip, args.engine_port, learn_seconds=args.learn_seconds,
-                      telemetry=Telemetry(args.telemetry_file), app_match=args.app_match)
-    print(f"it_sensor on HMI: engine {args.engine_ip}:{args.engine_port}, "
-          f"learn {args.learn_seconds}s", flush=True)
+    sensor = ITSensor(
+        args.engine_ip,
+        args.engine_port,
+        learn_seconds=args.learn_seconds,
+        telemetry=Telemetry(args.telemetry_file),
+        app_match=args.app_match,
+    )
+    print(
+        f"it_sensor on HMI: engine {args.engine_ip}:{args.engine_port}, "
+        f"learn {args.learn_seconds}s",
+        flush=True,
+    )
     sensor.run(args.access_log, interval=args.interval, duration=args.duration)
 
 

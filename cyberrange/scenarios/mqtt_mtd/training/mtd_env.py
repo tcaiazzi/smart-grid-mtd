@@ -34,7 +34,7 @@ lab containers.
 
 import glob
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import gymnasium as gym
 import numpy as np
@@ -57,6 +57,7 @@ from cyberrange.planes.defense.rl_policy import (
 
 # ── Reward calibration ─────────────────────────────────────────────────────────
 
+
 @dataclass
 class Calibration:
     """Constants grounding the reward in measured lab behaviour.
@@ -67,16 +68,18 @@ class Calibration:
     per hop of each address knob (IP/src cost more than a port NAT swap). beta/gamma
     shape how fast diversity saturates and how strongly it suppresses detection.
     """
-    detection_max: float = 0.93       # static / no-MTD fingerprint score (measured)
-    detection_min: float = 0.55       # best achievable under heavy MTD
-    # per-knob saturation rate of the diversity each knob contributes
-    beta: tuple = (4.0, 4.0, 4.0, 3.0, 3.0)        # port, ip, src, pad, freq
-    # weight of each knob's diversity in suppressing detection. freq actuation now
+
+    detection_max: float = 0.93  # static / no-MTD fingerprint score (measured)
+    detection_min: float = 0.55  # best achievable under heavy MTD
+    # Per-knob saturation rate of the diversity each knob contributes.
+    beta: tuple = (4.0, 4.0, 4.0, 3.0, 3.0)  # port, ip, src, pad, freq
+    # Weight of each knob's diversity in suppressing detection. freq actuation now
     # rotates the publish interval (timing variety), so it earns a real weight.
     sec_weight: tuple = (1.0, 1.0, 1.2, 0.5, 0.8)  # port, ip, src, pad, freq
-    gamma: float = 2.5                # detection suppression strength
-    # availability cost per actuation (reconnecting knobs only). Single source
-    # of truth: rl_policy.KNOB_COST (also read by cyberrange.scenarios.mqtt_mtd.analysis.compare_coordinators
+    gamma: float = 2.5  # detection suppression strength
+    # Availability cost per actuation (reconnecting knobs only). Single source
+    # of truth: rl_policy.KNOB_COST (also read by
+    # cyberrange.scenarios.mqtt_mtd.analysis.compare_coordinators
     # to bill the actuations observed in a live run against the same weights).
     cost: tuple = KNOB_COST
 
@@ -90,7 +93,7 @@ def load_calibration(output_root: str = "output") -> Calibration:
     (anchored to the runs present at design time) when nothing is found — so
     training never depends on a sweep having been run.
 
-    Rows are bucketed by the scenario's leading word (cyberrange.scenarios.mqtt_mtd.analysis.plot_results labels:
+    Rows are bucketed by the scenario's leading word (analysis/plot_results.py labels:
     "Baseline (no MTD)", "MTD (baseline model)", "MTD (MTD model)"), not by a
     substring match — "MTD (baseline model)" is an MTD run scored by the
     baseline-trained attacker, so it belongs with the MTD scores.
@@ -98,8 +101,7 @@ def load_calibration(output_root: str = "output") -> Calibration:
     cal = Calibration()
     try:
         fracs_static, fracs_mtd = [], []
-        for path in glob.glob(os.path.join(output_root, "**", "summary.csv"),
-                              recursive=True):
+        for path in glob.glob(os.path.join(output_root, "**", "summary.csv"), recursive=True):
             df = pd.read_csv(path)
             if "scmc_nanogrid_frac" not in df.columns:
                 continue
@@ -116,7 +118,7 @@ def load_calibration(output_root: str = "output") -> Calibration:
             cal.detection_max = max(fracs_static)
         if fracs_mtd:
             cal.detection_min = min(fracs_mtd)
-        if cal.detection_min >= cal.detection_max:      # guard degenerate data
+        if cal.detection_min >= cal.detection_max:  # guard degenerate data
             cal.detection_min = max(0.0, cal.detection_max - 0.2)
     except Exception:
         pass
@@ -125,15 +127,24 @@ def load_calibration(output_root: str = "output") -> Calibration:
 
 # ── Environment ────────────────────────────────────────────────────────────────
 
+
 class MTDCoordinatorEnv(gym.Env):
     """Single-agent env over the five MTD knobs (see module docstring)."""
 
     metadata = {"render_modes": []}
 
-    def __init__(self, pool_sizes=None, w_sec: float = 1.0, w_avail: float = 1.0,
-                 episode_len: int = 256, ewma_alpha: float = EWMA_ALPHA,
-                 calibration: Calibration = None, randomize_pools: bool = True,
-                 reward_mode: str = "blend", seed: int = None):
+    def __init__(
+        self,
+        pool_sizes=None,
+        w_sec: float = 1.0,
+        w_avail: float = 1.0,
+        episode_len: int = 256,
+        ewma_alpha: float = EWMA_ALPHA,
+        calibration: Calibration = None,
+        randomize_pools: bool = True,
+        reward_mode: str = "blend",
+        seed: int = None,
+    ):
         super().__init__()
         # "blend"   = w_sec·security_gain − w_avail·availability_cost (the default).
         # "entropy" = maximize diffusion only: mean per-knob diversity, NO cost — a
@@ -142,8 +153,9 @@ class MTDCoordinatorEnv(gym.Env):
         self.reward_mode = reward_mode
         # Default pool sizes mirror a typical scripts/run_single.sh config (port, ip, src,
         # pad buckets, freq). A knob with size <= 1 is unusable and forced to noop.
-        self.base_pools = np.array(pool_sizes if pool_sizes is not None
-                                   else [7, 6, 6, 7, 6], dtype=np.float32)
+        self.base_pools = np.array(
+            pool_sizes if pool_sizes is not None else [7, 6, 6, 7, 6], dtype=np.float32
+        )
         self.w_sec = w_sec
         self.w_avail = w_avail
         self.episode_len = episode_len
@@ -198,7 +210,7 @@ class MTDCoordinatorEnv(gym.Env):
             fired[3] = 1.0
             self.pad_level = cmd["pad_level"]
         if cmd["freq_rotate"] and usable[4]:
-            # each actuation rotates to a different interval → real timing variety
+            # Each actuation rotates to a different interval → real timing variety.
             fired[4] = 1.0
 
         # Update dwell (reset on fire, else age) and EWMA hop rate.
@@ -222,7 +234,7 @@ class MTDCoordinatorEnv(gym.Env):
         """
         beta = np.asarray(self.cal.beta, dtype=np.float32)
         div = 1.0 - np.exp(-beta * self.rate)
-        # padding scales with how many buckets the current regime spreads over;
+        # Padding scales with how many buckets the current regime spreads over;
         # freq is keep/rotate, so its variety is fully captured by the rate term.
         div[3] *= (self.pad_level + 1) / K_PAD
         # a disabled knob contributes nothing
@@ -247,7 +259,7 @@ class MTDCoordinatorEnv(gym.Env):
 
         det = self._detection()
         span = max(self.cal.detection_max - self.cal.detection_min, 1e-6)
-        security_gain = (self.cal.detection_max - det) / span        # [0, 1]
+        security_gain = (self.cal.detection_max - det) / span  # [0, 1]
         avail_cost = float(np.dot(np.asarray(self.cal.cost, dtype=np.float32), fired))
         return self.w_sec * security_gain - self.w_avail * avail_cost
 

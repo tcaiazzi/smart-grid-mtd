@@ -17,21 +17,27 @@ import sys
 import time
 import warnings
 
-log = logging.getLogger(__name__)
 import paho.mqtt.client as mqtt
 
-warnings.filterwarnings("ignore")   # suppress gym deprecation noise
+log = logging.getLogger(__name__)
+
+warnings.filterwarnings("ignore")  # suppress gym deprecation noise
 
 # Same pymgrid physics as mtd_executor.py (MTD publisher) — see
 # microgrid_sim.py, copied alongside this file on every scmc machine.
-from microgrid_sim import build_microgrid, sensor_rng, step_microgrid
+from microgrid_sim import (  # noqa: E402  (after the warning filter above)
+    build_microgrid,
+    sensor_rng,
+    step_microgrid,
+)
 
-INTERVAL = 1.0            # seconds between publishes
+INTERVAL = 1.0  # seconds between publishes
 
 
 # ── MQTT callbacks ────────────────────────────────────────────────────────────
 
 connected = False
+
 
 def on_connect(_client, userdata, _flags, rc, _properties=None):
     global connected
@@ -41,6 +47,7 @@ def on_connect(_client, userdata, _flags, rc, _properties=None):
     else:
         log.warning("[%s] Connection failed rc=%s", userdata, rc)
 
+
 def on_disconnect(_client, userdata, rc, _properties=None):
     global connected
     connected = False
@@ -49,24 +56,34 @@ def on_disconnect(_client, userdata, rc, _properties=None):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="SCMC MQTT client with optional SSL/TLS")
-    parser.add_argument("--broker",   default="10.1.0.2",  help="Broker hostname or IP")
-    parser.add_argument("--port",     type=int, default=None,
-                        help="Broker port (default: 8883 with --ssl, 1883 otherwise)")
-    parser.add_argument("--scmc-id",  default="scmc1",     help="SCMC identifier")
-    parser.add_argument("--ssl",      action="store_true",  help="Enable MQTT over TLS")
-    parser.add_argument("--cafile",   default=None,
-                        help="CA certificate file (required with --ssl)")
-    parser.add_argument("--certfile", default=None,
-                        help="Client certificate for mutual TLS (optional)")
-    parser.add_argument("--keyfile",  default=None,
-                        help="Client private key for mutual TLS (optional)")
-    parser.add_argument("--log-file", default="simple_client.log",
-                        help="File to write the message-exchange log "
-                             "(default: simple_client.log in the working directory)")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Seed for the sensor noise (omit = unseeded)")
+    parser.add_argument("--broker", default="10.1.0.2", help="Broker hostname or IP")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Broker port (default: 8883 with --ssl, 1883 otherwise)",
+    )
+    parser.add_argument("--scmc-id", default="scmc1", help="SCMC identifier")
+    parser.add_argument("--ssl", action="store_true", help="Enable MQTT over TLS")
+    parser.add_argument("--cafile", default=None, help="CA certificate file (required with --ssl)")
+    parser.add_argument(
+        "--certfile", default=None, help="Client certificate for mutual TLS (optional)"
+    )
+    parser.add_argument(
+        "--keyfile", default=None, help="Client private key for mutual TLS (optional)"
+    )
+    parser.add_argument(
+        "--log-file",
+        default="simple_client.log",
+        help="File to write the message-exchange log "
+        "(default: simple_client.log in the working directory)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Seed for the sensor noise (omit = unseeded)"
+    )
     args = parser.parse_args()
 
     if args.ssl and args.cafile is None:
@@ -81,7 +98,7 @@ def parse_args():
 
 
 def main():
-    args    = parse_args()
+    args = parse_args()
     scmc_id = args.scmc_id
 
     handlers: list[logging.Handler] = [logging.StreamHandler()]
@@ -102,15 +119,11 @@ def main():
     log.info("[%s] Ready — broker=%s:%s  (%s)", scmc_id, args.broker, args.port, tls_label)
 
     client = mqtt.Client(client_id=scmc_id, protocol=mqtt.MQTTv5, userdata=scmc_id)
-    client.on_connect    = on_connect
+    client.on_connect = on_connect
     client.on_disconnect = on_disconnect
 
     if args.ssl:
-        client.tls_set(
-            ca_certs=args.cafile,
-            certfile=args.certfile,
-            keyfile=args.keyfile,
-        )
+        client.tls_set(ca_certs=args.cafile, certfile=args.certfile, keyfile=args.keyfile)
 
     client.connect(args.broker, args.port, keepalive=60)
     client.loop_start()
@@ -134,18 +147,19 @@ def main():
             for metric in ("power_kw", "frequency", "voltage"):
                 client.publish(
                     f"{topic_base}/{metric}",
-                    json.dumps({
-                        "value":   r[metric],
-                        "ts":      r["timestamp"],
-                        "scmc_id": scmc_id,
-                    }),
+                    json.dumps({"value": r[metric], "ts": r["timestamp"], "scmc_id": scmc_id}),
                     qos=0,
                 )
 
             client.publish(f"{topic_base}/snapshot", json.dumps(r), qos=0)
 
-            log.info("[%s] power=%6.1f kW  freq=%.4f Hz  volt=%.2f V",
-                     scmc_id, r["power_kw"], r["frequency"], r["voltage"])
+            log.info(
+                "[%s] power=%6.1f kW  freq=%.4f Hz  volt=%.2f V",
+                scmc_id,
+                r["power_kw"],
+                r["frequency"],
+                r["voltage"],
+            )
 
             time.sleep(INTERVAL)
 

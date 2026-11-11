@@ -18,7 +18,6 @@ import csv
 import os
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 from cyberrange.core import aggregate as core_agg, paths
@@ -45,12 +44,10 @@ FREQ_POOL = "0.1,0.2,0.4,0.6,0.8,1"
 CONFIGS = [
     ("fixed-timer", "fixed-timer MTD", None, ""),
     ("rl-cost", "RL-cost (blend reward)", "output/rl/policy.npz", ""),
-    ("rl-entropy", "RL-entropy (diffusion-only reward)", "output/rl-entropy/policy.npz",
-     "entropy"),
+    ("rl-entropy", "RL-entropy (diffusion-only reward)", "output/rl-entropy/policy.npz", "entropy"),
 ]
 # Headline per-run metrics in the campaign summary.
-HEADLINE = ("nanogrid_detect", "availability_cost", "blocked_is_nanogrid", "data_gaps",
-            "publishes")
+HEADLINE = ("nanogrid_detect", "availability_cost", "blocked_is_nanogrid", "data_gaps", "publishes")
 
 
 def say(msg: str) -> str:
@@ -64,6 +61,7 @@ class RunCtx:
     The default (output/, unseeded) adds nothing to any command, so a plain
     run stays command-for-command identical to scripts/run_single.sh.
     """
+
     root: str = DEFAULT_ROOT
     seed: Optional[int] = None
     index: int = 0
@@ -84,17 +82,25 @@ def run_contexts(runs: int, seed_base: Optional[int], first_run: int = 0) -> lis
     if runs == 1 and seed_base is None and first_run == 0:
         return [RunCtx()]
     base = 0 if seed_base is None else seed_base
-    return [RunCtx(f"{DEFAULT_ROOT}/run-{i}", base + i, i)
-            for i in range(first_run, first_run + runs)]
+    return [
+        RunCtx(f"{DEFAULT_ROOT}/run-{i}", base + i, i) for i in range(first_run, first_run + runs)
+    ]
 
 
 def slug(no_mtd: bool, mbps: int, rl_policy: str = None, rl_tag: str = "") -> str:
     args = argparse.Namespace(
-        no_mtd=no_mtd, bg_replay_mbps=mbps, mtd_hop_interval=HOP,
-        mtd_pad_interval=PAD_INTERVAL, mtd_ip_pool=IP_POOL, mtd_port_pool=PORT_POOL,
-        mtd_scmc_ip_pool=SCMC_POOL, mtd_pad_buckets=PAD_BUCKETS,
-        mtd_freq_interval=FREQ_INTERVAL, mtd_freq_pool=FREQ_POOL,
-        rl_policy=rl_policy, rl_tag=rl_tag,
+        no_mtd=no_mtd,
+        bg_replay_mbps=mbps,
+        mtd_hop_interval=HOP,
+        mtd_pad_interval=PAD_INTERVAL,
+        mtd_ip_pool=IP_POOL,
+        mtd_port_pool=PORT_POOL,
+        mtd_scmc_ip_pool=SCMC_POOL,
+        mtd_pad_buckets=PAD_BUCKETS,
+        mtd_freq_interval=FREQ_INTERVAL,
+        mtd_freq_pool=FREQ_POOL,
+        rl_policy=rl_policy,
+        rl_tag=rl_tag,
     )
     return experiment_slug(args)
 
@@ -111,22 +117,30 @@ def _once(check):
         if not memo:
             memo.append(check())
         return memo[0]
+
     return f
 
 
 def _metrics(run_dir):
     from cyberrange.scenarios.mqtt_mtd.metrics import compute_metrics
+
     return compute_metrics(run_dir)
 
 
 def _report(m):
     from cyberrange.scenarios.mqtt_mtd.metrics import format_report
+
     return format_report(m)
 
 
 def _label(ctx, experiment, exp):
-    return {"run_id": f"{experiment}@{ctx.root}", "group": experiment, "run": ctx.index,
-            "seed": ctx.seed, "exp": exp}
+    return {
+        "run_id": f"{experiment}@{ctx.root}",
+        "group": experiment,
+        "run": ctx.index,
+        "seed": ctx.seed,
+        "exp": exp,
+    }
 
 
 def baseline_unit(mbps: int, ctx: RunCtx, retries: int, banner: str = None) -> Unit:
@@ -134,23 +148,61 @@ def baseline_unit(mbps: int, ctx: RunCtx, retries: int, banner: str = None) -> U
     exp = f"baseline-mbps{mbps}"
     v = ["NO_MTD=1", f"BG_REPLAY_MBPS={mbps}", *ctx.make_vars]
     attack_dir = f"{ctx.root}/{exp}/attack/model-baseline"
-    header = "\n".join(x for x in (banner, say("=== Block 1/5: baseline (no MTD) ==="),
-                                   say(f"baseline (no MTD, mbps={mbps})")) if x)
-    return Unit(f"baseline@{ctx.root}", group="baseline", header=header, steps=[
-        Step("datasets", cmd=["make", "datasets", *v], retries=retries),
-        Step("train", cmd=["make", "train", *v]),
-        Step("evaluate", cmd=["make", "evaluate", *v]),
-        Step("attack", cmd=["make", "attack", *v], retries=retries, run_dir=attack_dir,
-             metrics=_metrics, report=_report, label=_label(ctx, "baseline", exp)),
-        Step("plot", cmd=[PYTHON, "-m", "cyberrange.scenarios.mqtt_mtd.analysis.plot_results", "--baseline-only",
-                          "--bg-replay-mbps", str(mbps), *ctx.root_flag,
-                          "--plots-dir", f"{ctx.root}/{exp}"]),
-    ])
+    header = "\n".join(
+        x
+        for x in (
+            banner,
+            say("=== Block 1/5: baseline (no MTD) ==="),
+            say(f"baseline (no MTD, mbps={mbps})"),
+        )
+        if x
+    )
+    return Unit(
+        f"baseline@{ctx.root}",
+        group="baseline",
+        header=header,
+        steps=[
+            Step("datasets", cmd=["make", "datasets", *v], retries=retries),
+            Step("train", cmd=["make", "train", *v]),
+            Step("evaluate", cmd=["make", "evaluate", *v]),
+            Step(
+                "attack",
+                cmd=["make", "attack", *v],
+                retries=retries,
+                run_dir=attack_dir,
+                metrics=_metrics,
+                report=_report,
+                label=_label(ctx, "baseline", exp),
+            ),
+            Step(
+                "plot",
+                cmd=[
+                    PYTHON,
+                    "-m",
+                    "cyberrange.scenarios.mqtt_mtd.analysis.plot_results",
+                    "--baseline-only",
+                    "--bg-replay-mbps",
+                    str(mbps),
+                    *ctx.root_flag,
+                    "--plots-dir",
+                    f"{ctx.root}/{exp}",
+                ],
+            ),
+        ],
+    )
 
 
-def config_unit(experiment: str, title: str, block: int, mbps: int, rl_policy: str = None,
-                rl_tag: str = "", rl_tick: float = 1.0, ctx: RunCtx = RunCtx(),
-                retries: int = 0) -> Unit:
+def config_unit(
+    experiment: str,
+    title: str,
+    block: int,
+    mbps: int,
+    rl_policy: str = None,
+    rl_tag: str = "",
+    rl_tick: float = 1.0,
+    ctx: RunCtx = RunCtx(),
+    retries: int = 0,
+) -> Unit:
     """Mirrors scripts/run_single.sh's run_config() for one MTD configuration (the
     paper's fixed HOP/pools; only mbps and the RL policy selection vary)."""
     prefix = "mtd"
@@ -159,12 +211,20 @@ def config_unit(experiment: str, title: str, block: int, mbps: int, rl_policy: s
     # slug() returns the FULL directory name (prefix included) — what make builds
     # on disk; plot_results wants the prefix and the bare hop/pool suffix apart.
     exp = slug(no_mtd=False, mbps=mbps, rl_policy=rl_policy, rl_tag=rl_tag)
-    suffix = exp[len(prefix) + 1:]
-    v = [f"MTD_HOP_INTERVAL={HOP}", f"MTD_IP_POOL={IP_POOL}", f"MTD_PORT_POOL={PORT_POOL}",
-         f"MTD_SCMC_IP_POOL={SCMC_POOL}", f"MTD_SRC_HOP_INTERVAL={HOP}",
-         f"MTD_PAD_BUCKETS={PAD_BUCKETS}", f"MTD_PAD_INTERVAL={PAD_INTERVAL}",
-         f"BG_REPLAY_MBPS={mbps}", f"MTD_FREQ_INTERVAL={FREQ_INTERVAL}",
-         f"MTD_FREQ_POOL={FREQ_POOL}", *ctx.make_vars]
+    suffix = exp[len(prefix) + 1 :]
+    v = [
+        f"MTD_HOP_INTERVAL={HOP}",
+        f"MTD_IP_POOL={IP_POOL}",
+        f"MTD_PORT_POOL={PORT_POOL}",
+        f"MTD_SCMC_IP_POOL={SCMC_POOL}",
+        f"MTD_SRC_HOP_INTERVAL={HOP}",
+        f"MTD_PAD_BUCKETS={PAD_BUCKETS}",
+        f"MTD_PAD_INTERVAL={PAD_INTERVAL}",
+        f"BG_REPLAY_MBPS={mbps}",
+        f"MTD_FREQ_INTERVAL={FREQ_INTERVAL}",
+        f"MTD_FREQ_POOL={FREQ_POOL}",
+        *ctx.make_vars,
+    ]
     steps = []
     if rl_policy:
         v += ["RL=1", f"RL_POLICY={rl_policy}", f"RL_TICK={rl_tick}"]
@@ -175,34 +235,65 @@ def config_unit(experiment: str, title: str, block: int, mbps: int, rl_policy: s
         # plot_results — training earlier would calibrate against less data.
         # With --runs it happens once, in run 0; later runs reuse the policy.
         target = "train-rl-entropy" if rl_tag == "entropy" else "train-rl"
-        steps.append(Step(f"train-rl:{rl_tag or 'cost'}", cmd=["make", target],
-                          skip_if=_exists(rl_policy)))
+        steps.append(
+            Step(f"train-rl:{rl_tag or 'cost'}", cmd=["make", target], skip_if=_exists(rl_policy))
+        )
 
     exp_dir = f"{ctx.root}/{exp}"
     # The reuse guard is decided ONCE, when the unit starts (as scripts/run_single.sh
     # does): re-checking it per step would see the model `train` just built and
     # wrongly skip the evaluations. Each evaluation is also redone on its own
     # when its predictions are missing (so a rerun completes an older run).
-    built = _once(_exists(f"{exp_dir}/datasets/train.pcap", f"{exp_dir}/datasets/test.pcap",
-                          f"{exp_dir}/model/model.pt"))
+    built = _once(
+        _exists(
+            f"{exp_dir}/datasets/train.pcap",
+            f"{exp_dir}/datasets/test.pcap",
+            f"{exp_dir}/model/model.pt",
+        )
+    )
     steps += [
         Step("clean", cmd=["rm", "-rf", exp_dir], skip_if=built),
         Step("datasets", cmd=["make", "datasets", *v], retries=retries, skip_if=built),
         Step("train", cmd=["make", "train", *v], skip_if=built),
-        Step("evaluate", cmd=["make", "evaluate", *v],
-             skip_if=lambda: built() and _exists(f"{exp_dir}/eval/model-mtd/predictions.csv")()),
-        Step("evaluate-baseline-model", cmd=["make", "evaluate", "MODEL_SRC=baseline", *v],
-             skip_if=lambda: built() and _exists(
-                 f"{exp_dir}/eval/model-baseline/predictions.csv")()),
+        Step(
+            "evaluate",
+            cmd=["make", "evaluate", *v],
+            skip_if=lambda: built() and _exists(f"{exp_dir}/eval/model-mtd/predictions.csv")(),
+        ),
+        Step(
+            "evaluate-baseline-model",
+            cmd=["make", "evaluate", "MODEL_SRC=baseline", *v],
+            skip_if=lambda: built() and _exists(f"{exp_dir}/eval/model-baseline/predictions.csv")(),
+        ),
         # Cross-model attack only (the paper's Fig. 2 attack runs the baseline-trained
         # model against the MTD-morphed traffic; the own-model attack is skipped).
-        Step("attack", cmd=["make", "attack", "MODEL_SRC=baseline", *v], retries=retries,
-             run_dir=f"{exp_dir}/attack/model-baseline", metrics=_metrics, report=_report,
-             label=_label(ctx, experiment, exp)),
+        Step(
+            "attack",
+            cmd=["make", "attack", "MODEL_SRC=baseline", *v],
+            retries=retries,
+            run_dir=f"{exp_dir}/attack/model-baseline",
+            metrics=_metrics,
+            report=_report,
+            label=_label(ctx, experiment, exp),
+        ),
         Step("entropy", cmd=["make", "entropy", *v]),
-        Step("plot", cmd=[PYTHON, "-m", "cyberrange.scenarios.mqtt_mtd.analysis.plot_results", "--mtd-params-slug", suffix,
-                          "--mtd-prefix", prefix, "--bg-replay-mbps", str(mbps),
-                          *ctx.root_flag, "--plots-dir", exp_dir]),
+        Step(
+            "plot",
+            cmd=[
+                PYTHON,
+                "-m",
+                "cyberrange.scenarios.mqtt_mtd.analysis.plot_results",
+                "--mtd-params-slug",
+                suffix,
+                "--mtd-prefix",
+                prefix,
+                "--bg-replay-mbps",
+                str(mbps),
+                *ctx.root_flag,
+                "--plots-dir",
+                exp_dir,
+            ],
+        ),
         Step("manifest", run=lambda _emit: append_manifest(experiment, mbps, exp, ctx.root)),
     ]
 
@@ -210,20 +301,39 @@ def config_unit(experiment: str, title: str, block: int, mbps: int, rl_policy: s
         lines = [say(f"=== Block {block}/5: {title} ==="), say(f"[{experiment}] {exp}")]
         if rl_policy and not (REPO_ROOT / rl_policy).is_file():
             lines.append(say(f"  RL policy {rl_policy} missing — training it first"))
-        lines.append(say("  datasets + model present — running attack only") if built()
-                     else say("  datasets/model missing — full rebuild"))
+        lines.append(
+            say("  datasets + model present — running attack only")
+            if built()
+            else say("  datasets/model missing — full rebuild")
+        )
         return "\n".join(lines)
 
-    return Unit(f"{experiment}@{ctx.root}", group=experiment, header=header,
-                needs=[f"baseline@{ctx.root}"], steps=steps)
+    return Unit(
+        f"{experiment}@{ctx.root}",
+        group=experiment,
+        header=header,
+        needs=[f"baseline@{ctx.root}"],
+        steps=steps,
+    )
 
 
 def append_manifest(experiment: str, mbps: int, exp: str, root: str = DEFAULT_ROOT) -> None:
     # One manifest per run root, so the slug dedup below is per run.
     manifest_path = REPO_ROOT / root / MANIFEST_NAME
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    header = ["experiment", "hop", "n_ips", "n_ports", "n_pads", "n_src",
-              "pad_interval", "bg_mbps", "freq_interval", "n_freqs", "slug"]
+    header = [
+        "experiment",
+        "hop",
+        "n_ips",
+        "n_ports",
+        "n_pads",
+        "n_src",
+        "pad_interval",
+        "bg_mbps",
+        "freq_interval",
+        "n_freqs",
+        "slug",
+    ]
     if manifest_path.exists() and exp in manifest_path.read_text():
         return
     write_header = not manifest_path.exists()
@@ -231,28 +341,57 @@ def append_manifest(experiment: str, mbps: int, exp: str, root: str = DEFAULT_RO
         writer = csv.writer(f)
         if write_header:
             writer.writerow(header)
-        writer.writerow([
-            experiment, HOP, len(IP_POOL.split(",")), len(PORT_POOL.split(",")),
-            len(PAD_BUCKETS.split(",")), len(SCMC_POOL.split(",")), PAD_INTERVAL,
-            mbps, FREQ_INTERVAL, len(FREQ_POOL.split(",")), exp,
-        ])
+        writer.writerow(
+            [
+                experiment,
+                HOP,
+                len(IP_POOL.split(",")),
+                len(PORT_POOL.split(",")),
+                len(PAD_BUCKETS.split(",")),
+                len(SCMC_POOL.split(",")),
+                PAD_INTERVAL,
+                mbps,
+                FREQ_INTERVAL,
+                len(FREQ_POOL.split(",")),
+                exp,
+            ]
+        )
 
 
 def compare_dir(mbps: int, ctx: RunCtx) -> str:
-    return f"{ctx.root}/compare-{slug(no_mtd=False, mbps=mbps)[len('mtd-'):]}"
+    return f"{ctx.root}/compare-{slug(no_mtd=False, mbps=mbps)[len('mtd-') :]}"
 
 
 def compare_unit(mbps: int, ctx: RunCtx) -> Unit:
     """The paper-figure step: compare_coordinators.py across the three MTD
     configs + baseline, tagged with the entropy RL policy."""
-    suffix = slug(no_mtd=False, mbps=mbps)[len("mtd-"):]
-    return Unit(f"compare@{ctx.root}", group="compare",
-                header=say("=== Block 5/5: paper figures (compare_coordinators) ==="),
-                needs=[f"baseline@{ctx.root}"] + [f"{e}@{ctx.root}" for e, *_ in CONFIGS],
-                steps=[Step("compare", cmd=[
-                    PYTHON, "-m", "cyberrange.scenarios.mqtt_mtd.analysis.compare_coordinators", "--slug", suffix,
-                    "--bg-replay-mbps", str(mbps), "--output-root", ctx.root,
-                    "--out-dir", compare_dir(mbps, ctx), "--rl-tags", "entropy"])])
+    suffix = slug(no_mtd=False, mbps=mbps)[len("mtd-") :]
+    return Unit(
+        f"compare@{ctx.root}",
+        group="compare",
+        header=say("=== Block 5/5: paper figures (compare_coordinators) ==="),
+        needs=[f"baseline@{ctx.root}"] + [f"{e}@{ctx.root}" for e, *_ in CONFIGS],
+        steps=[
+            Step(
+                "compare",
+                cmd=[
+                    PYTHON,
+                    "-m",
+                    "cyberrange.scenarios.mqtt_mtd.analysis.compare_coordinators",
+                    "--slug",
+                    suffix,
+                    "--bg-replay-mbps",
+                    str(mbps),
+                    "--output-root",
+                    ctx.root,
+                    "--out-dir",
+                    compare_dir(mbps, ctx),
+                    "--rl-tags",
+                    "entropy",
+                ],
+            )
+        ],
+    )
 
 
 FIGURES = [
@@ -269,31 +408,66 @@ def write_aggregate(root, rows):
     core_agg.write_csv(os.path.join(root, "ci.csv"), table)
     with open(os.path.join(root, "summary.md"), "w") as f:
         f.write("# Paper evaluation — per configuration, mean [95% CI] (runs)\n\n")
-        f.write(core_agg.format_markdown(
-            table, by=("group",),
-            metrics=[m for m in HEADLINE if any(r["metric"] == m for r in table)]))
+        f.write(
+            core_agg.format_markdown(
+                table,
+                by=("group",),
+                metrics=[m for m in HEADLINE if any(r["metric"] == m for r in table)],
+            )
+        )
     return {"ci": [r for r in table if r["metric"] in HEADLINE]}
 
 
-def build_campaign(mbps=2, runs=1, seed_base=None, first_run=0, retries=2, name=None,
-                   resume=False, out=print):
+def build_campaign(
+    mbps=2, runs=1, seed_base=None, first_run=0, retries=2, name=None, resume=False, out=print
+):
     """The whole paper evaluation as one campaign (ledger under output/campaigns/)."""
     contexts = run_contexts(runs, seed_base, first_run)
     units = []
     for ctx in contexts:
-        banner = (say(f"##### run {ctx.root} (SEED={ctx.seed}) #####")
-                  if len(contexts) > 1 or ctx.root != DEFAULT_ROOT else None)
+        banner = (
+            say(f"##### run {ctx.root} (SEED={ctx.seed}) #####")
+            if len(contexts) > 1 or ctx.root != DEFAULT_ROOT
+            else None
+        )
         units.append(baseline_unit(mbps, ctx, retries, banner))
         for block, (experiment, title, policy, tag) in enumerate(CONFIGS, start=2):
-            units.append(config_unit(experiment, title, block, mbps, rl_policy=policy,
-                                     rl_tag=tag, ctx=ctx, retries=retries))
+            units.append(
+                config_unit(
+                    experiment,
+                    title,
+                    block,
+                    mbps,
+                    rl_policy=policy,
+                    rl_tag=tag,
+                    ctx=ctx,
+                    retries=retries,
+                )
+            )
         units.append(compare_unit(mbps, ctx))
     name = name or f"paper-mbps{mbps}"
-    params = {"mbps": mbps, "runs": runs, "seed_base": seed_base, "first_run": first_run,
-              "retries": retries, "hop": HOP, "ip_pool": IP_POOL, "port_pool": PORT_POOL,
-              "scmc_pool": SCMC_POOL, "pad_buckets": PAD_BUCKETS,
-              "pad_interval": PAD_INTERVAL, "freq_interval": FREQ_INTERVAL,
-              "freq_pool": FREQ_POOL}
-    return Campaign(name, os.path.join(DEFAULT_ROOT, "campaigns", name), units,
-                    params=params, resume=resume, aggregate=write_aggregate, out=out,
-                    scenario="mqtt-mtd"), contexts
+    params = {
+        "mbps": mbps,
+        "runs": runs,
+        "seed_base": seed_base,
+        "first_run": first_run,
+        "retries": retries,
+        "hop": HOP,
+        "ip_pool": IP_POOL,
+        "port_pool": PORT_POOL,
+        "scmc_pool": SCMC_POOL,
+        "pad_buckets": PAD_BUCKETS,
+        "pad_interval": PAD_INTERVAL,
+        "freq_interval": FREQ_INTERVAL,
+        "freq_pool": FREQ_POOL,
+    }
+    return Campaign(
+        name,
+        os.path.join(DEFAULT_ROOT, "campaigns", name),
+        units,
+        params=params,
+        resume=resume,
+        aggregate=write_aggregate,
+        out=out,
+        scenario="mqtt-mtd",
+    ), contexts

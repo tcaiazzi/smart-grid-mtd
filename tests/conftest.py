@@ -28,17 +28,17 @@ if str(REPO_ROOT) not in sys.path:
 
 # Raise this deliberately whenever the suite genuinely grows (261 before the
 # guardrail tests of the structure refactor were added).
-MIN_TESTS = 278
+MIN_TESTS = 280
 
 SLOW_MODULES = {
-    "test_active_attack",       # spawns modbus_engine, sleeps
-    "test_delivery_detector",   # dpkt + pandas + sklearn
-    "test_grid_sim",            # pandapower
-    "test_guest_imports",       # one subprocess per guest module
-    "test_main_dry_run",        # subprocesses + `make -n`
-    "test_modbus_roundtrip",    # spawns the engine
-    "test_seeding",             # pymgrid, torch
-    "test_telemetry",           # matplotlib + sklearn, sockets
+    "test_active_attack",  # spawns modbus_engine, sleeps
+    "test_delivery_detector",  # dpkt + pandas + sklearn
+    "test_grid_sim",  # pandapower
+    "test_guest_imports",  # one subprocess per guest module
+    "test_main_dry_run",  # subprocesses + `make -n`
+    "test_modbus_roundtrip",  # spawns the engine
+    "test_seeding",  # pymgrid, torch
+    "test_telemetry",  # matplotlib + sklearn, sockets
 }
 
 

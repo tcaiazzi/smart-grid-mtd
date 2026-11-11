@@ -31,10 +31,12 @@ def _iter_packets(reader):
         pass
 
 
-def split_trace(pcap_path: str,
-                train_ratio: float = 0.7,
-                train_path: str | None = None,
-                test_path: str | None = None) -> tuple[str, str]:
+def split_trace(
+    pcap_path: str,
+    train_ratio: float = 0.7,
+    train_path: str | None = None,
+    test_path: str | None = None,
+) -> tuple[str, str]:
     """
     Split a PCAP into train/test by packet count.
 
@@ -62,7 +64,7 @@ def split_trace(pcap_path: str,
         raise FileNotFoundError(src)
 
     train_path = train_path or str(src.with_name(f"{src.stem}_train.pcap"))
-    test_path  = test_path  or str(src.with_name(f"{src.stem}_test.pcap"))
+    test_path = test_path or str(src.with_name(f"{src.stem}_test.pcap"))
 
     # First pass: count packets (streaming, no full load)
     with open(src, "rb") as f:
@@ -72,28 +74,21 @@ def split_trace(pcap_path: str,
 
     n_train = int(total * train_ratio)
     if n_train == 0 or n_train == total:
-        raise ValueError(
-            f"train_ratio={train_ratio} leaves an empty split "
-            f"({total} packets total)"
-        )
+        raise ValueError(f"train_ratio={train_ratio} leaves an empty split ({total} packets total)")
 
-    # Second pass: write the two output pcaps, preserving snaplen/linktype
-    with open(src, "rb") as f, \
-         open(train_path, "wb") as f_train, \
-         open(test_path, "wb") as f_test:
+    # Second pass: write the two output pcaps, preserving snaplen/linktype.
+    with open(src, "rb") as f, open(train_path, "wb") as f_train, open(test_path, "wb") as f_test:
         reader = dpkt.pcap.Reader(f)
-        train_writer = dpkt.pcap.Writer(
-            f_train, snaplen=reader.snaplen, linktype=reader.datalink()
-        )
-        test_writer = dpkt.pcap.Writer(
-            f_test, snaplen=reader.snaplen, linktype=reader.datalink()
-        )
+        train_writer = dpkt.pcap.Writer(f_train, snaplen=reader.snaplen, linktype=reader.datalink())
+        test_writer = dpkt.pcap.Writer(f_test, snaplen=reader.snaplen, linktype=reader.datalink())
         for i, (ts, buf) in enumerate(_iter_packets(reader)):
             (train_writer if i < n_train else test_writer).writepkt(buf, ts)
 
-    print(f"[*] {src.name}: {total} packets "
-          f"→ train={n_train} ({train_ratio:.0%}), "
-          f"test={total - n_train} ({1 - train_ratio:.0%})")
+    print(
+        f"[*] {src.name}: {total} packets "
+        f"→ train={n_train} ({train_ratio:.0%}), "
+        f"test={total - n_train} ({1 - train_ratio:.0%})"
+    )
     print(f"[+] Train → {train_path}")
     print(f"[+] Test  → {test_path}")
     return train_path, test_path
@@ -104,12 +99,18 @@ def main():
         description="Split a background pcap into train/test by packet count"
     )
     parser.add_argument("pcap", help="Source background trace (pcap)")
-    parser.add_argument("--train-ratio", type=float, default=0.7,
-                        help="Fraction of packets for training (default 0.7)")
-    parser.add_argument("--train-out", default=None,
-                        help="Training pcap path (default: <stem>_train.pcap)")
-    parser.add_argument("--test-out", default=None,
-                        help="Test pcap path (default: <stem>_test.pcap)")
+    parser.add_argument(
+        "--train-ratio",
+        type=float,
+        default=0.7,
+        help="Fraction of packets for training (default 0.7)",
+    )
+    parser.add_argument(
+        "--train-out", default=None, help="Training pcap path (default: <stem>_train.pcap)"
+    )
+    parser.add_argument(
+        "--test-out", default=None, help="Test pcap path (default: <stem>_test.pcap)"
+    )
     args = parser.parse_args()
 
     split_trace(args.pcap, args.train_ratio, args.train_out, args.test_out)

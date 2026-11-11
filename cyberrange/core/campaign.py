@@ -31,7 +31,6 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable, List, Optional
 
 from cyberrange.core.progress import ProgressLog
@@ -49,17 +48,17 @@ class StepFailed(RuntimeError):
 @dataclass
 class Step:
     id: str
-    run: Optional[Callable] = None            # run(emit) in-process
-    cmd: Optional[List[str]] = None           # or a command, from the repo root
+    run: Optional[Callable] = None  # run(emit) in-process
+    cmd: Optional[List[str]] = None  # or a command, from the repo root
     skip_if: Optional[Callable[[], bool]] = None
     retries: int = 0
-    run_dir: Optional[str] = None             # scored step: metrics land here
+    run_dir: Optional[str] = None  # scored step: metrics land here
     metrics: Optional[Callable[[str], dict]] = None
-    report: Optional[Callable[[dict], str]] = None   # metrics.md
-    label: dict = field(default_factory=dict)        # mode, seed, ... on every event
-    info: dict = field(default_factory=dict)         # extra grid fields (not on events)
+    report: Optional[Callable[[dict], str]] = None  # metrics.md
+    label: dict = field(default_factory=dict)  # mode, seed, ... on every event
+    info: dict = field(default_factory=dict)  # extra grid fields (not on events)
     planned_s: float = 0.0
-    dry: bool = True                          # print/do in a dry run (cmd steps only)
+    dry: bool = True  # print/do in a dry run (cmd steps only)
 
     @property
     def scored(self):
@@ -75,7 +74,7 @@ class Unit:
     steps: List[Step]
     needs: List[str] = field(default_factory=list)
     group: Optional[str] = None
-    header: object = None                     # str, or callable -> str, announced first
+    header: object = None  # str, or callable -> str, announced first
 
     def announce(self, out):
         h = self.header() if callable(self.header) else self.header
@@ -84,8 +83,9 @@ class Unit:
 
 
 class Campaign:
-    def __init__(self, name, root, units, params=None, resume=True, aggregate=None,
-                 out=print, scenario=None):
+    def __init__(
+        self, name, root, units, params=None, resume=True, aggregate=None, out=print, scenario=None
+    ):
         """``aggregate(root, rows) -> dict`` refreshes the campaign's summary
         files from the scored rows ({"run_id", "metrics", **label}) and returns
         what the ``aggregate`` ledger event carries."""
@@ -119,16 +119,37 @@ class Campaign:
     def run(self, run_fn=None):
         os.makedirs(self.root, exist_ok=True)
         with open(os.path.join(self.root, "campaign.json"), "w") as f:
-            json.dump({"name": self.name, "grid": self.grid(), "params": self.params,
-                       "units": [{"id": u.id, "group": u.group, "needs": u.needs,
-                                  "steps": [s.id for s in u.steps]} for u in self.units]},
-                      f, indent=2, default=str)
+            json.dump(
+                {
+                    "name": self.name,
+                    "grid": self.grid(),
+                    "params": self.params,
+                    "units": [
+                        {
+                            "id": u.id,
+                            "group": u.group,
+                            "needs": u.needs,
+                            "steps": [s.id for s in u.steps],
+                        }
+                        for u in self.units
+                    ],
+                },
+                f,
+                indent=2,
+                default=str,
+            )
         ledger = ProgressLog(os.path.join(self.root, "progress.jsonl"))
         planned = self.planned()
-        ledger.emit("campaign_start", name=self.name, scenario=self.scenario,
-                    grid=self.grid(), params=self.params,
-                    planned_run_s=planned, planned_total_s=round(sum(planned.values()), 1),
-                    units=[u.id for u in self.units])
+        ledger.emit(
+            "campaign_start",
+            name=self.name,
+            scenario=self.scenario,
+            grid=self.grid(),
+            params=self.params,
+            planned_run_s=planned,
+            planned_total_s=round(sum(planned.values()), 1),
+            units=[u.id for u in self.units],
+        )
         rows, done_units, failed_units = [], set(), set()
         counts = {"ok": 0, "failed": 0, "skipped": 0}
         status = "interrupted"
@@ -149,8 +170,7 @@ class Campaign:
                 ledger.emit("aggregate", **self.aggregate_fn(self.root, rows))
             ledger.emit("campaign_end", status=status, **counts)
             ledger.close()
-        return {"root": self.root, "status": status, **counts,
-                "failed_units": sorted(failed_units)}
+        return {"root": self.root, "status": status, **counts, "failed_units": sorted(failed_units)}
 
     def _step(self, ledger, unit, s, rows, counts):
         """Run one step; True when the unit may go on."""
@@ -172,25 +192,40 @@ class Campaign:
         for attempt in range(1, s.retries + 2):
             t0 = time.time()
             if visible:
-                ledger.emit("step_start", step=s.id, unit=unit.id, attempt=attempt,
-                            cmd=s.describe())
+                ledger.emit(
+                    "step_start", step=s.id, unit=unit.id, attempt=attempt, cmd=s.describe()
+                )
             try:
                 self._execute(ledger, s, rid, attempt)
                 if visible:
-                    ledger.emit("step_end", step=s.id, unit=unit.id, ok=True,
-                                duration_s=round(time.time() - t0, 3))
+                    ledger.emit(
+                        "step_end",
+                        step=s.id,
+                        unit=unit.id,
+                        ok=True,
+                        duration_s=round(time.time() - t0, 3),
+                    )
                 break
             except KeyboardInterrupt:
                 raise
-            except Exception as e:   # noqa: BLE001 — recorded, retried, then moved on
+            except Exception as e:  # noqa: BLE001 — recorded, retried, then moved on
                 log.warning("%s %s attempt %d failed: %s", kind, rid, attempt, e)
                 if visible:
-                    ledger.emit("step_end", step=s.id, unit=unit.id, ok=False,
-                                duration_s=round(time.time() - t0, 3), error=str(e)[:300])
+                    ledger.emit(
+                        "step_end",
+                        step=s.id,
+                        unit=unit.id,
+                        ok=False,
+                        duration_s=round(time.time() - t0, 3),
+                        error=str(e)[:300],
+                    )
                 if attempt <= s.retries:
-                    ledger.emit(f"{kind}_retry", **({"run_id": rid} if s.scored
-                                                    else {"step": s.id}),
-                                attempt=attempt, error=str(e)[:300])
+                    ledger.emit(
+                        f"{kind}_retry",
+                        **({"run_id": rid} if s.scored else {"step": s.id}),
+                        attempt=attempt,
+                        error=str(e)[:300],
+                    )
                     continue
                 counts["failed"] += 1
                 if s.scored:
@@ -216,8 +251,11 @@ class Campaign:
 
     def _execute(self, ledger, s, rid, attempt):
         if s.run is not None:
-            emit = ledger.bind(run_id=rid, attempt=attempt) if s.scored else ledger.bind(
-                step=s.id, attempt=attempt)
+            emit = (
+                ledger.bind(run_id=rid, attempt=attempt)
+                if s.scored
+                else ledger.bind(step=s.id, attempt=attempt)
+            )
             s.run(emit)
             return
         r = subprocess.run(s.cmd, cwd=REPO_ROOT)
@@ -237,4 +275,4 @@ def _load_metrics(run_dir):
         with open(path) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
-        return None      # unreadable -> run it again
+        return None  # unreadable -> run it again

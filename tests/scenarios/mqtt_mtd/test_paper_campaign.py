@@ -1,22 +1,20 @@
 """The paper campaign's reuse guard (cyberrange/scenarios/mqtt_mtd/campaign.py).
 
-Regression: the "datasets + model present -> attack only" guard used to be
-re-checked before every step, so once `train` had built the model the two
-evaluations were skipped as if already done (and compare_coordinators lost
-fingerprint_auc / nanogrid_recall). The guard is decided once per unit; each
-evaluation is redone on its own when its predictions are missing.
+The "datasets + model present -> attack only" guard is decided once per unit,
+not re-checked before every step: re-checking it lets `train` build the model
+and then skip the two evaluations as if they were already done, which costs
+compare_coordinators its fingerprint_auc and nanogrid_recall. Each evaluation is
+redone on its own whenever its predictions are missing.
 
 Run: `.venv/bin/python -m unittest tests.test_paper_campaign`.
 """
 
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
-from cyberrange.scenarios.mqtt_mtd import campaign as C   # noqa: E402
+from cyberrange.scenarios.mqtt_mtd import campaign as C  # noqa: E402
 
 
 class ReuseGuard(unittest.TestCase):
@@ -40,7 +38,7 @@ class ReuseGuard(unittest.TestCase):
             p.write_text("x")
 
     def test_fresh_build_runs_the_evaluations(self):
-        self.unit.announce(lambda _line: None)          # unit start: nothing built yet
+        self.unit.announce(lambda _line: None)  # unit start: nothing built yet
         self.assertFalse(self.step("datasets").skip_if())
         # ... datasets and train have now run:
         self.touch("datasets/train.pcap", "datasets/test.pcap", "model/model.pt")
@@ -49,8 +47,12 @@ class ReuseGuard(unittest.TestCase):
         self.assertFalse(self.step("evaluate-baseline-model").skip_if())
 
     def test_built_config_reruns_only_missing_evaluations(self):
-        self.touch("datasets/train.pcap", "datasets/test.pcap", "model/model.pt",
-                   "eval/model-mtd/predictions.csv")
+        self.touch(
+            "datasets/train.pcap",
+            "datasets/test.pcap",
+            "model/model.pt",
+            "eval/model-mtd/predictions.csv",
+        )
         self.unit.announce(lambda _line: None)
         for sid in ("clean", "datasets", "train", "evaluate"):
             self.assertTrue(self.step(sid).skip_if(), sid)

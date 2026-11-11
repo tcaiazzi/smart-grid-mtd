@@ -5,23 +5,25 @@ exec_step, no Docker.
 Run: `.venv/bin/python -m unittest tests.test_attack_planner`.
 """
 
-import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
-from cyberrange.planes.attack.planner import steps as S          # noqa: E402
+from cyberrange.planes.attack.planner import steps as S  # noqa: E402
 from cyberrange.planes.attack.planner.planner import AttackPlanner  # noqa: E402
-from cyberrange.planes.defense.soar import kg, trees             # noqa: E402
+from cyberrange.planes.defense.soar import trees  # noqa: E402
 from cyberrange.scenarios.cps import kg as cps_kg
 
-CTX = {"target_url": "http://10.10.0.20:8080", "engine_ip": "10.20.0.20",
-       "engine_port": 5020, "ot_write_path": "/ot_write.py"}
+CTX = {
+    "target_url": "http://10.10.0.20:8080",
+    "engine_ip": "10.20.0.20",
+    "engine_port": 5020,
+    "ot_write_path": "/ot_write.py",
+}
 
 
 class Recorder:
     """exec_step that reports success, except for nodes in ``block``."""
+
     def __init__(self, block=(), writes_per_impact=3):
         self.block, self.calls = set(block), []
         self.wpi = writes_per_impact
@@ -65,7 +67,7 @@ class Planner(unittest.TestCase):
         s, rec = self.plan()
         self.assertTrue(s["success"])
         self.assertEqual(s["stage_reached"], "impact")
-        # opportunistic aims at the biggest impact first: breaker_open (1.0)
+        # Opportunistic aims at the biggest impact first: breaker_open (1.0)
         self.assertEqual(rec.calls, ["it_access", "it_exec", "pivot", "breaker_open"])
 
     def test_targeted_goal(self):
@@ -75,7 +77,7 @@ class Planner(unittest.TestCase):
 
     def test_stealthy_prefers_quiet_impact(self):
         s, rec = self.plan(profile="stealthy")
-        self.assertEqual(rec.calls[-1], "mode_hijack")   # lowest detectability
+        self.assertEqual(rec.calls[-1], "mode_hijack")  # lowest detectability
 
     def test_blocked_pivot_defends(self):
         # The responder blocked the flow: the pivot probe fails, every OT leaf
@@ -85,7 +87,7 @@ class Planner(unittest.TestCase):
         self.assertTrue(s["defended"])
         self.assertEqual(s["stage_reached"], "it_exec")
         self.assertEqual(s["writes_ok"], 0)
-        self.assertEqual(rec.calls.count("pivot"), 1)    # not retried pointlessly
+        self.assertEqual(rec.calls.count("pivot"), 1)  # not retried pointlessly
 
     def test_blocked_impact_tries_alternative_then_stops(self):
         # The write of the first-choice leaf fails; the planner tries another
@@ -110,6 +112,7 @@ class Planner(unittest.TestCase):
 class FakeManager:
     """exec_obj that answers each exploit_client --step with matching JSON, and
     fails the pivot once blocked (as a boundary DROP would)."""
+
     def __init__(self, block=()):
         self.block, self.cmds = set(block), []
 
@@ -117,8 +120,10 @@ class FakeManager:
         self.cmds.append(cmd)
         if "--step impact" in cmd:
             ok = "impact" not in self.block
-            lines = [f'{{"phase":"modbus_write","t_send":1.0,"register":0,"value":60.0,"ok":{str(ok).lower()},"attempt":1}}',
-                     f'{{"phase":"impact","attack":"x","ok":{str(ok).lower()}}}']
+            lines = [
+                f'{{"phase":"modbus_write","t_send":1.0,"register":0,"value":60.0,"ok":{str(ok).lower()},"attempt":1}}',
+                f'{{"phase":"impact","attack":"x","ok":{str(ok).lower()}}}',
+            ]
             return ("\n".join(lines).encode(), b"", 0 if ok else 1)
         node = next((n for n in ("it_access", "it_exec", "pivot") if f"--step {n}" in cmd), "?")
         ok = node not in self.block
@@ -136,15 +141,25 @@ class GT:
 class PlannedDriver(unittest.TestCase):
     def setUp(self):
         from cyberrange.planes.attack import active_attack
+
         self.drive = active_attack.drive_attack_planned
         self.g = cps_kg.build()
 
     def run_driver(self, block=(), profile="opportunistic", goal=None):
         mgr, gt, ledger = FakeManager(block=block), GT(), []
-        summary = self.drive(mgr, {"attacker": "attacker"}, gt, self.g,
-                             target_url="http://10.10.0.20:8080", engine_ip="10.20.0.20",
-                             engine_port=5020, profile=profile, goal=goal, seed=1,
-                             emit=lambda k, **f: ledger.append((k, f)))
+        summary = self.drive(
+            mgr,
+            {"attacker": "attacker"},
+            gt,
+            self.g,
+            target_url="http://10.10.0.20:8080",
+            engine_ip="10.20.0.20",
+            engine_port=5020,
+            profile=profile,
+            goal=goal,
+            seed=1,
+            emit=lambda k, **f: ledger.append((k, f)),
+        )
         return summary, gt, ledger
 
     def test_records_ground_truth_and_ledger(self):
@@ -153,7 +168,7 @@ class PlannedDriver(unittest.TestCase):
         self.assertEqual(kinds[0], "attack_start")
         self.assertEqual(kinds[-1], "attack_end")
         self.assertIn("plan_step", kinds)
-        self.assertIn("rce", kinds)                      # it_access mapped for metrics
+        self.assertIn("rce", kinds)  # it_access mapped for metrics
         self.assertTrue(any(r["kind"] == "modbus_write" and r["ok"] for r in gt.rows))
         self.assertTrue(s["success"])
         self.assertEqual([k for k, _ in ledger].count("plan_step"), len(s["steps"]))

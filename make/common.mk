@@ -41,6 +41,13 @@ SCENARIO ?= cps
 dashboard:                 ## progress dashboard of every scenario's runs/campaigns on http://127.0.0.1:$(CPS_DASH_PORT)
 	$(PYTHON) -m $(M_DASHBOARD) --root $(OUTPUT_ROOT) --port $(CPS_DASH_PORT)
 
+fmt:                       ## reformat every Python file (ruff format, 100 columns)
+	$(PYTHON) -m ruff format .
+
+lint:                      ## report style and dead-code problems without changing anything
+	$(PYTHON) -m ruff format --check .
+	$(PYTHON) -m ruff check .
+
 selftest:                  ## the whole test suite (no Kathará, no Docker)
 	$(PYTHON) -m pytest tests -q
 

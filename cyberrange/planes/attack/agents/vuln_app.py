@@ -20,7 +20,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-ACCESS_LOG = None   # set in main(); JSONL request log the IT sensor tails
+ACCESS_LOG = None  # set in main(); JSONL request log the IT sensor tails
 
 
 def _access(src, path, target):
@@ -28,8 +28,10 @@ def _access(src, path, target):
         return
     try:
         with open(ACCESS_LOG, "a") as f:
-            f.write(json.dumps({"t": round(time.time(), 3), "src": src,
-                                "path": path, "target": target}) + "\n")
+            f.write(
+                json.dumps({"t": round(time.time(), 3), "src": src, "path": path, "target": target})
+                + "\n"
+            )
             f.flush()
     except OSError:
         pass
@@ -54,8 +56,7 @@ class Handler(BaseHTTPRequestHandler):
             # VULNERABLE ON PURPOSE: unsanitised input into a shell command.
             cmd = "ping -c 1 " + target
             try:
-                out = subprocess.run(cmd, shell=True, capture_output=True,
-                                     text=True, timeout=10)
+                out = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
                 self._send(200, out.stdout + out.stderr)
             except Exception as e:
                 self._send(500, f"error: {e}\n")
@@ -70,8 +71,9 @@ def main():
     ap = argparse.ArgumentParser(description="Deliberately-vulnerable lab web app")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
-    ap.add_argument("--access-log", default=None,
-                    help="JSONL request log for the IT sensor (off by default)")
+    ap.add_argument(
+        "--access-log", default=None, help="JSONL request log for the IT sensor (off by default)"
+    )
     args = ap.parse_args()
     global ACCESS_LOG
     ACCESS_LOG = args.access_log

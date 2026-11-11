@@ -1,6 +1,6 @@
 ---
 name: kathara-lab-creation
-description: "Create and configure Kathara labs with consistent folder structure, lab.conf, and startup files. Use when designing new teaching labs, exercises, or exam scenarios in Kathara repositories."
+description: "Create and configure Kathara labs with consistent folder structure, lab.conf, and startup files. Use when designing new teaching labs, exercises, or exam scenarios in a generic Kathara repository. Not for the cyberrange framework in this repository, where a lab is declared as a Topology in cyberrange/scenarios/<name>/topology.py and lab.conf is generated output of `make lab-conf` — use the cyberrange-scenario skill instead."
 argument-hint: "Topic/category, lab name, devices, links, addressing, and validation goal"
 user-invocable: true
 ---

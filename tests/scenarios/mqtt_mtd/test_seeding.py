@@ -18,16 +18,15 @@ dirs, as test_guest_imports does from a staged copy). Run with
 
 import sys
 import unittest
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE_AGENTS))
-sys.path.insert(0, str(guest_paths.DEFENSE))   # flat rl_policy, as on semp
+sys.path.insert(0, str(guest_paths.DEFENSE))  # flat rl_policy, as on semp
 sys.path.insert(0, str(guest_paths.TRAFFIC_AGENTS))
 
 from mtd_coordinator import SEMPCoordinator  # noqa: E402
@@ -41,15 +40,28 @@ KNOBS = ("hop", "pad", "src", "freq")
 
 def _coordinator(seed):
     return SEMPCoordinator(
-        9998, ["10.1.0.2", "10.1.0.4"], [8883, 8884], 2.0, no_nat=True,
-        pad_buckets=[128, 256, 384, 512], scmc_ip_pool=["10.0.0.2", "10.0.0.4"],
-        freq_pool=[0.2, 0.5, 1.0], seed=seed,
+        9998,
+        ["10.1.0.2", "10.1.0.4"],
+        [8883, 8884],
+        2.0,
+        no_nat=True,
+        pad_buckets=[128, 256, 384, 512],
+        scmc_ip_pool=["10.0.0.2", "10.0.0.4"],
+        freq_pool=[0.2, 0.5, 1.0],
+        seed=seed,
     )
 
 
 def _executor(seed):
-    return SCMCExecutor("scmc1", "10.1.0.2", 8883, "10.1.0.2", 9998,
-                        pad_buckets=[128, 256, 384, 512, 1024], seed=seed)
+    return SCMCExecutor(
+        "scmc1",
+        "10.1.0.2",
+        8883,
+        "10.1.0.2",
+        9998,
+        pad_buckets=[128, 256, 384, 512, 1024],
+        seed=seed,
+    )
 
 
 def _draw(rng, knob, n=20):
@@ -79,8 +91,7 @@ class CoordinatorSeedTest(unittest.TestCase):
     def test_knobs_and_seeds_differ(self):
         a = _coordinator(7)
         self.assertNotEqual(_draw(a._rng, "pad"), _draw(a._rng, "freq"))
-        self.assertNotEqual(_draw(_coordinator(7)._rng, "hop"),
-                            _draw(_coordinator(8)._rng, "hop"))
+        self.assertNotEqual(_draw(_coordinator(7)._rng, "hop"), _draw(_coordinator(8)._rng, "hop"))
 
 
 class ExecutorSeedTest(unittest.TestCase):
@@ -88,8 +99,14 @@ class ExecutorSeedTest(unittest.TestCase):
         obj = {"value": 1.0}
         sizes = [len(ex._pad_payload(obj)) for _ in range(n)]
         jitter = [ex._rng.uniform(-0.05, 0.05) for _ in range(n)]
-        values = [{k: v for k, v in step_microgrid(ex.mg, "scmc1", ex._noise_rng).items()
-                   if k != "timestamp"} for _ in range(n)]
+        values = [
+            {
+                k: v
+                for k, v in step_microgrid(ex.mg, "scmc1", ex._noise_rng).items()
+                if k != "timestamp"
+            }
+            for _ in range(n)
+        ]
         return sizes, jitter, values
 
     def test_same_seed_same_trace(self):
@@ -101,8 +118,11 @@ class ExecutorSeedTest(unittest.TestCase):
     def test_sensor_noise(self):
         def run(seed):
             mg, rng = build_microgrid(), sensor_rng(seed)
-            return [(r["frequency"], r["voltage"])
-                    for r in (step_microgrid(mg, "scmc1", rng) for _ in range(20))]
+            return [
+                (r["frequency"], r["voltage"])
+                for r in (step_microgrid(mg, "scmc1", rng) for _ in range(20))
+            ]
+
         self.assertEqual(run(3), run(3))
         self.assertNotEqual(run(3), run(4))
 
@@ -111,6 +131,7 @@ class ClassifierSeedTest(unittest.TestCase):
     @staticmethod
     def _frame():
         from cyberrange.planes.attack.classify import FEATURE_COLS
+
         rng = np.random.default_rng(0)
         n = 400
         df = pd.DataFrame(rng.normal(size=(n, len(FEATURE_COLS))), columns=FEATURE_COLS)
@@ -123,8 +144,10 @@ class ClassifierSeedTest(unittest.TestCase):
     def _weights(self, seed):
         import torch
         from cyberrange.planes.attack.classify import train_classifier
-        model, _ = train_classifier(self._frame(), window_size=8, epochs=2,
-                                    device=torch.device("cpu"), seed=seed)
+
+        model, _ = train_classifier(
+            self._frame(), window_size=8, epochs=2, device=torch.device("cpu"), seed=seed
+        )
         return np.concatenate([p.detach().numpy().ravel() for p in model.parameters()])
 
     def test_same_seed_same_weights(self):

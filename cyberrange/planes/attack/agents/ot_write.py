@@ -38,10 +38,10 @@ def write_registers(engine_ip, port, writes, unit=reg.UNIT_ID, timeout=5.0):
     return resps
 
 
-def write_single_register(engine_ip, port, register, raw_value, unit=reg.UNIT_ID,
-                          txn=1, timeout=5.0):
-    return write_registers(engine_ip, port, [(register, raw_value)], unit=unit,
-                           timeout=timeout)[0]
+def write_single_register(
+    engine_ip, port, register, raw_value, unit=reg.UNIT_ID, txn=1, timeout=5.0
+):
+    return write_registers(engine_ip, port, [(register, raw_value)], unit=unit, timeout=timeout)[0]
 
 
 def parse_args(argv):
@@ -62,8 +62,9 @@ def main(argv):
     try:
         engine_ip, port, writes, unit = parse_args(argv)
     except ValueError:
-        print("usage: ot_write.py <engine_ip> <port> <reg>=<raw> [<reg>=<raw> ...]",
-              file=sys.stderr)
+        print(
+            "usage: ot_write.py <engine_ip> <port> <reg>=<raw> [<reg>=<raw> ...]", file=sys.stderr
+        )
         return 2
     resps = write_registers(engine_ip, port, writes, unit=unit)
     print("ot_write ok:", " ".join(r.hex() for r in resps))

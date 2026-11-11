@@ -18,7 +18,11 @@ import types
 
 from cyberrange.core.topology import Iface, Node, Route, Topology, build_lab as _build
 from cyberrange.scenarios.cps.guest_files import (
-    ATTACKER_CPS_FILES, ENGINE_FILES, HMI_FILES, PLC_FILES, SENSOR_FILES,
+    ATTACKER_CPS_FILES,
+    ENGINE_FILES,
+    HMI_FILES,
+    PLC_FILES,
+    SENSOR_FILES,
 )
 
 LAB_NAME = "cps"
@@ -41,11 +45,11 @@ DASHBOARD_GUEST_PORT = 8080
 # The sensor's OT NIC (eth0) is passive and deliberately has no address.
 ADDRESSES = {
     "attacker": {"eth0": f"{ATTACKER_IP}/24"},
-    "hmi":      {"eth0": f"{HMI_IP}/24"},
+    "hmi": {"eth0": f"{HMI_IP}/24"},
     "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24"},
-    "plc":      {"eth0": f"{PLC_IP}/24"},
-    "engine":   {"eth0": f"{ENGINE_IP}/24"},
-    "sensor":   {"eth1": f"{SENSOR_DEF_IP}/24"},
+    "plc": {"eth0": f"{PLC_IP}/24"},
+    "engine": {"eth0": f"{ENGINE_IP}/24"},
+    "sensor": {"eth1": f"{SENSOR_DEF_IP}/24"},
 }
 
 
@@ -72,21 +76,45 @@ def topology(args) -> Topology:
     def addr(name, i):
         return ADDRESSES[name].get(f"eth{i}")
 
-    return Topology(LAB_NAME, default_image=IMAGE, nodes=[
-        Node("attacker", [Iface(IT, addr("attacker", 0))], role="it-host",
-             routes=gw(FW_IT_IP), files=ATTACKER_CPS_FILES),
-        Node("hmi", [Iface(IT, addr("hmi", 0))], role="hmi",
-             routes=gw(FW_IT_IP), files=HMI_FILES),
-        Node("firewall", [Iface(IT, addr("firewall", 0)), Iface(OT, addr("firewall", 1))],
-             role="boundary", startup=firewall_rules()),
-        Node("plc", [Iface(OT, addr("plc", 0))], role="plc",
-             routes=gw(FW_OT_IP), files=PLC_FILES),
-        Node("engine", [Iface(OT, addr("engine", 0))], role="plant",
-             routes=gw(FW_OT_IP), files=ENGINE_FILES),
-        Node("sensor", [Iface(OT, promisc=True), Iface(DEF, addr("sensor", 1))],
-             role="sensor", files=SENSOR_FILES,
-             mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None),
-    ])
+    return Topology(
+        LAB_NAME,
+        default_image=IMAGE,
+        nodes=[
+            Node(
+                "attacker",
+                [Iface(IT, addr("attacker", 0))],
+                role="it-host",
+                routes=gw(FW_IT_IP),
+                files=ATTACKER_CPS_FILES,
+            ),
+            Node(
+                "hmi", [Iface(IT, addr("hmi", 0))], role="hmi", routes=gw(FW_IT_IP), files=HMI_FILES
+            ),
+            Node(
+                "firewall",
+                [Iface(IT, addr("firewall", 0)), Iface(OT, addr("firewall", 1))],
+                role="boundary",
+                startup=firewall_rules(),
+            ),
+            Node(
+                "plc", [Iface(OT, addr("plc", 0))], role="plc", routes=gw(FW_OT_IP), files=PLC_FILES
+            ),
+            Node(
+                "engine",
+                [Iface(OT, addr("engine", 0))],
+                role="plant",
+                routes=gw(FW_OT_IP),
+                files=ENGINE_FILES,
+            ),
+            Node(
+                "sensor",
+                [Iface(OT, promisc=True), Iface(DEF, addr("sensor", 1))],
+                role="sensor",
+                files=SENSOR_FILES,
+                mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
+            ),
+        ],
+    )
 
 
 def build_lab(args=None):
@@ -102,6 +130,6 @@ def roles():
 def services():
     """Exposed services per machine: (name, proto, port, app)."""
     return {
-        "hmi":    [("diag-http", "tcp", APP_PORT, "http")],
+        "hmi": [("diag-http", "tcp", APP_PORT, "http")],
         "engine": [("modbus", "tcp", MODBUS_PORT, "modbus")],
     }

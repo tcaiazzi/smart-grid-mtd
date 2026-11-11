@@ -13,24 +13,24 @@ Run: `.venv/bin/python -m unittest tests.test_plc_control`.
 
 import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(guest_paths.TRAFFIC_AGENTS))
 
-import ot_registers as reg   # noqa: E402
+import ot_registers as reg  # noqa: E402
 
 try:
-    import plc_controller as plc   # imports pymodbus
+    import plc_controller as plc  # imports pymodbus
+
     HAVE = True
 except Exception:
     HAVE = False
 
 IN_BAND = {"v_load": 1.00, "v_dg": 1.01}
-OVER_DG = {"v_load": 1.01, "v_dg": 1.07}     # only the DG bus overvolts
+OVER_DG = {"v_load": 1.01, "v_dg": 1.07}  # only the DG bus overvolts
 UNDER = {"v_load": 0.96, "v_dg": 0.965}
 AUTO = reg.CTRL_AUTO
 MANUAL = reg.CTRL_MANUAL
@@ -46,7 +46,7 @@ class Decide(unittest.TestCase):
     def test_out_of_envelope_in_force_is_rejected(self):
         write, sp = plc.decide(IN_BAND, {"ctrl_mode": AUTO, "dg_setpoint": 200.0}, 20.0)
         self.assertTrue(write)
-        self.assertEqual(sp, 20.0)    # own command, not 200 nor the clamp 60
+        self.assertEqual(sp, 20.0)  # own command, not 200 nor the clamp 60
 
     def test_regulates_on_dg_bus_overvoltage(self):
         write, sp = plc.decide(OVER_DG, {"ctrl_mode": AUTO, "dg_setpoint": 60.0}, 20.0)
@@ -62,7 +62,7 @@ class Decide(unittest.TestCase):
         for _ in range(10):
             _w, sp = plc.decide(IN_BAND, {"ctrl_mode": AUTO, "dg_setpoint": sp}, sp)
         self.assertEqual(sp, reg.DG_NOMINAL_KW)
-        sp = 30.0   # an operator dispatch handed back to AUTO
+        sp = 30.0  # an operator dispatch handed back to AUTO
         for _ in range(10):
             _w, sp = plc.decide(IN_BAND, {"ctrl_mode": AUTO, "dg_setpoint": sp}, sp)
         self.assertEqual(sp, reg.DG_NOMINAL_KW)

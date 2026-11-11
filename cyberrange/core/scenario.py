@@ -29,7 +29,7 @@ DEFAULT_OVERHEAD_S = {"deploy": 3.0, "download": 0.5, "undeploy": 1.0}
 class PhaseSpec:
     name: str
     planned_s: float
-    timed: bool = False     # a fixed-length observation phase (vs best-effort setup)
+    timed: bool = False  # a fixed-length observation phase (vs best-effort setup)
 
     def to_dict(self):
         return asdict(self)
@@ -55,8 +55,11 @@ class Scenario:
 
     def phases(self, args):
         o = self.overhead_s
-        return ([PhaseSpec("deploy", o["deploy"])] + list(self.episode_phases(args))
-                + [PhaseSpec("download", o["download"]), PhaseSpec("undeploy", o["undeploy"])])
+        return (
+            [PhaseSpec("deploy", o["deploy"])]
+            + list(self.episode_phases(args))
+            + [PhaseSpec("download", o["download"]), PhaseSpec("undeploy", o["undeploy"])]
+        )
 
     def planned_s(self, args):
         return round(sum(p.planned_s for p in self.phases(args)), 3)
@@ -69,7 +72,8 @@ class Scenario:
 
     def run_id(self, args):
         return getattr(args, "run_id", None) or os.path.basename(
-            os.path.normpath(self.out_dir(args)))
+            os.path.normpath(self.out_dir(args))
+        )
 
     def prepare(self, args):
         pass

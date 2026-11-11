@@ -35,9 +35,9 @@ Usage:
       --scmc-ip-pool 10.0.0.2,10.0.0.4,10.0.0.5 \\
       --semp-ip-pool 10.1.0.2,10.1.0.4,10.1.0.5 \\
       --out-dir output/<slug>
-  # writes entropy.csv + entropy_timeseries.csv into --out-dir
+  # Writes entropy.csv + entropy_timeseries.csv into --out-dir.
 
-  # baseline-vs-MTD comparison figure (after both configs have an entropy.csv):
+  # Baseline-vs-MTD comparison figure (after both configs have an entropy.csv):
   python entropy.py --compare --baseline-csv output/baseline-mbps2/entropy.csv \\
       --mtd-csv output/mtd-<slug>/entropy.csv --out-dir output/mtd-<slug>
 """
@@ -57,7 +57,7 @@ plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
 plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
 
-from cyberrange.planes.attack.classify import extract_features
+from cyberrange.planes.attack.classify import extract_features  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
 # Continuous fields are histogram-binned before counting; discrete ones use the
 # raw category counts. 32 bins is plenty to resolve the padding buckets / publish
@@ -72,6 +72,7 @@ FIELD_ORDER = DISCRETE_FIELDS + CONTINUOUS_FIELDS
 
 
 # ── Entropy primitives ─────────────────────────────────────────────────────────
+
 
 def shannon_entropy(values: pd.Series, bins: Optional[int] = None) -> tuple:
     """Shannon entropy of a sample, in bits.
@@ -107,6 +108,7 @@ def shannon_entropy(values: pd.Series, bins: Optional[int] = None) -> tuple:
 
 # ── Nanogrid packet selection ──────────────────────────────────────────────────
 
+
 def _split_flow_key(fk: str) -> tuple:
     """Parse 'src:sport->dst:dport' back into (src, sport, dst, dport)."""
     src_part, dst_part = fk.split("->")
@@ -115,9 +117,7 @@ def _split_flow_key(fk: str) -> tuple:
     return src_ip, int(sport), dst_ip, int(dport)
 
 
-def load_nanogrid_packets(
-    pcap_path: str, scmc_ips: list, semp_ips: list
-) -> pd.DataFrame:
+def load_nanogrid_packets(pcap_path: str, scmc_ips: list, semp_ips: list) -> pd.DataFrame:
     """Extract nanogrid client→broker packets from a pcap.
 
     Reuses classify.extract_features to label SCMC↔SEMP traffic by IP pools, then
@@ -130,8 +130,7 @@ def load_nanogrid_packets(
     ng = df[(df["is_nanogrid"] == 1) & (df["src_ip"].isin(scmc_set))].copy()
     if ng.empty:
         raise ValueError(
-            f"No nanogrid client→broker packets in {pcap_path} "
-            f"(scmc={scmc_ips}, semp={semp_ips})"
+            f"No nanogrid client→broker packets in {pcap_path} (scmc={scmc_ips}, semp={semp_ips})"
         )
     parsed = ng["flow_key"].map(_split_flow_key)
     ng["dst_ip"] = parsed.map(lambda t: t[2])
@@ -140,6 +139,7 @@ def load_nanogrid_packets(
 
 
 # ── Metrics ────────────────────────────────────────────────────────────────────
+
 
 def compute_flow_entropy(df_ng: pd.DataFrame) -> dict:
     """Headline metric: entropy of the packets-per-flow distribution.
@@ -163,19 +163,12 @@ def compute_field_entropies(df_ng: pd.DataFrame) -> pd.DataFrame:
         bins = CONT_BINS if field in CONTINUOUS_FIELDS else None
         h, h_norm, n_distinct = shannon_entropy(df_ng[field], bins=bins)
         rows.append(
-            {
-                "field": field,
-                "entropy_bits": h,
-                "entropy_norm": h_norm,
-                "n_distinct": n_distinct,
-            }
+            {"field": field, "entropy_bits": h, "entropy_norm": h_norm, "n_distinct": n_distinct}
         )
     return pd.DataFrame(rows)
 
 
-def compute_entropy_timeseries(
-    df_ng: pd.DataFrame, window_s: float, step_s: float
-) -> pd.DataFrame:
+def compute_entropy_timeseries(df_ng: pd.DataFrame, window_s: float, step_s: float) -> pd.DataFrame:
     """Sliding-window entropy over time — shows the target moving live.
 
     Per window emits the flow entropy plus each per-field entropy, so the figure
@@ -192,8 +185,14 @@ def compute_entropy_timeseries(
         win = df_ng[(ts >= start) & (ts < end)]
         rel_t = round(start - t0, 3)
         if win.empty:
-            rows.append({"t": rel_t, "n_packets": 0, "H_flow_bits": 0.0,
-                         **{f"H_{f}_bits": 0.0 for f in FIELD_ORDER}})
+            rows.append(
+                {
+                    "t": rel_t,
+                    "n_packets": 0,
+                    "H_flow_bits": 0.0,
+                    **{f"H_{f}_bits": 0.0 for f in FIELD_ORDER},
+                }
+            )
         else:
             row = {
                 "t": rel_t,
@@ -215,19 +214,24 @@ def build_entropy_csv(flow: dict, fields: pd.DataFrame) -> pd.DataFrame:
     field; columns entropy_bits / entropy_norm / n_distinct (n_flows lands in
     n_distinct for the flow row). This shape is what the comparison plot reads.
     """
-    flow_row = pd.DataFrame([{
-        "metric": "flow",
-        "entropy_bits": flow["H_flow_bits"],
-        "entropy_norm": flow["H_flow_norm"],
-        "n_distinct": flow["n_flows"],
-        "n_packets": flow["n_packets"],
-    }])
+    flow_row = pd.DataFrame(
+        [
+            {
+                "metric": "flow",
+                "entropy_bits": flow["H_flow_bits"],
+                "entropy_norm": flow["H_flow_norm"],
+                "n_distinct": flow["n_flows"],
+                "n_packets": flow["n_packets"],
+            }
+        ]
+    )
     field_rows = fields.rename(columns={"field": "metric"}).copy()
     field_rows["n_packets"] = flow["n_packets"]
     return pd.concat([flow_row, field_rows], ignore_index=True)
 
 
 # ── Plots ───────────────────────────────────────────────────────────────────────
+
 
 def plot_entropy_comparison(baseline_csv: str, mtd_csv: str, out_path: str) -> None:
     """Grouped bar chart: baseline vs MTD entropy per metric (flow + fields).
@@ -245,10 +249,8 @@ def plot_entropy_comparison(baseline_csv: str, mtd_csv: str, out_path: str) -> N
     x = np.arange(len(metrics))
     w = 0.4
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(x - w / 2, base_v, w, label="Baseline (no MTD)",
-           color="#7f8c8d", edgecolor="black")
-    ax.bar(x + w / 2, mtd_v, w, label="MTD",
-           color="#27ae60", edgecolor="black")
+    ax.bar(x - w / 2, base_v, w, label="Baseline (no MTD)", color="#7f8c8d", edgecolor="black")
+    ax.bar(x + w / 2, mtd_v, w, label="MTD", color="#27ae60", edgecolor="black")
 
     ax.set_xticks(x)
     ax.set_xticklabels([m.replace("_", "\n") for m in metrics])
@@ -271,8 +273,7 @@ def plot_entropy_timeseries(ts_csv: str, out_path: str) -> None:
     df = pd.read_csv(ts_csv)
     fig, ax = plt.subplots(figsize=(10, 5))
 
-    ax.plot(df["t"], df["H_flow_bits"], lw=2.4, color="#c0392b",
-            label="flow (headline)")
+    ax.plot(df["t"], df["H_flow_bits"], lw=2.4, color="#c0392b", label="flow (headline)")
     for field in FIELD_ORDER:
         col = f"H_{field}_bits"
         if col in df.columns:
@@ -290,29 +291,42 @@ def plot_entropy_timeseries(ts_csv: str, out_path: str) -> None:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────────
 
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Flow/field entropy of the nanogrid traffic (MTD metric)"
     )
-    p.add_argument("--test-pcap", metavar="PCAP", default=None,
-                   help="PCAP to measure (default: output/<slug>/datasets/test.pcap)")
-    p.add_argument("--scmc-ip-pool", default="10.0.0.2,10.0.0.4,10.0.0.5",
-                   help="Comma-separated SCMC source-IP pool (nanogrid one end).")
-    p.add_argument("--semp-ip-pool", default="10.1.0.2,10.1.0.4,10.1.0.5",
-                   help="Comma-separated SEMP broker-IP pool (nanogrid other end).")
-    p.add_argument("--out-dir", default="output",
-                   help="Where entropy.csv / figures are written.")
-    p.add_argument("--window", type=float, default=5.0,
-                   help="Sliding-window length in seconds (default: 5).")
-    p.add_argument("--step", type=float, default=1.0,
-                   help="Sliding-window step in seconds (default: 1).")
-    p.add_argument("--compare", action="store_true",
-                   help="Only emit the baseline-vs-MTD comparison figure from two "
-                        "existing entropy.csv files (--baseline-csv / --mtd-csv).")
-    p.add_argument("--baseline-csv", default=None,
-                   help="Baseline entropy.csv (for --compare).")
-    p.add_argument("--mtd-csv", default=None,
-                   help="MTD entropy.csv (for --compare).")
+    p.add_argument(
+        "--test-pcap",
+        metavar="PCAP",
+        default=None,
+        help="PCAP to measure (default: output/<slug>/datasets/test.pcap)",
+    )
+    p.add_argument(
+        "--scmc-ip-pool",
+        default="10.0.0.2,10.0.0.4,10.0.0.5",
+        help="Comma-separated SCMC source-IP pool (nanogrid one end).",
+    )
+    p.add_argument(
+        "--semp-ip-pool",
+        default="10.1.0.2,10.1.0.4,10.1.0.5",
+        help="Comma-separated SEMP broker-IP pool (nanogrid other end).",
+    )
+    p.add_argument("--out-dir", default="output", help="Where entropy.csv / figures are written.")
+    p.add_argument(
+        "--window", type=float, default=5.0, help="Sliding-window length in seconds (default: 5)."
+    )
+    p.add_argument(
+        "--step", type=float, default=1.0, help="Sliding-window step in seconds (default: 1)."
+    )
+    p.add_argument(
+        "--compare",
+        action="store_true",
+        help="Only emit the baseline-vs-MTD comparison figure from two "
+        "existing entropy.csv files (--baseline-csv / --mtd-csv).",
+    )
+    p.add_argument("--baseline-csv", default=None, help="Baseline entropy.csv (for --compare).")
+    p.add_argument("--mtd-csv", default=None, help="MTD entropy.csv (for --compare).")
     return p.parse_args()
 
 
@@ -324,8 +338,7 @@ def main() -> None:
         if not (args.baseline_csv and args.mtd_csv):
             raise SystemExit("[ERROR] --compare needs --baseline-csv and --mtd-csv")
         plot_entropy_comparison(
-            args.baseline_csv, args.mtd_csv,
-            os.path.join(args.out_dir, "entropy_comparison.pdf"),
+            args.baseline_csv, args.mtd_csv, os.path.join(args.out_dir, "entropy_comparison.pdf")
         )
         return
 
@@ -342,8 +355,7 @@ def main() -> None:
     fields = compute_field_entropies(df_ng)
 
     print(f"[entropy] nanogrid packets={flow['n_packets']}  flows={flow['n_flows']}")
-    print(f"[entropy] H_flow = {flow['H_flow_bits']:.3f} bits "
-          f"(norm {flow['H_flow_norm']:.3f})")
+    print(f"[entropy] H_flow = {flow['H_flow_bits']:.3f} bits (norm {flow['H_flow_norm']:.3f})")
     print(fields.to_string(index=False))
 
     csv = build_entropy_csv(flow, fields)

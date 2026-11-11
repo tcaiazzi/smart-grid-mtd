@@ -75,7 +75,7 @@ class DashboardServer:
                     self.send_error(404)
 
             def log_message(self, *_args):
-                pass                       # keep coordinator.log for the MTD only
+                pass  # keep coordinator.log for the MTD only
 
         return Handler
 

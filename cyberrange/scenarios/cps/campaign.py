@@ -46,7 +46,7 @@ PER_RUN = ("out_dir", "run_id", "seed", "attack", "attack_mode", "progress_file"
 
 
 def parse_seeds(spec):
-    """"1-3,7" -> [1, 2, 3, 7] (order kept, duplicates dropped)."""
+    """ "1-3,7" -> [1, 2, 3, 7] (order kept, duplicates dropped)."""
     seeds = []
     for part in str(spec).split(","):
         part = part.strip()
@@ -77,8 +77,10 @@ def parse_modes(spec):
     ok = set(DEFAULT_MODES) | {f"planner:{p}" for p in PROFILES}
     bad = [m for m in modes if m not in ok]
     if bad or not modes:
-        raise ValueError(f"unknown modes {bad}; choose from {', '.join(DEFAULT_MODES)} "
-                         f"or planner:<{'|'.join(PROFILES)}>")
+        raise ValueError(
+            f"unknown modes {bad}; choose from {', '.join(DEFAULT_MODES)} "
+            f"or planner:<{'|'.join(PROFILES)}>"
+        )
     return modes
 
 
@@ -91,8 +93,11 @@ def grid_modes(cfg):
         return modes
     out = []
     for m in modes:
-        m = m if m == "normal" or m.startswith("planner:") else \
-            f"planner:{getattr(cfg, 'attacker_profile', 'opportunistic')}"
+        m = (
+            m
+            if m == "normal" or m.startswith("planner:")
+            else f"planner:{getattr(cfg, 'attacker_profile', 'opportunistic')}"
+        )
         if m not in out:
             out.append(m)
     return out
@@ -100,13 +105,21 @@ def grid_modes(cfg):
 
 def build_grid(modes, seeds):
     """Seed-major list of runs: [{"run_id", "mode", "seed", "attack"}]."""
-    return [{"run_id": f"{mode.replace(':', '-')}-s{seed}", "mode": mode, "seed": seed,
-             "attack": mode != "normal"}
-            for seed in seeds for mode in modes]
+    return [
+        {
+            "run_id": f"{mode.replace(':', '-')}-s{seed}",
+            "mode": mode,
+            "seed": seed,
+            "attack": mode != "normal",
+        }
+        for seed in seeds
+        for mode in modes
+    ]
 
 
 def _scenario():
     from cyberrange.scenarios.cps.scenario import CpsScenario
+
     return CpsScenario()
 
 
@@ -116,13 +129,16 @@ def run_args(cfg, entry, out_dir):
     option the campaign was given), then by the entry (mode, seed, out dir)."""
     scenario = _scenario()
     base = default_args(scenario)
-    overrides = {k: getattr(cfg, k) for k in vars(base)
-                 if hasattr(cfg, k) and k not in PER_RUN}
+    overrides = {k: getattr(cfg, k) for k in vars(base) if hasattr(cfg, k) and k not in PER_RUN}
     mode = entry["mode"]
     overrides.update(
-        out_dir=out_dir, run_id=entry["run_id"], seed=entry["seed"],
-        attack=entry["attack"], progress_file=None,
-        attack_mode=mode if mode in ATTACK_MODES else base.attack_mode)
+        out_dir=out_dir,
+        run_id=entry["run_id"],
+        seed=entry["seed"],
+        attack=entry["attack"],
+        progress_file=None,
+        attack_mode=mode if mode in ATTACK_MODES else base.attack_mode,
+    )
     if mode.startswith("planner:"):
         overrides.update(attack_driver="planner", attacker_profile=mode.split(":", 1)[1])
     elif entry["attack"]:
@@ -131,7 +147,8 @@ def run_args(cfg, entry, out_dir):
 
 
 def _default_run_fn(args, progress):
-    from cyberrange.scenarios.cps import cli as cps_experiment   # Kathará import only when running
+    from cyberrange.scenarios.cps import cli as cps_experiment  # Kathará import only when running
+
     cps_experiment.run(args, progress=progress)
 
 
@@ -152,26 +169,47 @@ def build_campaign(cfg, run_fn=None, metrics_fn=None, out=print):
     for e in build_grid(grid_modes(cfg), parse_seeds(cfg.seeds)):
         rdir = os.path.join(root, "runs", e["run_id"])
         args = run_args(cfg, e, rdir)
-        units.append(Unit(e["run_id"], group=e["mode"], steps=[Step(
-            e["run_id"], run=lambda emit, a=args: run_fn(a, progress=emit),
-            retries=getattr(cfg, "retries", 1), run_dir=rdir, metrics=metrics_fn,
-            report=format_report, planned_s=scenario.planned_s(args),
-            label={"run_id": e["run_id"], "mode": e["mode"], "seed": e["seed"]},
-            info={"attack": e["attack"]})]))
+        units.append(
+            Unit(
+                e["run_id"],
+                group=e["mode"],
+                steps=[
+                    Step(
+                        e["run_id"],
+                        run=lambda emit, a=args: run_fn(a, progress=emit),
+                        retries=getattr(cfg, "retries", 1),
+                        run_dir=rdir,
+                        metrics=metrics_fn,
+                        report=format_report,
+                        planned_s=scenario.planned_s(args),
+                        label={"run_id": e["run_id"], "mode": e["mode"], "seed": e["seed"]},
+                        info={"attack": e["attack"]},
+                    )
+                ],
+            )
+        )
     common = run_args(cfg, {"run_id": "-", "mode": "normal", "seed": None, "attack": False}, "")
     params = {k: v for k, v in sorted(vars(common).items()) if k not in PER_RUN}
     params["retries"] = getattr(cfg, "retries", 1)
-    return Campaign(cfg.name, root, units, params=params,
-                    resume=getattr(cfg, "resume", True), aggregate=write_aggregate, out=out,
-                    scenario=scenario.name)
+    return Campaign(
+        cfg.name,
+        root,
+        units,
+        params=params,
+        resume=getattr(cfg, "resume", True),
+        aggregate=write_aggregate,
+        out=out,
+        scenario=scenario.name,
+    )
 
 
 def run_campaign(cfg, run_fn=None, metrics_fn=None):
     """Run (or resume) the campaign described by ``cfg``. Returns a summary dict.
     ``run_fn(args, progress)`` / ``metrics_fn(out_dir)`` are injectable for tests."""
     _validate(cfg)
-    if run_fn is None:                       # real labs: fail fast if none can run
+    if run_fn is None:  # real labs: fail fast if none can run
         from cyberrange.core import lifecycle
+
         lifecycle.preflight()
     return build_campaign(cfg, run_fn, metrics_fn).run()
 
@@ -191,10 +229,12 @@ def dry_run(cfg, out=print):
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Run a campaign of CPS experiments. Any option of the CPS scenario "
-                    "run (see `python -m cyberrange.scenarios.cps.cli --help`) is "
-                    "accepted and applies to every run.")
-    ap.add_argument("--name", default=time.strftime("%Y%m%d-%H%M%S"),
-                    help="campaign name; reuse it to resume")
+        "run (see `python -m cyberrange.scenarios.cps.cli --help`) is "
+        "accepted and applies to every run."
+    )
+    ap.add_argument(
+        "--name", default=time.strftime("%Y%m%d-%H%M%S"), help="campaign name; reuse it to resume"
+    )
     ap.add_argument("--out-root", default="output/cps/campaigns")
     ap.add_argument("--modes", default=",".join(DEFAULT_MODES))
     ap.add_argument("--seeds", default="1-5", help='e.g. "1-5" or "1,3,7"')
@@ -216,13 +256,21 @@ def main(argv=None):
         dry_run(cfg)
         return
     from cyberrange.core import lifecycle
+
     try:
         res = run_campaign(cfg)
     except lifecycle.LabUnavailable as e:
         log.error("%s", e)
         sys.exit(lifecycle.EXIT_NO_LAB)
-    log.info("campaign %s: %s (ok=%d failed=%d skipped=%d) -> %s/summary.md",
-             cfg.name, res["status"], res["ok"], res["failed"], res["skipped"], res["root"])
+    log.info(
+        "campaign %s: %s (ok=%d failed=%d skipped=%d) -> %s/summary.md",
+        cfg.name,
+        res["status"],
+        res["ok"],
+        res["failed"],
+        res["skipped"],
+        res["root"],
+    )
     sys.exit(0 if res["status"] == "done" else 1)
 
 

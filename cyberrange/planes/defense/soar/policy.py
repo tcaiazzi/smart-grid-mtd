@@ -23,15 +23,15 @@ from typing import Optional
 
 from cyberrange.planes.defense.soar import mapping, trees
 
-APPROVAL_MODES = ("auto", "deny")   # plus "delay:<seconds>", handled by the responder
+APPROVAL_MODES = ("auto", "deny")  # plus "delay:<seconds>", handled by the responder
 
 
 @dataclass
 class Decision:
     t: Optional[float]
     policy: str
-    actions: list                      # countermeasure ids, in execution order
-    covers: dict                       # action -> {"prevents": [...], "restores": [...]}
+    actions: list  # countermeasure ids, in execution order
+    covers: dict  # action -> {"prevents": [...], "restores": [...]}
     cost_terms: dict
     rationale: str
     needs_approval: list = field(default_factory=list)
@@ -47,8 +47,12 @@ class Decision:
         rationale is given."""
         if not self.rationale:
             return False
-        return all(a == "notify" or self.covers.get(a, {}).get("prevents")
-                   or self.covers.get(a, {}).get("restores") for a in self.actions)
+        return all(
+            a == "notify"
+            or self.covers.get(a, {}).get("prevents")
+            or self.covers.get(a, {}).get("restores")
+            for a in self.actions
+        )
 
 
 class _Base:
@@ -57,7 +61,7 @@ class _Base:
     def __init__(self, countermeasures, allowed=None):
         self.cms = {c.id: c for c in countermeasures}
         self.allowed = set(allowed) if allowed is not None else set(self.cms)
-        self.applied = set()          # countermeasures already in effect
+        self.applied = set()  # countermeasures already in effect
         self.notified = False
 
     def mark_applied(self, ids):
@@ -74,8 +78,10 @@ class _Base:
         out = {}
         for a in ids:
             cm = self.cms[a]
-            out[a] = {"prevents": [n for n in cm.prevents if n in relevant],
-                      "restores": [n for n in cm.restores if n in relevant]}
+            out[a] = {
+                "prevents": [n for n in cm.prevents if n in relevant],
+                "restores": [n for n in cm.restores if n in relevant],
+            }
         return out
 
     def _notify(self, snapshot, t, why):
@@ -83,8 +89,15 @@ class _Base:
         if self.notified or self.applied or not snapshot["nodes"]:
             return None
         self.notified = True
-        return Decision(t, self.name, ["notify"], {"notify": {"prevents": [], "restores": []}},
-                        {}, why, active_impacts=list(snapshot["active_impacts"]))
+        return Decision(
+            t,
+            self.name,
+            ["notify"],
+            {"notify": {"prevents": [], "restores": []}},
+            {},
+            why,
+            active_impacts=list(snapshot["active_impacts"]),
+        )
 
 
 class RulesPolicy(_Base):
@@ -97,7 +110,7 @@ class RulesPolicy(_Base):
         "it_access": ["block_web_src"],
         "it_exec": ["kill_proc_tree", "block_flow"],
         # Impact leaves (OT sensor): block the flow and undo the effect.
-        "setpoint_oor": ["block_flow"],          # the PLC rejects the value and recovers
+        "setpoint_oor": ["block_flow"],  # the PLC rejects the value and recovers
         "breaker_open": ["block_flow", "restore_breaker"],
         "mode_hijack": ["block_flow", "force_auto"],
     }
@@ -105,11 +118,14 @@ class RulesPolicy(_Base):
 
     def decide(self, snapshot, t=None):
         nodes = snapshot["nodes"]
-        confirmed = [n for n in self.TRIGGERS
-                     if nodes.get(n, {}).get("state") == mapping.CONFIRMED]
+        confirmed = [n for n in self.TRIGGERS if nodes.get(n, {}).get("state") == mapping.CONFIRMED]
         if not confirmed:
-            return self._notify(snapshot, t, "suspicious activity below the confirmation "
-                                "threshold: operator notified, no automatic action")
+            return self._notify(
+                snapshot,
+                t,
+                "suspicious activity below the confirmation "
+                "threshold: operator notified, no automatic action",
+            )
         want = []
         for node in confirmed:
             for a in self.PLAYBOOK.get(node, []):
@@ -119,17 +135,27 @@ class RulesPolicy(_Base):
         if not new:
             return None
         new = self._order(new)
-        rationale = "; ".join(f"{node} confirmed ({', '.join(nodes[node]['classes'])}) "
-                              f"-> {', '.join(self.PLAYBOOK.get(node, []))}" for node in confirmed)
-        return Decision(t, self.name, new, self._covers(new, nodes), {}, rationale,
-                        needs_approval=[a for a in new if self.cms[a].requires_approval],
-                        active_impacts=[n for n in confirmed if n in mapping.IMPACT_LEAVES])
+        rationale = "; ".join(
+            f"{node} confirmed ({', '.join(nodes[node]['classes'])}) "
+            f"-> {', '.join(self.PLAYBOOK.get(node, []))}"
+            for node in confirmed
+        )
+        return Decision(
+            t,
+            self.name,
+            new,
+            self._covers(new, nodes),
+            {},
+            rationale,
+            needs_approval=[a for a in new if self.cms[a].requires_approval],
+            active_impacts=[n for n in confirmed if n in mapping.IMPACT_LEAVES],
+        )
 
 
 @dataclass
 class Weights:
-    op: float = 1.0          # operational disruption
-    time: float = 0.05       # per second of time-to-effect (slowest action)
+    op: float = 1.0  # operational disruption
+    time: float = 0.05  # per second of time-to-effect (slowest action)
     energy: float = 0.5
 
 
@@ -150,25 +176,40 @@ class SolverPolicy(_Base):
         restored = {n for a in A for n in self.cms[a].restores}
         prevented = {n for a in A for n in self.cms[a].prevents}
         # Impact already achieved (or under way) that nothing undoes.
-        residual = sum(scores.get(n, 0.0) * imp for n, imp in self.impact.items()
-                       if n in mapping.IMPACT_LEAVES and n not in restored)
+        residual = sum(
+            scores.get(n, 0.0) * imp
+            for n, imp in self.impact.items()
+            if n in mapping.IMPACT_LEAVES and n not in restored
+        )
         # The attacker still holds the path: further manipulation is possible
         # unless the path or the manipulations themselves are prevented.
-        exposure = max((imp for n, imp in self.impact.items()
-                        if n in mapping.IMPACT_LEAVES and n not in prevented), default=0.0)
+        exposure = max(
+            (
+                imp
+                for n, imp in self.impact.items()
+                if n in mapping.IMPACT_LEAVES and n not in prevented
+            ),
+            default=0.0,
+        )
         future = 0.0 if "pivot" in prevented else scores.get("pivot", 0.0) * exposure
         new = [a for a in subset if a not in self.applied]
         op = sum(self.cms[a].op_cost for a in new)
         time = max((self.cms[a].time_to_effect_s for a in new), default=0.0)
         energy = sum(self.cms[a].energy_cost for a in new)
         total = residual + future + self.w.op * op + self.w.time * time + self.w.energy * energy
-        return {"residual": round(residual, 4), "future": round(future, 4),
-                "op": round(op, 4), "time": round(time, 4), "energy": round(energy, 4),
-                "total": round(total, 4)}
+        return {
+            "residual": round(residual, 4),
+            "future": round(future, 4),
+            "op": round(op, 4),
+            "time": round(time, 4),
+            "energy": round(energy, 4),
+            "total": round(total, 4),
+        }
 
     def candidates(self):
-        pool = [a for a in self.cms if a != "notify" and a in self.allowed
-                and a not in self.applied]
+        pool = [
+            a for a in self.cms if a != "notify" and a in self.allowed and a not in self.applied
+        ]
         for k in range(len(pool) + 1):
             yield from itertools.combinations(sorted(pool), k)
 
@@ -200,43 +241,68 @@ class SolverPolicy(_Base):
         if not nodes:
             return None
         scores = {n: v["score"] for n, v in nodes.items()}
-        evaluated = [(subset, self.cost(subset, scores)) for subset in self.candidates()
-                     if not self.unpaired_restores(subset, scores)]
+        evaluated = [
+            (subset, self.cost(subset, scores))
+            for subset in self.candidates()
+            if not self.unpaired_restores(subset, scores)
+        ]
         best, best_cost = min(evaluated, key=lambda x: (x[1]["total"], len(x[0]), x[0]))
         # Was the pairing binding? (the unconstrained optimum restored alone)
-        free = min(((s, self.cost(s, scores)) for s in self.candidates()),
-                   key=lambda x: (x[1]["total"], len(x[0]), x[0]))
+        free = min(
+            ((s, self.cost(s, scores)) for s in self.candidates()),
+            key=lambda x: (x[1]["total"], len(x[0]), x[0]),
+        )
         paired = self.unpaired_restores(free[0], scores)
         if not best:
-            return self._notify(snapshot, t, "no countermeasure is worth its cost at the "
-                                f"current belief (J={best_cost['total']}): operator notified")
+            return self._notify(
+                snapshot,
+                t,
+                "no countermeasure is worth its cost at the "
+                f"current belief (J={best_cost['total']}): operator notified",
+            )
         new = self._order(best)
         idle = self.cost((), scores)
-        rationale = (f"chosen {'+'.join(new)}: J {idle['total']} -> {best_cost['total']} "
-                     f"(residual {idle['residual']}->{best_cost['residual']}, "
-                     f"future {idle['future']}->{best_cost['future']}, "
-                     f"op +{best_cost['op']}, energy +{best_cost['energy']}); "
-                     "beliefs " + ", ".join(f"{n}={scores[n]}" for n in
-                                            list(mapping.IMPACT_LEAVES) + ["pivot"]
-                                            if n in scores))
+        rationale = (
+            f"chosen {'+'.join(new)}: J {idle['total']} -> {best_cost['total']} "
+            f"(residual {idle['residual']}->{best_cost['residual']}, "
+            f"future {idle['future']}->{best_cost['future']}, "
+            f"op +{best_cost['op']}, energy +{best_cost['energy']}); "
+            "beliefs "
+            + ", ".join(
+                f"{n}={scores[n]}" for n in list(mapping.IMPACT_LEAVES) + ["pivot"] if n in scores
+            )
+        )
         if paired:
-            rationale += (f"; causal pairing: restoring {', '.join(paired)} also requires "
-                          f"cutting its path (cheapest alone was {'+'.join(free[0])}, "
-                          f"J={free[1]['total']})")
-        return Decision(t, self.name, new, self._covers(new, nodes), best_cost, rationale,
-                        needs_approval=[a for a in new if self.cms[a].requires_approval],
-                        active_impacts=list(snapshot["active_impacts"]),
-                        pareto=pareto_front(evaluated))
+            rationale += (
+                f"; causal pairing: restoring {', '.join(paired)} also requires "
+                f"cutting its path (cheapest alone was {'+'.join(free[0])}, "
+                f"J={free[1]['total']})"
+            )
+        return Decision(
+            t,
+            self.name,
+            new,
+            self._covers(new, nodes),
+            best_cost,
+            rationale,
+            needs_approval=[a for a in new if self.cms[a].requires_approval],
+            active_impacts=list(snapshot["active_impacts"]),
+            pareto=pareto_front(evaluated),
+        )
 
 
 def pareto_front(evaluated):
     """Non-dominated subsets on (risk = residual + future, op, energy)."""
-    pts = [(list(s), round(c["residual"] + c["future"], 4), c["op"], c["energy"])
-           for s, c in evaluated]
+    pts = [
+        (list(s), round(c["residual"] + c["future"], 4), c["op"], c["energy"]) for s, c in evaluated
+    ]
     front = []
     for i, (s, r, o, e) in enumerate(pts):
-        dominated = any((r2 <= r and o2 <= o and e2 <= e) and (r2, o2, e2) != (r, o, e)
-                        for j, (_s2, r2, o2, e2) in enumerate(pts) if j != i)
+        dominated = any(
+            (r2 <= r and o2 <= o and e2 <= e) and (r2, o2, e2) != (r, o, e)
+            for j, (_s2, r2, o2, e2) in enumerate(pts)
+            if j != i
+        )
         if not dominated:
             front.append({"actions": s, "risk": r, "op": o, "energy": e})
     return sorted(front, key=lambda p: (p["risk"], p["op"]))
@@ -245,8 +311,7 @@ def pareto_front(evaluated):
 def make_policy(kind, countermeasures, tree, approval="auto", weights=None):
     """'rules' | 'solver'. With approval 'deny', countermeasures that need an
     operator's approval are never proposed."""
-    allowed = {c.id for c in countermeasures
-               if not (approval == "deny" and c.requires_approval)}
+    allowed = {c.id for c in countermeasures if not (approval == "deny" and c.requires_approval)}
     if kind == "rules":
         return RulesPolicy(countermeasures, allowed=allowed)
     if kind == "solver":

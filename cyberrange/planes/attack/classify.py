@@ -1,5 +1,4 @@
 import argparse
-import os
 import pickle
 import sys
 from pathlib import Path
@@ -13,12 +12,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    classification_report,
-    roc_auc_score,
-    roc_curve,
-    confusion_matrix,
-)
+from sklearn.metrics import classification_report, roc_auc_score, roc_curve, confusion_matrix
 import matplotlib
 
 matplotlib.use("Agg")
@@ -252,17 +246,10 @@ def train_classifier(
     print(f"[train] Device: {device}")
     print(f"[train] Packets: {len(train_df)}  (nanogrid={n_ng}, background={n_bg})")
 
-    X, y, scaler, _ = build_packet_windows(
-        train_df, window_size=window_size, fit_scaler=True
-    )
-    print(
-        f"[train] Packet windows: {len(X)}  "
-        f"(nanogrid={y.sum()}, background={(y == 0).sum()})"
-    )
+    X, y, scaler, _ = build_packet_windows(train_df, window_size=window_size, fit_scaler=True)
+    print(f"[train] Packet windows: {len(X)}  (nanogrid={y.sum()}, background={(y == 0).sum()})")
 
-    X_t, X_v, y_t, y_v = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=0
-    )
+    X_t, X_v, y_t, y_v = train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)
 
     n_pos = int(y_t.sum())
     n_neg = int((y_t == 0).sum())
@@ -276,8 +263,7 @@ def train_classifier(
         generator=shuffle_gen,
     )
     dl_val = DataLoader(
-        TensorDataset(torch.from_numpy(X_v), torch.from_numpy(y_v).float()),
-        batch_size=batch_size,
+        TensorDataset(torch.from_numpy(X_v), torch.from_numpy(y_v).float()), batch_size=batch_size
     )
 
     model = FlowClassifierCNN(n_features=N_FEATURES, window_size=window_size).to(device)
@@ -313,9 +299,7 @@ def train_classifier(
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
 
         epoch_bar.set_postfix(
-            train=f"{train_loss:.4f}",
-            val=f"{val_loss:.4f}",
-            best=f"{best_val_loss:.4f}",
+            train=f"{train_loss:.4f}", val=f"{val_loss:.4f}", best=f"{best_val_loss:.4f}"
         )
 
     if best_state:
@@ -351,9 +335,7 @@ def predict_packets(
     model.eval()
     all_probs = []
     with torch.no_grad():
-        for start in tqdm(
-            range(0, len(X), 256), desc="Scoring packets", unit="batch"
-        ):
+        for start in tqdm(range(0, len(X), 256), desc="Scoring packets", unit="batch"):
             xb = torch.from_numpy(X[start : start + 256]).to(device)
             probs = torch.sigmoid(model(xb)).cpu().numpy()
             all_probs.append(probs)
@@ -368,10 +350,7 @@ def predict_packets(
     return meta
 
 
-def evaluate(
-    pkt_preds: pd.DataFrame,
-    out_dir: Path,
-) -> None:
+def evaluate(pkt_preds: pd.DataFrame, out_dir: Path) -> None:
     """Print packet-level metrics and save the ROC curve and confusion matrix."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -427,8 +406,11 @@ def evaluate(
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
             ax.text(
-                j, i, f"{cm[i, j]:d}",
-                ha="center", va="center",
+                j,
+                i,
+                f"{cm[i, j]:d}",
+                ha="center",
+                va="center",
                 color="white" if cm[i, j] > cm.max() / 2 else "black",
             )
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
@@ -438,11 +420,7 @@ def evaluate(
     print(f"[evaluate] Saved: {out_dir / 'confusion_matrix.png'}")
 
 
-def save_artifacts(
-    model: FlowClassifierCNN,
-    scaler: StandardScaler,
-    out_dir: Path,
-) -> None:
+def save_artifacts(model: FlowClassifierCNN, scaler: StandardScaler, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -457,13 +435,10 @@ def save_artifacts(
     print(f"[save] Artifacts saved to {out_dir}/")
 
 
-def load_artifacts(
-    model_path: str, scaler_path: str
-) -> tuple["FlowClassifierCNN", StandardScaler]:
+def load_artifacts(model_path: str, scaler_path: str) -> tuple["FlowClassifierCNN", StandardScaler]:
     checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     model = FlowClassifierCNN(
-        n_features=checkpoint["n_features"],
-        window_size=checkpoint["window_size"],
+        n_features=checkpoint["n_features"], window_size=checkpoint["window_size"]
     )
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
@@ -507,27 +482,23 @@ def _detect_nanogrid_ip(pkt_preds: pd.DataFrame, threshold: float = DETECT_THRES
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Packet-level 1D-CNN — nanogrid traffic classifier"
-    )
-    p.add_argument(
-        "--mode",
-        required=True,
-        choices=["train", "evaluate", "infer"],
-    )
+    p = argparse.ArgumentParser(description="Packet-level 1D-CNN — nanogrid traffic classifier")
+    p.add_argument("--mode", required=True, choices=["train", "evaluate", "infer"])
     p.add_argument("--train-pcap", metavar="PCAP", default=None)
     p.add_argument("--test-pcap", metavar="PCAP", default=None)
     p.add_argument(
-        "--scmc-ip-pool", default="10.0.0.2,10.0.0.4,10.0.0.5",
+        "--scmc-ip-pool",
+        default="10.0.0.2,10.0.0.4,10.0.0.5",
         help="Comma-separated SCMC source-IP pool. A packet is labeled nanogrid "
-             "iff it is between this pool and --semp-ip-pool (either direction), "
-             "so MTD source-IP/port hopping and the control channel are covered "
-             "(default: 10.0.0.2,10.0.0.4,10.0.0.5).",
+        "iff it is between this pool and --semp-ip-pool (either direction), "
+        "so MTD source-IP/port hopping and the control channel are covered "
+        "(default: 10.0.0.2,10.0.0.4,10.0.0.5).",
     )
     p.add_argument(
-        "--semp-ip-pool", default="10.1.0.2,10.1.0.4,10.1.0.5",
+        "--semp-ip-pool",
+        default="10.1.0.2,10.1.0.4,10.1.0.5",
         help="Comma-separated SEMP broker-IP pool — the other end of the nanogrid "
-             "connection (default: 10.1.0.2,10.1.0.4,10.1.0.5).",
+        "connection (default: 10.1.0.2,10.1.0.4,10.1.0.5).",
     )
     p.add_argument("--model", default="output/model.pt")
     p.add_argument("--scaler", default="output/scaler.pkl")
@@ -537,8 +508,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--threshold", type=float, default=0.5)
-    p.add_argument("--seed", type=int, default=None,
-                   help="Seed for CNN weight init and batch shuffling (omit = unseeded)")
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for CNN weight init and batch shuffling (omit = unseeded)",
+    )
     p.add_argument(
         "--load-model",
         action="store_true",
@@ -559,11 +534,7 @@ def main() -> None:
         if not args.train_pcap:
             sys.exit("[ERROR] --train-pcap required for train mode")
         print(f"[main] Extracting features from {args.train_pcap}")
-        train_df = extract_features(
-            args.train_pcap,
-            scmc_ips=scmc_ips,
-            semp_ips=semp_ips,
-        )
+        train_df = extract_features(args.train_pcap, scmc_ips=scmc_ips, semp_ips=semp_ips)
         print(
             f"[main] Train packets: {len(train_df)}  "
             f"(nanogrid={int((train_df['is_nanogrid'] == 1).sum())}, "
@@ -596,11 +567,7 @@ def main() -> None:
             if not args.train_pcap:
                 sys.exit("[ERROR] --train-pcap required for evaluate mode (or use --load-model)")
             print(f"[main] Extracting train features from {args.train_pcap}")
-            train_df = extract_features(
-                args.train_pcap,
-                scmc_ips=scmc_ips,
-                semp_ips=semp_ips,
-            )
+            train_df = extract_features(args.train_pcap, scmc_ips=scmc_ips, semp_ips=semp_ips)
             print(
                 f"[main] Train packets: {len(train_df)}  "
                 f"(nanogrid={int((train_df['is_nanogrid'] == 1).sum())}, "
@@ -619,11 +586,7 @@ def main() -> None:
             window_size = args.window_size
 
         print(f"[main] Extracting test features from {args.test_pcap}")
-        test_df = extract_features(
-            args.test_pcap,
-            scmc_ips=scmc_ips,
-            semp_ips=semp_ips,
-        )
+        test_df = extract_features(args.test_pcap, scmc_ips=scmc_ips, semp_ips=semp_ips)
         print(
             f"[main] Test packets: {len(test_df)}  "
             f"(nanogrid={int((test_df['is_nanogrid'] == 1).sum())}, "
@@ -631,10 +594,7 @@ def main() -> None:
         )
 
         pkt_preds = predict_packets(
-            test_df, model, scaler,
-            window_size=window_size,
-            threshold=args.threshold,
-            device=device,
+            test_df, model, scaler, window_size=window_size, threshold=args.threshold, device=device
         )
         evaluate(pkt_preds, results_dir)
 
@@ -652,10 +612,7 @@ def main() -> None:
         df = extract_features(args.test_pcap)
 
         pkt_preds = predict_packets(
-            df, model, scaler,
-            window_size=args.window_size,
-            threshold=args.threshold,
-            device=device,
+            df, model, scaler, window_size=args.window_size, threshold=args.threshold, device=device
         )
         detected_ip = _detect_nanogrid_ip(pkt_preds)
         if detected_ip:

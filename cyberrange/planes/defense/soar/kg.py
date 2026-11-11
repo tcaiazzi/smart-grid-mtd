@@ -36,8 +36,8 @@ BOUNDARY_ROLE = "boundary"
 
 # ── Construction ─────────────────────────────────────────────────────────────
 
-def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall",
-             plant_service=None):
+
+def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall", plant_service=None):
     """Knowledge graph of a Kathará Lab model.
 
     lab            Kathará Lab (not deployed); each Machine may carry an
@@ -55,8 +55,9 @@ def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall",
 
     for name, mach in sorted(lab.machines.items()):
         hid = f"host:{name}"
-        g.add_node(hid, type="host", name=name, image=mach.get_image(),
-                   role=roles.get(name, "unknown"))
+        g.add_node(
+            hid, type="host", name=name, image=mach.get_image(), role=roles.get(name, "unknown")
+        )
         for idx, iface in sorted(mach.interfaces.items()):
             zone = iface.link.name
             zid = f"zone:{zone}"
@@ -66,15 +67,23 @@ def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall",
         for ifname, cidr in sorted((mach.meta.get("addresses") or {}).items()):
             itf = ipaddress.ip_interface(cidr)
             iid = f"ip:{itf.ip}"
-            g.add_node(iid, type="ip", addr=str(itf.ip), prefix=itf.network.prefixlen,
-                       network=str(itf.network), iface=ifname, host=name)
+            g.add_node(
+                iid,
+                type="ip",
+                addr=str(itf.ip),
+                prefix=itf.network.prefixlen,
+                network=str(itf.network),
+                iface=ifname,
+                host=name,
+            )
             _edge(g, hid, iid, "has_ip")
             zone = mach.interfaces[int(ifname[3:])].link.name
             _edge(g, iid, f"zone:{zone}", "in_zone")
         for sname, proto, port, app in services.get(name, []):
             sid = f"svc:{name}/{sname}"
-            g.add_node(sid, type="service", name=sname, host=name, proto=proto,
-                       port=int(port), app=app)
+            g.add_node(
+                sid, type="service", name=sname, host=name, proto=proto, port=int(port), app=app
+            )
             _edge(g, hid, sid, "runs")
 
     _add_registers(g, plant_service)
@@ -89,12 +98,28 @@ def _edge(g, u, v, rel, **attrs):
 
 def _add_registers(g, plant_service):
     for addr, (name, scale, lo, hi) in reg.ACTUATOR_REGISTERS.items():
-        g.add_node(f"reg:hr:{addr}", type="register", kind="holding", addr=addr,
-                   name=name, scale=scale, lo=lo, hi=hi,
-                   sensitive=addr in reg.SENSITIVE_ACTUATORS)
+        g.add_node(
+            f"reg:hr:{addr}",
+            type="register",
+            kind="holding",
+            addr=addr,
+            name=name,
+            scale=scale,
+            lo=lo,
+            hi=hi,
+            sensitive=addr in reg.SENSITIVE_ACTUATORS,
+        )
     for addr, (name, scale, unit) in reg.SENSOR_REGISTERS.items():
-        g.add_node(f"reg:ir:{addr}", type="register", kind="input", addr=addr,
-                   name=name, scale=scale, unit=unit, sensitive=False)
+        g.add_node(
+            f"reg:ir:{addr}",
+            type="register",
+            kind="input",
+            addr=addr,
+            name=name,
+            scale=scale,
+            unit=unit,
+            sensitive=False,
+        )
     if plant_service:
         sid = f"svc:{plant_service[0]}/{plant_service[1]}"
         if sid in g:
@@ -130,8 +155,15 @@ def parse_forward_rules(rules):
             return tok[tok.index(flag) + 1] if flag in tok else None
 
         dport = opt("--dport")
-        parsed.append({"action": opt("-j"), "src": opt("-s"), "dst": opt("-d"),
-                       "proto": opt("-p"), "dport": int(dport) if dport else None})
+        parsed.append(
+            {
+                "action": opt("-j"),
+                "src": opt("-s"),
+                "dst": opt("-d"),
+                "proto": opt("-p"),
+                "dport": int(dport) if dport else None,
+            }
+        )
     return default, parsed
 
 
@@ -157,6 +189,7 @@ def _add_rules(g, firewall, fw_rules):
 
 
 # ── Queries ──────────────────────────────────────────────────────────────────
+
 
 def _out(g, node, rel):
     return [v for _, v, k in g.out_edges(node, keys=True) if k == rel]
@@ -208,8 +241,13 @@ def flow_rules(g, firewall="firewall"):
 def _rule_matches(r, src_ip, dst_ip, port, proto):
     def ip_ok(spec, ip):
         return spec is None or ipaddress.ip_address(ip) in ipaddress.ip_network(spec, strict=False)
-    return (ip_ok(r["src"], src_ip) and ip_ok(r["dst"], dst_ip)
-            and r["dport"] in (None, port) and r["proto"] in (None, proto))
+
+    return (
+        ip_ok(r["src"], src_ip)
+        and ip_ok(r["dst"], dst_ip)
+        and r["dport"] in (None, port)
+        and r["proto"] in (None, proto)
+    )
 
 
 def reachable(g, src, dst, port, proto="tcp"):
@@ -245,6 +283,7 @@ def reachable(g, src, dst, port, proto="tcp"):
 
 
 # ── Serialization ────────────────────────────────────────────────────────────
+
 
 def to_json(g):
     return nx.node_link_data(g, edges="links")

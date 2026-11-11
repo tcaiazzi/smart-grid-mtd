@@ -19,12 +19,12 @@ IMPACT_MODE = {
 # How likely the sensors flag the step (0..1). The stealthy profile prefers the
 # quietest reachable impact; it informs no detection logic, only planning.
 DETECTABILITY = {
-    "it_access": 0.6,   # injection pattern in the web log
-    "it_exec": 0.4,     # a child process of the web server
-    "pivot": 0.3,       # an unexpected Modbus client connection
-    "setpoint_oor": 0.9,   # out-of-range command, loud
-    "breaker_open": 0.9,   # remote breaker write, policy violation
-    "mode_hijack": 0.2,    # in-range writes from the HMI, quiet
+    "it_access": 0.6,  # injection pattern in the web log
+    "it_exec": 0.4,  # a child process of the web server
+    "pivot": 0.3,  # an unexpected Modbus client connection
+    "setpoint_oor": 0.9,  # out-of-range command, loud
+    "breaker_open": 0.9,  # remote breaker write, policy violation
+    "mode_hijack": 0.2,  # in-range writes from the HMI, quiet
 }
 
 STAGE_INDEX = {"it_access": 0, "it_exec": 1, "pivot": 2, "impact": 3}
@@ -43,10 +43,12 @@ def is_step(node):
 def step_command(node, ctx):
     """Shell command to run ONE step on the attacker container. ``ctx`` carries
     target_url, engine_ip, engine_port, ot_write_path, interval."""
-    base = (f"python3 {STEP_FILE} --target-url {ctx['target_url']} "
-            f"--engine-ip {ctx['engine_ip']} --engine-port {ctx['engine_port']} "
-            f"--ot-write-path {ctx.get('ot_write_path', '/ot_write.py')} "
-            f"--interval {ctx.get('interval', 0.5)}")
+    base = (
+        f"python3 {STEP_FILE} --target-url {ctx['target_url']} "
+        f"--engine-ip {ctx['engine_ip']} --engine-port {ctx['engine_port']} "
+        f"--ot-write-path {ctx.get('ot_write_path', '/ot_write.py')} "
+        f"--interval {ctx.get('interval', 0.5)}"
+    )
     if node in IMPACT_MODE:
         return f"{base} --step impact --attack {IMPACT_MODE[node]}"
     if node in PREREQ_ORDER:
@@ -58,6 +60,7 @@ def parse_outcome(node, text):
     """Read the JSON ground-truth lines exploit_client prints for the step.
     Returns {ok, writes, phases}."""
     import json
+
     phases, writes, ok = [], 0, False
     for line in (text or "").splitlines():
         line = line.strip()
@@ -76,5 +79,5 @@ def parse_outcome(node, text):
         if ph == stage_of(node):
             ok = bool(ev.get("ok"))
     if node in IMPACT_MODE and not any(p.get("phase") == "impact" for p in phases):
-        ok = writes > 0          # older output without an explicit impact line
+        ok = writes > 0  # older output without an explicit impact line
     return {"ok": ok, "writes": writes, "phases": phases}

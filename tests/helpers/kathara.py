@@ -8,7 +8,8 @@ FakeManager records every call (deploy/undeploy, exec) and answers
   * ``responses``                   -> {substring: (stdout, stderr, rc)} first match
   * anything else                   -> (b"", b"", 0)
 
-Background execs (stream=True) return a FakeExecStream (next() only, like Kathará's). ``fake_downloads``
+Background execs (stream=True) return a FakeExecStream (next() only, like
+Kathará's). ``fake_downloads``
 patches the core's container download so artifacts come from ``guest_files``
 ({(node, guest_path): bytes}) and land in the run directory like real ones.
 """
@@ -34,14 +35,13 @@ class FakeExecStream:
 
 
 class FakeManager:
-    def __init__(self, frames=None, files=None, responses=None, fail_exec=False,
-                 fail_deploy=False):
+    def __init__(self, frames=None, files=None, responses=None, fail_exec=False, fail_deploy=False):
         self.frames = list(frames or [])
         self.files = {k: list(v) for k, v in (files or {}).items()}
         self.responses = dict(responses or {})
         self.fail_exec = fail_exec
         self.fail_deploy = fail_deploy
-        self.calls = []          # (machine name, command, wait, stream)
+        self.calls = []  # (machine name, command, wait, stream)
         self.deployed = []
         self.undeployed = []
 
@@ -66,7 +66,7 @@ class FakeManager:
         if text.startswith("tail -n +"):
             start = int(text.split("+")[1].split()[0])
             path = text.split()[-1]
-            lines = self.files.get(path, [])[start - 1:]
+            lines = self.files.get(path, [])[start - 1 :]
             return "".join(lines).encode(), b"", 0
         return b"", b"", 0
 
@@ -78,7 +78,7 @@ class FakeManager:
     def undeploy_lab(self, lab=None, **_kw):
         self.undeployed.append(getattr(lab, "name", None))
 
-    # helpers for assertions
+    # Helpers for assertions.
     def commands(self, machine=None):
         return [c for m, c, _w, _s in self.calls if machine is None or m == machine]
 

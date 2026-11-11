@@ -28,7 +28,8 @@ offline on a downloaded telemetry.jsonl (training, KPIs) and live on the SEMP
 The trained detector — a small MLP or a gradient-boosted tree ensemble (sklearn,
 train_delivery_detector.py on the host) — is exported to a flat .npz that
 NumpyDetector / NumpyTreeDetector replay with numpy only (load_detector picks the
-right one): the semp image has numpy but no sklearn. Same approach as rl_policy.py, and like it this file is numpy-only
+right one): the semp image has numpy but no sklearn. Same approach as rl_policy.py, and like it this
+file is numpy-only
 and copied flat into the semp container (`import delivery_detector`).
 """
 
@@ -44,61 +45,71 @@ FEATURE_SCHEMA = 2
 
 BASE_FEATURES = [
     # ── v1 ──
-    "silence",            # time since the last data message, in publish intervals
-    "rate_1s",            # messages in the last window × expected interval (≈1 normal)
-    "rate_5s",            # same, over the last 5 windows
-    "unacked",            # actions sent 1–10 s ago this SCMC has not answered at all
-    "ctrl_quiet",         # log1p(seconds since this SCMC's last control message)
-    "ctrl_connected",     # control channel up (0/1)
-    "since_disconnect",   # log1p(seconds since its last disconnect), capped
-    "reconnecting",       # broker/source hop in flight or closed < 3 s ago (0/1)
-    "ack_ms",             # log1p(max ACK latency over the last 10 s, ms)
-    "gaps_30s",           # data gaps over the last 30 s
-    "expected_s",         # current publish interval (s)
+    "silence",  # time since the last data message, in publish intervals
+    "rate_1s",  # messages in the last window × expected interval (≈1 normal)
+    "rate_5s",  # same, over the last 5 windows
+    "unacked",  # actions sent 1–10 s ago this SCMC has not answered at all
+    "ctrl_quiet",  # log1p(seconds since this SCMC's last control message)
+    "ctrl_connected",  # control channel up (0/1)
+    "since_disconnect",  # log1p(seconds since its last disconnect), capped
+    "reconnecting",  # broker/source hop in flight or closed < 3 s ago (0/1)
+    "ack_ms",  # log1p(max ACK latency over the last 10 s, ms)
+    "gaps_30s",  # data gaps over the last 30 s
+    "expected_s",  # current publish interval (s)
     # ── v2 ──
-    "pending_age",        # age of the oldest still-open action awaiting it, no reply at all (s)
-    "pending_n",          # how many such actions
-    "since_reconnect",    # log1p(seconds since its last confirmed hop/source hop: DONE)
-    "unconfirmed_age",    # age of the oldest open hop/source hop it has not DONE (s)
+    "pending_age",  # age of the oldest still-open action awaiting it, no reply at all (s)
+    "pending_n",  # how many such actions
+    "since_reconnect",  # log1p(seconds since its last confirmed hop/source hop: DONE)
+    "unconfirmed_age",  # age of the oldest open hop/source hop it has not DONE (s)
     "silence_vs_normal",  # silence / max(largest gap of the last 60 s, expected interval)
     "ctrl_alive_silent",  # silence while control messages still arrive (last 3 s)
 ]
-HISTORY = ["silence", "rate_1s", "pending_age"]   # also seen 2 and 4 windows ago
+HISTORY = ["silence", "rate_1s", "pending_age"]  # also seen 2 and 4 windows ago
 HISTORY_LAGS = (2, 4)
 FEATURES = BASE_FEATURES + [f"{f}_lag{k}" for k in HISTORY_LAGS for f in HISTORY]
 
-_V2 = ["silence", "rate_1s", "rate_5s", "ctrl_quiet", "ctrl_connected", "since_disconnect",
-       "ack_ms", "gaps_30s", "expected_s", "pending_age", "pending_n", "since_reconnect",
-       "unconfirmed_age", "silence_vs_normal", "ctrl_alive_silent"]
-FEATURE_SETS = {
-    "v1": BASE_FEATURES[:11],
-    "v2": _V2,
-    "v2h": _V2 + FEATURES[len(BASE_FEATURES):],
-}
+_V2 = [
+    "silence",
+    "rate_1s",
+    "rate_5s",
+    "ctrl_quiet",
+    "ctrl_connected",
+    "since_disconnect",
+    "ack_ms",
+    "gaps_30s",
+    "expected_s",
+    "pending_age",
+    "pending_n",
+    "since_reconnect",
+    "unconfirmed_age",
+    "silence_vs_normal",
+    "ctrl_alive_silent",
+]
+FEATURE_SETS = {"v1": BASE_FEATURES[:11], "v2": _V2, "v2h": _V2 + FEATURES[len(BASE_FEATURES) :]}
 _IDX = {f: i for i, f in enumerate(FEATURES)}
 
-ACK_GRACE_S = 1.0        # an ACK normally takes milliseconds
-RECENT_S = 10.0          # window for unacked actions and ACK latency
+ACK_GRACE_S = 1.0  # an ACK normally takes milliseconds
+RECENT_S = 10.0  # window for unacked actions and ACK latency
 RECONNECT_GRACE_S = 3.0  # a hop's reconnect can still explain a gap this long after
-PENDING_CAP_S = 30.0     # the coordinator's watchdog closes actions well before this
-NORMAL_GAP_S = 60.0      # window for the "normal" gap size
+PENDING_CAP_S = 30.0  # the coordinator's watchdog closes actions well before this
+NORMAL_GAP_S = 60.0  # window for the "normal" gap size
 CTRL_ALIVE_S = 3.0
-NEVER_S = 600.0          # cap for "time since" features
-RULE_K = 3.0             # rule baseline: silent for more than RULE_K intervals
+NEVER_S = 600.0  # cap for "time since" features
+RULE_K = 3.0  # rule baseline: silent for more than RULE_K intervals
 
 
 class _Scmc:
     def __init__(self, t: float):
         self.first_t = t
-        self.last_arrival = None          # time of the last data message
-        self.arrivals = deque()           # (window end t, n messages)
-        self.arrival_times = deque()      # distinct last-arrival times (for gap sizes)
+        self.last_arrival = None  # time of the last data message
+        self.arrivals = deque()  # (window end t, n messages)
+        self.arrival_times = deque()  # distinct last-arrival times (for gap sizes)
         self.last_ctrl = t
         self.connected = True
         self.last_disconnect = None
-        self.last_reconnect = None        # last DONE of a hop / source hop
-        self.ack_lat = deque()            # (t, latency_s)
-        self.gaps = deque()               # gap end times
+        self.last_reconnect = None  # last DONE of a hop / source hop
+        self.ack_lat = deque()  # (t, latency_s)
+        self.gaps = deque()  # gap end times
 
 
 class Featurizer:
@@ -108,7 +119,7 @@ class Featurizer:
     def __init__(self):
         self.expected = 1.0
         self.scmc: dict = {}
-        self.actions: dict = {}           # seq → {t, action, awaited, answered, done, end}
+        self.actions: dict = {}  # seq → {t, action, awaited, answered, done, end}
 
     def _get(self, scmc_id: str, t: float) -> _Scmc:
         if scmc_id not in self.scmc:
@@ -136,9 +147,14 @@ class Featurizer:
         elif kind == "data_gap":
             self._get(ev["scmc_id"], t).gaps.append(t)
         elif kind == "action_scheduled":
-            self.actions[ev["seq"]] = {"t": t, "action": ev.get("action"),
-                                       "awaited": set(ev.get("awaited") or []),
-                                       "answered": set(), "done": set(), "end": None}
+            self.actions[ev["seq"]] = {
+                "t": t,
+                "action": ev.get("action"),
+                "awaited": set(ev.get("awaited") or []),
+                "answered": set(),
+                "done": set(),
+                "end": None,
+            }
             self._prune(t)
         elif kind == "reply":
             s = self._get(ev["scmc_id"], t)
@@ -178,16 +194,27 @@ class Featurizer:
         n1 = sum(n for t, n in s.arrivals if t > now - 1.5)
         n5 = sum(n for t, n in s.arrivals if t > now - 5.5)
         mine = [a for a in self.actions.values() if scmc_id in a["awaited"] and a["t"] <= now]
-        unacked = sum(1 for a in mine if now - RECENT_S <= a["t"] <= now - ACK_GRACE_S
-                      and scmc_id not in a["answered"])
-        reconnecting = any(a["action"] in ("hop", "src") and
-                           (a["end"] is None or now - a["end"] < RECONNECT_GRACE_S)
-                           and a["t"] <= now
-                           for a in self.actions.values())
-        silent_open = [now - a["t"] for a in mine if a["end"] is None
-                       and scmc_id not in a["answered"] and now - a["t"] >= ACK_GRACE_S]
-        unconfirmed = [now - a["t"] for a in mine if a["end"] is None
-                       and a["action"] in ("hop", "src") and scmc_id not in a["done"]]
+        unacked = sum(
+            1
+            for a in mine
+            if now - RECENT_S <= a["t"] <= now - ACK_GRACE_S and scmc_id not in a["answered"]
+        )
+        reconnecting = any(
+            a["action"] in ("hop", "src")
+            and (a["end"] is None or now - a["end"] < RECONNECT_GRACE_S)
+            and a["t"] <= now
+            for a in self.actions.values()
+        )
+        silent_open = [
+            now - a["t"]
+            for a in mine
+            if a["end"] is None and scmc_id not in a["answered"] and now - a["t"] >= ACK_GRACE_S
+        ]
+        unconfirmed = [
+            now - a["t"]
+            for a in mine
+            if a["end"] is None and a["action"] in ("hop", "src") and scmc_id not in a["done"]
+        ]
         while s.ack_lat and s.ack_lat[0][0] < now - RECENT_S:
             s.ack_lat.popleft()
         while s.gaps and s.gaps[0] < now - 30:
@@ -199,25 +226,28 @@ class Featurizer:
         normal_gap = max((b - a for a, b in zip(times, times[1:])), default=exp)
         silence = min(60.0, silence_s / exp)
         ctrl_quiet_s = min(NEVER_S, max(0.0, now - s.last_ctrl))
-        return np.array([
-            silence,
-            min(5.0, n1 * exp),
-            min(5.0, n5 * exp / 5.0),
-            min(10.0, unacked),
-            np.log1p(ctrl_quiet_s),
-            1.0 if s.connected else 0.0,
-            np.log1p(max(0.0, since_disc)),
-            1.0 if reconnecting else 0.0,
-            np.log1p(ack * 1000.0),
-            min(10.0, sum(1 for g in s.gaps if g <= now)),
-            exp,
-            min(PENDING_CAP_S, max(silent_open, default=0.0)),
-            min(10.0, len(silent_open)),
-            np.log1p(max(0.0, since_rec)),
-            min(PENDING_CAP_S, max(unconfirmed, default=0.0)),
-            min(60.0, silence_s / max(normal_gap, exp)),
-            silence if ctrl_quiet_s < CTRL_ALIVE_S else 0.0,
-        ], dtype=np.float32)
+        return np.array(
+            [
+                silence,
+                min(5.0, n1 * exp),
+                min(5.0, n5 * exp / 5.0),
+                min(10.0, unacked),
+                np.log1p(ctrl_quiet_s),
+                1.0 if s.connected else 0.0,
+                np.log1p(max(0.0, since_disc)),
+                1.0 if reconnecting else 0.0,
+                np.log1p(ack * 1000.0),
+                min(10.0, sum(1 for g in s.gaps if g <= now)),
+                exp,
+                min(PENDING_CAP_S, max(silent_open, default=0.0)),
+                min(10.0, len(silent_open)),
+                np.log1p(max(0.0, since_rec)),
+                min(PENDING_CAP_S, max(unconfirmed, default=0.0)),
+                min(60.0, silence_s / max(normal_gap, exp)),
+                silence if ctrl_quiet_s < CTRL_ALIVE_S else 0.0,
+            ],
+            dtype=np.float32,
+        )
 
 
 class History:
@@ -259,8 +289,9 @@ def rule_decision(x: np.ndarray) -> bool:
     """Threshold baseline on a full FEATURES vector: silent for more than RULE_K
     publish intervals with no confirmed hop/source hop in the last few seconds
     (which would explain the gap)."""
-    return bool(x[_IDX["silence"]] > RULE_K
-                and x[_IDX["since_reconnect"]] > np.log1p(RECONNECT_GRACE_S))
+    return bool(
+        x[_IDX["silence"]] > RULE_K and x[_IDX["since_reconnect"]] > np.log1p(RECONNECT_GRACE_S)
+    )
 
 
 def smooth(hits, k: int = 2, n: int = 3) -> np.ndarray:
@@ -269,7 +300,7 @@ def smooth(hits, k: int = 2, n: int = 3) -> np.ndarray:
     hits = np.asarray(hits, dtype=bool)
     if n <= 1:
         return hits
-    c = np.convolve(hits.astype(int), np.ones(n, dtype=int))[:len(hits)]
+    c = np.convolve(hits.astype(int), np.ones(n, dtype=int))[: len(hits)]
     return c >= k
 
 
@@ -278,8 +309,9 @@ class NumpyDetector:
     output, as sklearn's MLPClassifier) with numpy only, on the model's own subset
     of FEATURES."""
 
-    def __init__(self, mean, std, weights, biases, threshold: float, features=None,
-                 smoothing=(1, 1)):
+    def __init__(
+        self, mean, std, weights, biases, threshold: float, features=None, smoothing=(1, 1)
+    ):
         self.mean, self.std = np.asarray(mean), np.asarray(std)
         self.weights, self.biases = weights, biases
         self.threshold = float(threshold)
@@ -292,18 +324,32 @@ class NumpyDetector:
         z = np.load(path)
         schema = int(z["feature_schema"]) if "feature_schema" in z else 1
         if schema != FEATURE_SCHEMA:
-            raise ValueError(f"{path}: detector exported for feature schema {schema}, "
-                             f"this delivery_detector computes schema {FEATURE_SCHEMA} — retrain it")
+            raise ValueError(
+                f"{path}: detector exported for feature schema {schema}, "
+                f"this delivery_detector computes schema {FEATURE_SCHEMA} — retrain it"
+            )
         n = int(z["n_layers"])
-        return cls(z["mean"], z["std"], [z[f"W{i}"] for i in range(n)],
-                   [z[f"b{i}"] for i in range(n)], float(z["threshold"]),
-                   [str(f) for f in z["features"]], tuple(z["smoothing"]))
+        return cls(
+            z["mean"],
+            z["std"],
+            [z[f"W{i}"] for i in range(n)],
+            [z[f"b{i}"] for i in range(n)],
+            float(z["threshold"]),
+            [str(f) for f in z["features"]],
+            tuple(z["smoothing"]),
+        )
 
     def save(self, path: str) -> None:
-        arrays = {"kind": "mlp", "mean": self.mean, "std": self.std,
-                  "threshold": self.threshold,
-                  "n_layers": len(self.weights), "features": np.array(self.features),
-                  "feature_schema": FEATURE_SCHEMA, "smoothing": np.array(self.smoothing)}
+        arrays = {
+            "kind": "mlp",
+            "mean": self.mean,
+            "std": self.std,
+            "threshold": self.threshold,
+            "n_layers": len(self.weights),
+            "features": np.array(self.features),
+            "feature_schema": FEATURE_SCHEMA,
+            "smoothing": np.array(self.smoothing),
+        }
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
             arrays[f"W{i}"], arrays[f"b{i}"] = w, b
         np.savez(path, **arrays)
@@ -337,8 +383,22 @@ class NumpyTreeDetector(NumpyDetector):
     holds each tree's first node.
     """
 
-    def __init__(self, mean, std, baseline: float, roots, feature, thr, left, right,
-                 leaf, value, threshold: float, features=None, smoothing=(1, 1)):
+    def __init__(
+        self,
+        mean,
+        std,
+        baseline: float,
+        roots,
+        feature,
+        thr,
+        left,
+        right,
+        leaf,
+        value,
+        threshold: float,
+        features=None,
+        smoothing=(1, 1),
+    ):
         super().__init__(mean, std, [], [], threshold, features, smoothing)
         self.baseline = float(baseline)
         self.roots, self.feature, self.thr = map(np.asarray, (roots, feature, thr))
@@ -347,16 +407,41 @@ class NumpyTreeDetector(NumpyDetector):
 
     @classmethod
     def from_npz(cls, z) -> "NumpyTreeDetector":
-        return cls(z["mean"], z["std"], float(z["baseline"]), z["roots"], z["feature"],
-                   z["thr"], z["left"], z["right"], z["leaf"], z["value"],
-                   float(z["threshold"]), [str(f) for f in z["features"]], tuple(z["smoothing"]))
+        return cls(
+            z["mean"],
+            z["std"],
+            float(z["baseline"]),
+            z["roots"],
+            z["feature"],
+            z["thr"],
+            z["left"],
+            z["right"],
+            z["leaf"],
+            z["value"],
+            float(z["threshold"]),
+            [str(f) for f in z["features"]],
+            tuple(z["smoothing"]),
+        )
 
     def save(self, path: str) -> None:
-        np.savez(path, kind="hgb", mean=self.mean, std=self.std, baseline=self.baseline,
-                 roots=self.roots, feature=self.feature, thr=self.thr, left=self.left,
-                 right=self.right, leaf=self.leaf, value=self.value,
-                 threshold=self.threshold, features=np.array(self.features),
-                 feature_schema=FEATURE_SCHEMA, smoothing=np.array(self.smoothing))
+        np.savez(
+            path,
+            kind="hgb",
+            mean=self.mean,
+            std=self.std,
+            baseline=self.baseline,
+            roots=self.roots,
+            feature=self.feature,
+            thr=self.thr,
+            left=self.left,
+            right=self.right,
+            leaf=self.leaf,
+            value=self.value,
+            threshold=self.threshold,
+            features=np.array(self.features),
+            feature_schema=FEATURE_SCHEMA,
+            smoothing=np.array(self.smoothing),
+        )
 
     def proba(self, X: np.ndarray) -> np.ndarray:
         h = (np.atleast_2d(X) - self.mean) / self.std
@@ -380,8 +465,10 @@ def load_detector(path: str) -> NumpyDetector:
     z = np.load(path)
     schema = int(z["feature_schema"]) if "feature_schema" in z else 1
     if schema != FEATURE_SCHEMA:
-        raise ValueError(f"{path}: detector exported for feature schema {schema}, "
-                         f"this delivery_detector computes schema {FEATURE_SCHEMA} — retrain it")
+        raise ValueError(
+            f"{path}: detector exported for feature schema {schema}, "
+            f"this delivery_detector computes schema {FEATURE_SCHEMA} — retrain it"
+        )
     if "kind" in z and str(z["kind"]) == "hgb":
         return NumpyTreeDetector.from_npz(z)
     return NumpyDetector.load(path)
@@ -419,8 +506,9 @@ class LiveDetector:
 
     def step(self, now: float) -> None:
         with self._lock:
-            rows = [(sid, self.hist.full(sid, self.fz.features(sid, now)))
-                    for sid in self.fz.scmc_ids()]
+            rows = [
+                (sid, self.hist.full(sid, self.fz.features(sid, now))) for sid in self.fz.scmc_ids()
+            ]
         k, n = self.model.smoothing
         for sid, x in rows:
             xm = self.model.select(x)
@@ -435,15 +523,25 @@ class LiveDetector:
                 alert = True
             elif alert and self._below[sid] >= self.CLEAR:
                 alert = False
-            self.telemetry.emit("detection", scmc_id=sid, p=round(p, 4), hit=bool(hit),
-                                rule=rule_decision(x), alert=alert,
-                                threshold=self.model.threshold,
-                                top=self.model.top_features(xm),
-                                x=[round(float(v), 3) for v in x])
+            self.telemetry.emit(
+                "detection",
+                scmc_id=sid,
+                p=round(p, 4),
+                hit=bool(hit),
+                rule=rule_decision(x),
+                alert=alert,
+                threshold=self.model.threshold,
+                top=self.model.top_features(xm),
+                x=[round(float(v), 3) for v in x],
+            )
             if alert != self._alert.get(sid, False):
                 self._alert[sid] = alert
-                self.telemetry.emit("detector_alert", scmc_id=sid,
-                                    state="raised" if alert else "cleared", p=round(p, 4))
+                self.telemetry.emit(
+                    "detector_alert",
+                    scmc_id=sid,
+                    state="raised" if alert else "cleared",
+                    p=round(p, 4),
+                )
 
     def _loop(self) -> None:
         while True:
@@ -451,10 +549,13 @@ class LiveDetector:
             self.step(time.time())
 
     def start(self) -> None:
-        for ev in self.telemetry.events():        # catch up on what happened so far
+        for ev in self.telemetry.events():  # catch up on what happened so far
             self._on_event(ev)
         self.telemetry.add_listener(self._on_event)
         threading.Thread(target=self._loop, daemon=True).start()
-        print(f"[detector] delivery attack detector running "
-              f"({len(self.model.features)} features, threshold {self.model.threshold:.2f}, "
-              f"smoothing {self.model.smoothing[0]}-of-{self.model.smoothing[1]})", flush=True)
+        print(
+            f"[detector] delivery attack detector running "
+            f"({len(self.model.features)} features, threshold {self.model.threshold:.2f}, "
+            f"smoothing {self.model.smoothing[0]}-of-{self.model.smoothing[1]})",
+            flush=True,
+        )

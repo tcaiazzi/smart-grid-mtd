@@ -19,6 +19,7 @@ import argparse
 import os
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,20 +27,21 @@ import numpy as np
 plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
 plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
-import pandas as pd
+import pandas as pd  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
-from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD
+from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
-LABEL_MTD_MODEL   = "MTD (MTD model)"
-LABEL_BASE_MODEL  = "MTD (baseline model)"
-LABEL_BASELINE    = "Baseline (no MTD)"
+LABEL_MTD_MODEL = "MTD (MTD model)"
+LABEL_BASE_MODEL = "MTD (baseline model)"
+LABEL_BASELINE = "Baseline (no MTD)"
 
-COLOR_MTD    = "#2980b9"
+COLOR_MTD = "#2980b9"
 COLOR_XMODEL = "#e67e22"
-COLOR_BASE   = "#7f8c8d"
+COLOR_BASE = "#7f8c8d"
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
+
 
 def load_sweep(manifest_path: str, plots_root: str) -> pd.DataFrame:
     """Merge manifest rows with per-config summary CSVs into one DataFrame."""
@@ -52,22 +54,24 @@ def load_sweep(manifest_path: str, plots_root: str) -> pd.DataFrame:
             print(f"[warn] missing {path} — skipping '{slug}'")
             continue
         for _, s in pd.read_csv(path).iterrows():
-            rows.append({
-                **dict(m),
-                "scenario":        s["scenario"],
-                "detection_score": s.get("scmc_nanogrid_frac"),
-                "blocked":         s.get("scmc_blocked"),
-                "publishes":       s.get("publishes"),
-                "sent_msgs":       s.get("sent_msgs"),
-                "delivery_ratio":  s.get("delivery_ratio"),
-            })
+            rows.append(
+                {
+                    **dict(m),
+                    "scenario": s["scenario"],
+                    "detection_score": s.get("scmc_nanogrid_frac"),
+                    "blocked": s.get("scmc_blocked"),
+                    "publishes": s.get("publishes"),
+                    "sent_msgs": s.get("sent_msgs"),
+                    "delivery_ratio": s.get("delivery_ratio"),
+                }
+            )
     return pd.DataFrame(rows)
 
 
 def _pick(df: pd.DataFrame, col: str, scenario: str, **filters) -> float:
     mask = df["scenario"] == scenario
     for k, v in filters.items():
-        mask &= (df[k] == v)
+        mask &= df[k] == v
     vals = df[mask][col].dropna()
     return float(vals.iloc[0]) if not vals.empty else float("nan")
 
@@ -82,9 +86,16 @@ def delivery(df: pd.DataFrame, scenario: str, **filters) -> float:
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
+
 def _threshold(ax):
-    ax.axhline(DETECT_THRESHOLD, ls=":", color="gray", lw=1.5, zorder=2,
-               label=f"detection threshold ({DETECT_THRESHOLD})")
+    ax.axhline(
+        DETECT_THRESHOLD,
+        ls=":",
+        color="gray",
+        lw=1.5,
+        zorder=2,
+        label=f"detection threshold ({DETECT_THRESHOLD})",
+    )
 
 
 def _finish(ax, title: str, xlabel: str = None):
@@ -100,34 +111,53 @@ def _finish(ax, title: str, xlabel: str = None):
 
 def _label_bar(ax, bar, v):
     if not np.isnan(v):
-        ax.annotate(f"{v:.2f}",
-                    (bar.get_x() + bar.get_width() / 2, v + 0.015),
-                    ha="center", va="bottom", fontsize=8)
+        ax.annotate(
+            f"{v:.2f}",
+            (bar.get_x() + bar.get_width() / 2, v + 0.015),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
 
 
 # ── E1 — address-space diversity ──────────────────────────────────────────────
 
+
 def plot_e1(df: pd.DataFrame, out_path: str) -> None:
     """Grouped bar: each hop mechanism isolated vs no-hop and all-on."""
-    # (label, experiment tag) — number is the address-space size ips×ports×src
+    # (label, experiment tag) — number is the address-space size ips×ports×src.
     configs = [
-        ("No hop\n(1×1×1=1)",       "E1-no-hop"),
-        ("Port only\n(1×5×1=5)",    "E1-port-only"),
-        ("IP only\n(3×1×1=3)",      "E1-ip-only"),
-        ("Src-IP only\n(1×1×3=3)",  "E1-src-only"),
-        ("All\n(3×5×3=45)",         "E0-default"),
+        ("No hop\n(1×1×1=1)", "E1-no-hop"),
+        ("Port only\n(1×5×1=5)", "E1-port-only"),
+        ("IP only\n(3×1×1=3)", "E1-ip-only"),
+        ("Src-IP only\n(1×1×3=3)", "E1-src-only"),
+        ("All\n(3×5×3=45)", "E0-default"),
     ]
-    labels        = [c[0] for c in configs]
-    mtd_scores    = [score(df, LABEL_MTD_MODEL,  experiment=c[1]) for c in configs]
+    labels = [c[0] for c in configs]
+    mtd_scores = [score(df, LABEL_MTD_MODEL, experiment=c[1]) for c in configs]
     xmodel_scores = [score(df, LABEL_BASE_MODEL, experiment=c[1]) for c in configs]
 
     x, w = np.arange(len(configs)), 0.35
     fig, ax = plt.subplots(figsize=(9, 5))
 
-    bars_mtd = ax.bar(x - w/2, mtd_scores,    w, color=COLOR_MTD,    edgecolor="black",
-                      label="MTD-trained model",      zorder=3)
-    bars_x   = ax.bar(x + w/2, xmodel_scores, w, color=COLOR_XMODEL, edgecolor="black",
-                      label="Baseline-trained model", zorder=3)
+    bars_mtd = ax.bar(
+        x - w / 2,
+        mtd_scores,
+        w,
+        color=COLOR_MTD,
+        edgecolor="black",
+        label="MTD-trained model",
+        zorder=3,
+    )
+    bars_x = ax.bar(
+        x + w / 2,
+        xmodel_scores,
+        w,
+        color=COLOR_XMODEL,
+        edgecolor="black",
+        label="Baseline-trained model",
+        zorder=3,
+    )
 
     for bar, v in zip([*bars_mtd, *bars_x], [*mtd_scores, *xmodel_scores]):
         _label_bar(ax, bar, v)
@@ -144,30 +174,42 @@ def plot_e1(df: pd.DataFrame, out_path: str) -> None:
 
 # ── E2 — hop interval sweep ───────────────────────────────────────────────────
 
+
 def plot_e2(df: pd.DataFrame, out_path: str, base_ref: float) -> None:
     """Line plot: detection score vs hop interval (log x-axis)."""
     e2 = df[df["experiment"].str.startswith("E2-") | (df["experiment"] == "E0-default")]
     hop_vals = sorted(e2["hop"].dropna().unique())
 
-    mtd_scores    = [score(e2, LABEL_MTD_MODEL,  hop=h) for h in hop_vals]
+    mtd_scores = [score(e2, LABEL_MTD_MODEL, hop=h) for h in hop_vals]
     xmodel_scores = [score(e2, LABEL_BASE_MODEL, hop=h) for h in hop_vals]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(hop_vals, mtd_scores,    "o-",  color=COLOR_MTD,    lw=2,
-            label="MTD-trained model",      zorder=3)
-    ax.plot(hop_vals, xmodel_scores, "s--", color=COLOR_XMODEL, lw=2,
-            label="Baseline-trained model", zorder=3)
+    ax.plot(hop_vals, mtd_scores, "o-", color=COLOR_MTD, lw=2, label="MTD-trained model", zorder=3)
+    ax.plot(
+        hop_vals,
+        xmodel_scores,
+        "s--",
+        color=COLOR_XMODEL,
+        lw=2,
+        label="Baseline-trained model",
+        zorder=3,
+    )
 
     if not np.isnan(base_ref):
-        ax.axhline(base_ref, ls="--", color=COLOR_BASE, lw=1.5, zorder=2,
-                   label=f"no-MTD baseline ({base_ref:.2f})")
+        ax.axhline(
+            base_ref,
+            ls="--",
+            color=COLOR_BASE,
+            lw=1.5,
+            zorder=2,
+            label=f"no-MTD baseline ({base_ref:.2f})",
+        )
 
     _threshold(ax)
     ax.set_xscale("log")
     ax.set_xticks(hop_vals)
     ax.set_xticklabels([str(int(h)) for h in hop_vals])
-    _finish(ax, "E2 — Hop interval: security vs reconnection tradeoff",
-            xlabel="hop interval (s)")
+    _finish(ax, "E2 — Hop interval: security vs reconnection tradeoff", xlabel="hop interval (s)")
 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -176,26 +218,37 @@ def plot_e2(df: pd.DataFrame, out_path: str, base_ref: float) -> None:
 
 # ── E3 — background noise sweep ───────────────────────────────────────────────
 
+
 def plot_e3(df: pd.DataFrame, out_path: str) -> None:
     """Line plot: detection score vs background replay rate."""
     e3 = df[df["experiment"].str.startswith("E3-") | (df["experiment"] == "E0-default")]
     mbps_vals = sorted(e3["bg_mbps"].dropna().unique())
 
-    mtd_scores    = [score(e3, LABEL_MTD_MODEL,  bg_mbps=m) for m in mbps_vals]
+    mtd_scores = [score(e3, LABEL_MTD_MODEL, bg_mbps=m) for m in mbps_vals]
     xmodel_scores = [score(e3, LABEL_BASE_MODEL, bg_mbps=m) for m in mbps_vals]
-    base_scores   = [score(e3, LABEL_BASELINE,   bg_mbps=m) for m in mbps_vals]
+    base_scores = [score(e3, LABEL_BASELINE, bg_mbps=m) for m in mbps_vals]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(mbps_vals, mtd_scores,    "o-",  color=COLOR_MTD,    lw=2,
-            label="MTD-trained model",      zorder=3)
-    ax.plot(mbps_vals, xmodel_scores, "s--", color=COLOR_XMODEL, lw=2,
-            label="Baseline-trained model", zorder=3)
-    ax.plot(mbps_vals, base_scores,   "^:",  color=COLOR_BASE,   lw=2,
-            label="Baseline (no MTD)",      zorder=3)
+    ax.plot(mbps_vals, mtd_scores, "o-", color=COLOR_MTD, lw=2, label="MTD-trained model", zorder=3)
+    ax.plot(
+        mbps_vals,
+        xmodel_scores,
+        "s--",
+        color=COLOR_XMODEL,
+        lw=2,
+        label="Baseline-trained model",
+        zorder=3,
+    )
+    ax.plot(
+        mbps_vals, base_scores, "^:", color=COLOR_BASE, lw=2, label="Baseline (no MTD)", zorder=3
+    )
 
     _threshold(ax)
-    _finish(ax, "E3 — Background noise: attacker accuracy vs SNR",
-            xlabel="background traffic replay rate (Mbit/s)")
+    _finish(
+        ax,
+        "E3 — Background noise: attacker accuracy vs SNR",
+        xlabel="background traffic replay rate (Mbit/s)",
+    )
 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -203,6 +256,7 @@ def plot_e3(df: pd.DataFrame, out_path: str) -> None:
 
 
 # ── E2b — hop interval vs delivery ratio ─────────────────────────────────────
+
 
 def plot_e2_delivery(df: pd.DataFrame, out_path: str) -> None:
     """Line plot: MQTT delivery ratio vs hop interval.
@@ -213,14 +267,22 @@ def plot_e2_delivery(df: pd.DataFrame, out_path: str) -> None:
     e2 = df[df["experiment"].str.startswith("E2-") | (df["experiment"] == "E0-default")]
     hop_vals = sorted(e2["hop"].dropna().unique())
 
-    mtd_delivery    = [delivery(e2, LABEL_MTD_MODEL,  hop=h) for h in hop_vals]
+    mtd_delivery = [delivery(e2, LABEL_MTD_MODEL, hop=h) for h in hop_vals]
     xmodel_delivery = [delivery(e2, LABEL_BASE_MODEL, hop=h) for h in hop_vals]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(hop_vals, mtd_delivery,    "o-",  color=COLOR_MTD,    lw=2,
-            label="MTD-trained model",      zorder=3)
-    ax.plot(hop_vals, xmodel_delivery, "s--", color=COLOR_XMODEL, lw=2,
-            label="Baseline-trained model", zorder=3)
+    ax.plot(
+        hop_vals, mtd_delivery, "o-", color=COLOR_MTD, lw=2, label="MTD-trained model", zorder=3
+    )
+    ax.plot(
+        hop_vals,
+        xmodel_delivery,
+        "s--",
+        color=COLOR_XMODEL,
+        lw=2,
+        label="Baseline-trained model",
+        zorder=3,
+    )
 
     ax.set_xscale("log")
     ax.set_xticks(hop_vals)
@@ -240,6 +302,7 @@ def plot_e2_delivery(df: pd.DataFrame, out_path: str) -> None:
 
 # ── E4 — message-frequency mutation sweep ─────────────────────────────────────
 
+
 def plot_e4(df: pd.DataFrame, out_path: str, base_ref: float) -> None:
     """Line plot: detection score vs message-frequency mutation interval (log x).
 
@@ -250,25 +313,38 @@ def plot_e4(df: pd.DataFrame, out_path: str, base_ref: float) -> None:
     e4 = df[df["experiment"].str.startswith("E4-") | (df["experiment"] == "E0-default")]
     freq_vals = sorted(e4["freq_interval"].dropna().unique())
 
-    mtd_scores    = [score(e4, LABEL_MTD_MODEL,  freq_interval=f) for f in freq_vals]
+    mtd_scores = [score(e4, LABEL_MTD_MODEL, freq_interval=f) for f in freq_vals]
     xmodel_scores = [score(e4, LABEL_BASE_MODEL, freq_interval=f) for f in freq_vals]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(freq_vals, mtd_scores,    "o-",  color=COLOR_MTD,    lw=2,
-            label="MTD-trained model",      zorder=3)
-    ax.plot(freq_vals, xmodel_scores, "s--", color=COLOR_XMODEL, lw=2,
-            label="Baseline-trained model", zorder=3)
+    ax.plot(freq_vals, mtd_scores, "o-", color=COLOR_MTD, lw=2, label="MTD-trained model", zorder=3)
+    ax.plot(
+        freq_vals,
+        xmodel_scores,
+        "s--",
+        color=COLOR_XMODEL,
+        lw=2,
+        label="Baseline-trained model",
+        zorder=3,
+    )
 
     if not np.isnan(base_ref):
-        ax.axhline(base_ref, ls="--", color=COLOR_BASE, lw=1.5, zorder=2,
-                   label=f"no-MTD baseline ({base_ref:.2f})")
+        ax.axhline(
+            base_ref,
+            ls="--",
+            color=COLOR_BASE,
+            lw=1.5,
+            zorder=2,
+            label=f"no-MTD baseline ({base_ref:.2f})",
+        )
 
     _threshold(ax)
     ax.set_xscale("log")
     ax.set_xticks(freq_vals)
     ax.set_xticklabels([str(int(f)) for f in freq_vals])
-    _finish(ax, "E4 — Message-frequency mutation interval",
-            xlabel="frequency mutation interval (s)")
+    _finish(
+        ax, "E4 — Message-frequency mutation interval", xlabel="frequency mutation interval (s)"
+    )
 
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -280,14 +356,22 @@ def plot_e4_delivery(df: pd.DataFrame, out_path: str) -> None:
     e4 = df[df["experiment"].str.startswith("E4-") | (df["experiment"] == "E0-default")]
     freq_vals = sorted(e4["freq_interval"].dropna().unique())
 
-    mtd_delivery    = [delivery(e4, LABEL_MTD_MODEL,  freq_interval=f) for f in freq_vals]
+    mtd_delivery = [delivery(e4, LABEL_MTD_MODEL, freq_interval=f) for f in freq_vals]
     xmodel_delivery = [delivery(e4, LABEL_BASE_MODEL, freq_interval=f) for f in freq_vals]
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(freq_vals, mtd_delivery,    "o-",  color=COLOR_MTD,    lw=2,
-            label="MTD-trained model",      zorder=3)
-    ax.plot(freq_vals, xmodel_delivery, "s--", color=COLOR_XMODEL, lw=2,
-            label="Baseline-trained model", zorder=3)
+    ax.plot(
+        freq_vals, mtd_delivery, "o-", color=COLOR_MTD, lw=2, label="MTD-trained model", zorder=3
+    )
+    ax.plot(
+        freq_vals,
+        xmodel_delivery,
+        "s--",
+        color=COLOR_XMODEL,
+        lw=2,
+        label="Baseline-trained model",
+        zorder=3,
+    )
 
     ax.set_xscale("log")
     ax.set_xticks(freq_vals)
@@ -307,13 +391,16 @@ def plot_e4_delivery(df: pd.DataFrame, out_path: str) -> None:
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Generate paper sweep figures")
-    p.add_argument("--manifest",   default="output/sweep_manifest.csv")
-    p.add_argument("--plots-root", default="output",
-                   help="Root dir containing the per-experiment dirs "
-                        "(each holds summary.csv)")
-    p.add_argument("--out-dir",    default="output/sweep")
+    p.add_argument("--manifest", default="output/sweep_manifest.csv")
+    p.add_argument(
+        "--plots-root",
+        default="output",
+        help="Root dir containing the per-experiment dirs (each holds summary.csv)",
+    )
+    p.add_argument("--out-dir", default="output/sweep")
     args = p.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)

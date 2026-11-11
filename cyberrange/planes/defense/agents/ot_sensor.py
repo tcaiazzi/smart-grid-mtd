@@ -54,12 +54,12 @@ ETHERTYPE_IPV4 = 0x0800
 IPPROTO_TCP = 6
 TCP_SYN, TCP_ACK = 0x02, 0x10
 
-UNSAFE_WINDOW_S = 10.0     # a write is blamed for an excursion seen this soon after
-ACQUIT_GRACE_S = 2.0       # an in-band observation this long after a write acquits it
-                           # (sensor registers lag the actuators by up to a physics step)
-EXCURSION_MIN_OBS = 3      # consecutive out-of-band observations in MANUAL
-ALERT_QUIET_S = 10.0       # write-time alerts clear after this long without findings
-PENDING_TTL_S = 10.0       # forget unanswered requests
+UNSAFE_WINDOW_S = 10.0  # a write is blamed for an excursion seen this soon after
+ACQUIT_GRACE_S = 2.0  # an in-band observation this long after a write acquits it
+# (sensor registers lag the actuators by up to a physics step)
+EXCURSION_MIN_OBS = 3  # consecutive out-of-band observations in MANUAL
+ALERT_QUIET_S = 10.0  # write-time alerts clear after this long without findings
+PENDING_TTL_S = 10.0  # forget unanswered requests
 
 
 # ── pure parsers (unit-tested off-wire) ──────────────────────────────────────
@@ -107,9 +107,9 @@ def parse_modbus_adus(tcp_payload: bytes):
     buf = tcp_payload
     while len(buf) >= 8:  # MBAP(7) + at least the function code
         txn, proto, length, unit = struct.unpack("!HHHB", buf[0:7])
-        if proto != 0:            # not Modbus/TCP
+        if proto != 0:  # not Modbus/TCP
             break
-        adu_len = 6 + length      # length counts the unit id + PDU
+        adu_len = 6 + length  # length counts the unit id + PDU
         if length < 2 or adu_len > len(buf):
             break
         pdu = buf[7:adu_len]
@@ -132,7 +132,7 @@ def decode_request(adu):
         address, qty = struct.unpack("!HH", pdu[1:5])
         byte_count = pdu[5]
         if len(pdu) >= 6 + byte_count and byte_count == 2 * qty:
-            vals = [struct.unpack("!H", pdu[6 + 2 * i:8 + 2 * i])[0] for i in range(qty)]
+            vals = [struct.unpack("!H", pdu[6 + 2 * i : 8 + 2 * i])[0] for i in range(qty)]
             return {"address": address, "values": vals}
     return None
 
@@ -145,7 +145,7 @@ def decode_read_response(adu):
     bc = pdu[1]
     if bc % 2 or len(pdu) < 2 + bc:
         return None
-    return [struct.unpack("!H", pdu[2 + 2 * i:4 + 2 * i])[0] for i in range(bc // 2)]
+    return [struct.unpack("!H", pdu[2 + 2 * i : 4 + 2 * i])[0] for i in range(bc // 2)]
 
 
 def parse_modbus_writes(tcp_payload: bytes):
@@ -158,8 +158,14 @@ def parse_modbus_writes(tcp_payload: bytes):
             continue
         req = decode_request(adu)
         if req is not None:
-            writes.append({"unit": adu["unit"], "fc": adu["fc"],
-                           "address": req["address"], "values": req["values"]})
+            writes.append(
+                {
+                    "unit": adu["unit"],
+                    "fc": adu["fc"],
+                    "address": req["address"],
+                    "values": req["values"],
+                }
+            )
     return writes
 
 
@@ -188,14 +194,18 @@ def _finding(klass, reasons, confidence, src, dst, unit, address, evidence, dete
         "klass": klass,
         "reasons": reasons,
         "confidence": round(confidence, 3),
-        "entities": {"src": src, "dst": dst, "unit": unit, "register": address,
-                     "name": spec[0] if spec else ("unknown" if address is not None else None)},
+        "entities": {
+            "src": src,
+            "dst": dst,
+            "unit": unit,
+            "register": address,
+            "name": spec[0] if spec else ("unknown" if address is not None else None),
+        },
         "evidence": evidence,
     }
 
 
-def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str,
-                   policy=None):
+def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str, policy=None):
     """Write-time rules. Return a finding dict for a suspicious write, or None.
 
     `policy` maps client IP -> role (see ot_registers.ROLE_POLICY). Without it,
@@ -228,10 +238,22 @@ def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str
 
     if not reasons:
         return None
-    return _finding(reasons[0], reasons, confidence, src_ip, dst_ip, write["unit"], addr,
-                    {"fc": write["fc"], "raw": write["values"],
-                     "value": reg.actuator_value(addr, write["values"][0]),
-                     "role": role, "ts": round(time.time(), 3)})
+    return _finding(
+        reasons[0],
+        reasons,
+        confidence,
+        src_ip,
+        dst_ip,
+        write["unit"],
+        addr,
+        {
+            "fc": write["fc"],
+            "raw": write["values"],
+            "value": reg.actuator_value(addr, write["values"][0]),
+            "role": role,
+            "ts": round(time.time(), 3),
+        },
+    )
 
 
 def classify_read(src_ip, dst_ip, fc, unit, policy):
@@ -241,11 +263,27 @@ def classify_read(src_ip, dst_ip, fc, unit, policy):
         return None
     role = policy.get(src_ip)
     if role is None:
-        return _finding("unauthorized_read", ["unauthorized_read"], 0.6, src_ip, dst_ip,
-                        unit, None, {"fc": fc, "ts": round(time.time(), 3)})
+        return _finding(
+            "unauthorized_read",
+            ["unauthorized_read"],
+            0.6,
+            src_ip,
+            dst_ip,
+            unit,
+            None,
+            {"fc": fc, "ts": round(time.time(), 3)},
+        )
     if fc not in reg.ROLE_POLICY.get(role, {}).get("reads", set()):
-        return _finding("policy_violation", ["policy_violation"], 0.7, src_ip, dst_ip,
-                        unit, None, {"fc": fc, "role": role, "ts": round(time.time(), 3)})
+        return _finding(
+            "policy_violation",
+            ["policy_violation"],
+            0.7,
+            src_ip,
+            dst_ip,
+            unit,
+            None,
+            {"fc": fc, "role": role, "ts": round(time.time(), 3)},
+        )
     return None
 
 
@@ -262,9 +300,9 @@ class ProcessRules:
     has stepped on it)."""
 
     def __init__(self):
-        self.last_writes = []        # [(t, src, dst, unit, address, value)] state-changing writes
-        self.blamed = set()          # writes already reported as unsafe
-        self.hr_state = {}           # address -> value in force (from writes / fc03 reads)
+        self.last_writes = []  # [(t, src, dst, unit, address, value)] state-changing writes
+        self.blamed = set()  # writes already reported as unsafe
+        self.hr_state = {}  # address -> value in force (from writes / fc03 reads)
         self.ctrl_mode = reg.CTRL_AUTO
         self.excursion_obs = 0
         self.last_in_band_t = None
@@ -277,7 +315,7 @@ class ProcessRules:
         if address == reg.HR_CTRL_MODE and value is not None:
             self.ctrl_mode = int(round(value))
         if value is not None and prev is not None and abs(value - prev) < 1e-9:
-            return                   # no change -> not a suspect
+            return  # no change -> not a suspect
         self.last_writes.append((t, src, dst, unit, address, value))
         self.last_writes = [w for w in self.last_writes if t - w[0] <= UNSAFE_WINDOW_S]
 
@@ -299,29 +337,59 @@ class ProcessRules:
                 self.hr_state[addr] = state[name]
         has_v = any(state.get(k) is not None for k in ("v_load", "v_dg", "abnormal"))
         if not has_v:
-            return findings, None    # e.g. a holding-register read: no voltage info
+            return findings, None  # e.g. a holding-register read: no voltage info
         oob = self.out_of_band(state)
         ev = {k: state.get(k) for k in ("v_load", "v_dg", "abnormal")}
         if oob:
-            acquit_before = (self.last_in_band_t - ACQUIT_GRACE_S
-                             if self.last_in_band_t is not None else float("-inf"))
-            recent = [w for w in self.last_writes if 0 <= t - w[0] <= UNSAFE_WINDOW_S
-                      and w[0] > acquit_before and w not in self.blamed]
+            acquit_before = (
+                self.last_in_band_t - ACQUIT_GRACE_S
+                if self.last_in_band_t is not None
+                else float("-inf")
+            )
+            recent = [
+                w
+                for w in self.last_writes
+                if 0 <= t - w[0] <= UNSAFE_WINDOW_S
+                and w[0] > acquit_before
+                and w not in self.blamed
+            ]
             for w in recent:
                 self.blamed.add(w)
                 wt, src, dst, unit, addr, value = w
-                findings.append(_finding(
-                    "unsafe_command", ["unsafe_command"], 0.85, src, dst, unit, addr,
-                    {**ev, "value": value, "write_t": round(wt, 3),
-                     "lag_s": round(t - wt, 3), "ts": round(t, 3)}))
+                findings.append(
+                    _finding(
+                        "unsafe_command",
+                        ["unsafe_command"],
+                        0.85,
+                        src,
+                        dst,
+                        unit,
+                        addr,
+                        {
+                            **ev,
+                            "value": value,
+                            "write_t": round(wt, 3),
+                            "lag_s": round(t - wt, 3),
+                            "ts": round(t, 3),
+                        },
+                    )
+                )
             if self.ctrl_mode == reg.CTRL_MANUAL:
                 self.excursion_obs += 1
                 if self.excursion_obs >= EXCURSION_MIN_OBS:
                     active.add(("manual_mode_excursion",))
-                    findings.append(_finding(
-                        "manual_mode_excursion", ["manual_mode_excursion"], 0.9,
-                        None, None, reg.UNIT_ID, reg.HR_CTRL_MODE,
-                        {**ev, "observations": self.excursion_obs, "ts": round(t, 3)}))
+                    findings.append(
+                        _finding(
+                            "manual_mode_excursion",
+                            ["manual_mode_excursion"],
+                            0.9,
+                            None,
+                            None,
+                            reg.UNIT_ID,
+                            reg.HR_CTRL_MODE,
+                            {**ev, "observations": self.excursion_obs, "ts": round(t, 3)},
+                        )
+                    )
             else:
                 self.excursion_obs = 0
             active.add(("out_of_band",))
@@ -333,9 +401,19 @@ class ProcessRules:
 
 # ── live sensor ──────────────────────────────────────────────────────────────
 class OTSensor:
-    def __init__(self, iface, engine_ip, engine_port, authorized_writer,
-                 telemetry: Telemetry, hmi_ip=None, detectors=("rules", "model"),
-                 learn_seconds=45.0, window_s=1.0, model_k=6.0):
+    def __init__(
+        self,
+        iface,
+        engine_ip,
+        engine_port,
+        authorized_writer,
+        telemetry: Telemetry,
+        hmi_ip=None,
+        detectors=("rules", "model"),
+        learn_seconds=45.0,
+        window_s=1.0,
+        model_k=6.0,
+    ):
         self.iface = iface
         self.engine_ip = engine_ip
         self.engine_port = engine_port
@@ -348,16 +426,19 @@ class OTSensor:
             self.policy[hmi_ip] = "hmi"
         self.detectors = set(detectors)
         self.rules = ProcessRules()
-        self._pending = {}           # (client_ip, client_port, txn) -> (fc, address, t)
-        self._alerts = {}            # key -> {"klass","last_t","detector"}
+        self._pending = {}  # (client_ip, client_port, txn) -> (fc, address, t)
+        self._alerts = {}  # key -> {"klass","last_t","detector"}
         self.learn_seconds = float(learn_seconds)
         self._t0 = None
         self.featurizer = self.model = None
         if "model" in self.detectors and WindowFeaturizer is not None:
-            self.featurizer = WindowFeaturizer(authorized_writer, window_s=window_s,
-                                               setpoint_register=reg.HR_DG_SETPOINT,
-                                               mode_register=reg.HR_CTRL_MODE,
-                                               manual_value=reg.CTRL_MANUAL)
+            self.featurizer = WindowFeaturizer(
+                authorized_writer,
+                window_s=window_s,
+                setpoint_register=reg.HR_DG_SETPOINT,
+                mode_register=reg.HR_CTRL_MODE,
+                manual_value=reg.CTRL_MANUAL,
+            )
             self.model = RobustAnomalyModel(k=model_k)
         self._model_quiet = 0
         self._early_win = None
@@ -366,20 +447,34 @@ class OTSensor:
     def _raise(self, key, finding, t):
         a = self._alerts.get(key)
         if a is None:
-            self.telemetry.emit("ot_alert", state="raised", detector=finding["detector"],
-                                klass=finding["klass"], confidence=finding["confidence"],
-                                entities=finding["entities"])
-            a = {"klass": finding["klass"], "detector": finding["detector"],
-                 "raised_t": t, "entities": finding["entities"]}
+            self.telemetry.emit(
+                "ot_alert",
+                state="raised",
+                detector=finding["detector"],
+                klass=finding["klass"],
+                confidence=finding["confidence"],
+                entities=finding["entities"],
+            )
+            a = {
+                "klass": finding["klass"],
+                "detector": finding["detector"],
+                "raised_t": t,
+                "entities": finding["entities"],
+            }
             self._alerts[key] = a
         a["last_t"] = t
 
     def _clear(self, key, t):
         a = self._alerts.pop(key, None)
         if a is not None:
-            self.telemetry.emit("ot_alert", state="cleared", detector=a["detector"],
-                                klass=a["klass"], entities=a["entities"],
-                                duration_s=round(t - a["raised_t"], 3))
+            self.telemetry.emit(
+                "ot_alert",
+                state="cleared",
+                detector=a["detector"],
+                klass=a["klass"],
+                entities=a["entities"],
+                duration_s=round(t - a["raised_t"], 3),
+            )
 
     def _emit(self, finding, t, key=None):
         self.telemetry.emit("ot_finding", **finding)
@@ -443,10 +538,17 @@ class OTSensor:
                     self._emit(f, t)
             return
         if "rules" in self.detectors and self.policy:
-            # any other function code (diagnostics, device id, coils, ...)
+            # Any other function code (diagnostics, device id, coils, ...)
             f = classify_read(src, dst, fc, unit, self.policy) or _finding(
-                "policy_violation", ["policy_violation"], 0.7, src, dst, unit, None,
-                {"fc": fc, "role": self.policy.get(src), "ts": round(t, 3)})
+                "policy_violation",
+                ["policy_violation"],
+                0.7,
+                src,
+                dst,
+                unit,
+                None,
+                {"fc": fc, "role": self.policy.get(src), "ts": round(t, 3)},
+            )
             self._emit(f, t)
 
     def _on_response(self, t, src, dst, dport, adu):
@@ -472,12 +574,24 @@ class OTSensor:
 
     # ── model ────────────────────────────────────────────────────────────────
     def _model_finding(self, w_start, score, z, partial):
-        return _finding("behavioral_anomaly", ["behavioral_anomaly"],
-                        min(0.99, 0.5 + 0.05 * score), None, self.engine_ip, reg.UNIT_ID, None,
-                        {"score": round(score, 2), "threshold": round(self.model.threshold, 2),
-                         "window_start": round(w_start, 3), "partial": partial,
-                         "top": self.model.explain(z), "ts": round(w_start, 3)},
-                        detector="model")
+        return _finding(
+            "behavioral_anomaly",
+            ["behavioral_anomaly"],
+            min(0.99, 0.5 + 0.05 * score),
+            None,
+            self.engine_ip,
+            reg.UNIT_ID,
+            None,
+            {
+                "score": round(score, 2),
+                "threshold": round(self.model.threshold, 2),
+                "window_start": round(w_start, 3),
+                "partial": partial,
+                "top": self.model.explain(z),
+                "ts": round(w_start, 3),
+            },
+            detector="model",
+        )
 
     def _model_early(self, t):
         """Score the still-open window right after a write. Counts and maxima only
@@ -501,14 +615,19 @@ class OTSensor:
             return
         for w_start, vec in closed:
             if not self.model.fitted:
-                if self._t0 is not None and w_start + self.featurizer.window_s <= \
-                        self._t0 + self.learn_seconds:
+                if (
+                    self._t0 is not None
+                    and w_start + self.featurizer.window_s <= self._t0 + self.learn_seconds
+                ):
                     self.model.add_calibration(vec)
                     continue
                 try:
                     self.model.fit()
-                    self.telemetry.emit("model_fitted", threshold=round(self.model.threshold, 3),
-                                        windows=len(self.model._calib))
+                    self.telemetry.emit(
+                        "model_fitted",
+                        threshold=round(self.model.threshold, 3),
+                        windows=len(self.model._calib),
+                    )
                 except ValueError as e:
                     self.telemetry.emit("model_error", error=str(e))
                     self.model = None
@@ -532,17 +651,26 @@ class OTSensor:
         for k in [k for k, v in self._pending.items() if now - v[2] > PENDING_TTL_S]:
             del self._pending[k]
         for k, a in list(self._alerts.items()):
-            if k[0] == "rules" and a["klass"] not in ("manual_mode_excursion",) and \
-                    now - a["last_t"] > ALERT_QUIET_S:
+            if (
+                k[0] == "rules"
+                and a["klass"] not in ("manual_mode_excursion",)
+                and now - a["last_t"] > ALERT_QUIET_S
+            ):
                 self._clear(k, now)
 
     def run(self, duration=0.0):
         s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         s.bind((self.iface, 0))
         s.settimeout(0.5)
-        self.telemetry.emit("sensor_up", iface=self.iface, engine=self.engine_ip,
-                            port=self.engine_port, policy=self.policy,
-                            detectors=sorted(self.detectors), learn_seconds=self.learn_seconds)
+        self.telemetry.emit(
+            "sensor_up",
+            iface=self.iface,
+            engine=self.engine_ip,
+            port=self.engine_port,
+            policy=self.policy,
+            detectors=sorted(self.detectors),
+            learn_seconds=self.learn_seconds,
+        )
         start = time.time()
         self._t0 = start
         while True:
@@ -563,13 +691,23 @@ def main():
     ap.add_argument("--iface", default="eth0", help="OT-link interface to sniff")
     ap.add_argument("--engine-ip", default=None, help="physical engine IP (Modbus slave)")
     ap.add_argument("--engine-port", type=int, default=reg.MODBUS_PORT)
-    ap.add_argument("--plc-ip", "--authorized-writer", dest="plc_ip", default=None,
-                    help="the PLC's IP (role 'plc' in the access policy)")
+    ap.add_argument(
+        "--plc-ip",
+        "--authorized-writer",
+        dest="plc_ip",
+        default=None,
+        help="the PLC's IP (role 'plc' in the access policy)",
+    )
     ap.add_argument("--hmi-ip", default=None, help="the HMI's IP (role 'hmi')")
-    ap.add_argument("--detectors", default="rules,model",
-                    help="comma list of detectors to run: rules, model")
-    ap.add_argument("--learn-seconds", type=float, default=45.0,
-                    help="model calibration period (assumed attack-free)")
+    ap.add_argument(
+        "--detectors", default="rules,model", help="comma list of detectors to run: rules, model"
+    )
+    ap.add_argument(
+        "--learn-seconds",
+        type=float,
+        default=45.0,
+        help="model calibration period (assumed attack-free)",
+    )
     ap.add_argument("--window", type=float, default=1.0, help="model window (s)")
     ap.add_argument("--model-k", type=float, default=6.0, help="model z threshold floor")
     ap.add_argument("--telemetry-file", default="telemetry.jsonl")
@@ -581,9 +719,18 @@ def main():
     if args.dashboard_port and DashboardServer is not None:
         DashboardServer(tel, args.dashboard_port).start()
     detectors = tuple(d.strip() for d in args.detectors.split(",") if d.strip())
-    OTSensor(args.iface, args.engine_ip, args.engine_port, args.plc_ip, tel,
-             hmi_ip=args.hmi_ip, detectors=detectors, learn_seconds=args.learn_seconds,
-             window_s=args.window, model_k=args.model_k).run(duration=args.duration)
+    OTSensor(
+        args.iface,
+        args.engine_ip,
+        args.engine_port,
+        args.plc_ip,
+        tel,
+        hmi_ip=args.hmi_ip,
+        detectors=detectors,
+        learn_seconds=args.learn_seconds,
+        window_s=args.window,
+        model_k=args.model_k,
+    ).run(duration=args.duration)
 
 
 if __name__ == "__main__":

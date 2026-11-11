@@ -64,7 +64,7 @@ def _find(out_dir, *names):
         p = os.path.join(out_dir, n)
         if os.path.exists(p):
             return p
-    # last resort: glob
+    # Last resort: glob.
     for n in names:
         hits = glob.glob(os.path.join(out_dir, "*" + n))
         if hits:
@@ -73,11 +73,11 @@ def _find(out_dir, *names):
 
 
 DETECTORS = ("rules", "model")
-SLACK_S = 1.0   # clock slack between guest and host timestamps
+SLACK_S = 1.0  # clock slack between guest and host timestamps
 
 
 def _detector(e):
-    return e.get("detector") or "rules"   # pre-v2 runs only had rules
+    return e.get("detector") or "rules"  # pre-v2 runs only had rules
 
 
 def _manual_windows(frames, dt):
@@ -111,13 +111,17 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
         "detected": bool(hits),
         "findings": len(findings),
         "detection_latency_s": round(first - attack_start, 3) if first is not None else None,
-        "latency_from_write_s": (round(first - first_write, 3)
-                                 if first is not None and first_write is not None else None),
-        "before_impact": (first < first_abnormal) if first is not None and first_abnormal else
-                         (first is not None),
+        "latency_from_write_s": (
+            round(first - first_write, 3) if first is not None and first_write is not None else None
+        ),
+        "before_impact": (first < first_abnormal)
+        if first is not None and first_abnormal
+        else (first is not None),
         "false_alarms": len(fa),
         "false_alarms_in_operator_windows": in_op,
-        "classes": sorted({e.get("klass") for e in findings if e["t"] >= (attack_start or 0) - SLACK_S}),
+        "classes": sorted(
+            {e.get("klass") for e in findings if e["t"] >= (attack_start or 0) - SLACK_S}
+        ),
     }
 
 
@@ -130,7 +134,7 @@ def expected_response(gt):
     block the flow; restore the breaker if it was opened; force AUTO if control
     mode was taken. A lone out-of-range setpoint needs only the block (the PLC
     rejects the value and recovers)."""
-    # register name, or the number as a fallback (HR_SWITCH_CMD=1, HR_CTRL_MODE=2).
+    # Register name, or the number as a fallback (HR_SWITCH_CMD=1, HR_CTRL_MODE=2).
     REG_NAME = {0: "dg_setpoint", 1: "switch_cmd", 2: "ctrl_mode"}
     names = set()
     for e in gt:
@@ -151,8 +155,8 @@ def _explained(decision):
     acts = [a for a in decision.get("actions") or [] if a != "notify"]
     covers = decision.get("covers") or {}
     return bool(decision.get("rationale")) and all(
-        (covers.get(a) or {}).get("prevents") or (covers.get(a) or {}).get("restores")
-        for a in acts)
+        (covers.get(a) or {}).get("prevents") or (covers.get(a) or {}).get("restores") for a in acts
+    )
 
 
 def _response(resp, gt, findings, attack_start, mode, end_t):
@@ -162,8 +166,9 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
     applied = [a for a in actions if a.get("ok")]
     applied_ids = {a["id"] for a in applied}
     expected = expected_response(gt)
-    hits = [e["t"] for e in findings
-            if attack_start is not None and e["t"] >= attack_start - SLACK_S]
+    hits = [
+        e["t"] for e in findings if attack_start is not None and e["t"] >= attack_start - SLACK_S
+    ]
     real = [a for a in applied if a["id"] != "notify"]
     first_action = min((a["done_t"] for a in real), default=None)
     block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
@@ -175,8 +180,8 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
     if attack_start is None:
         accurate, over = (not pre), sorted(applied_ids - {"notify"})
     elif prevented:
-        accurate = bool(real)                   # a countermeasure stopped it early
-        over = []                               # preventing before the plant is good
+        accurate = bool(real)  # a countermeasure stopped it early
+        over = []  # preventing before the plant is good
     else:
         accurate = expected <= applied_ids
         over = sorted(applied_ids - expected - {"notify"})
@@ -186,19 +191,24 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
         "decisions": len(decisions),
         "explained_decisions": sum(1 for d in decisions if _explained(d)),
         "explained_coverage": _rate(sum(1 for d in decisions if _explained(d)), len(decisions)),
-        "decision_latency_s": (round(first_action - min(hits), 3)
-                               if first_action is not None and hits else None),
+        "decision_latency_s": (
+            round(first_action - min(hits), 3) if first_action is not None and hits else None
+        ),
         "actions": sorted(applied_ids - {"notify"}),
         "failed_actions": sorted({a["id"] for a in actions if not a.get("ok")}),
         "expected_actions": sorted(expected),
         "prevented_before_impact": prevented,
         "accurate": accurate,
         "over_response": over,
-        "attacker_writes_after_block": (sum(1 for e in ok_writes if e["t"] > block_t)
-                                        if block_t is not None else None),
+        "attacker_writes_after_block": (
+            sum(1 for e in ok_writes if e["t"] > block_t) if block_t is not None else None
+        ),
         "false_responses": len(pre),
-        "hmi_unavailable_s": (round(max(0.0, end_t - block_t), 3)
-                              if block_t is not None and end_t is not None else 0.0),
+        "hmi_unavailable_s": (
+            round(max(0.0, end_t - block_t), 3)
+            if block_t is not None and end_t is not None
+            else 0.0
+        ),
     }
 
 
@@ -226,33 +236,59 @@ def compute_metrics(out_dir: str) -> dict:
     dt = (ts[-1] - ts[0]) / (len(ts) - 1) if len(ts) > 1 else 1.0
 
     # ── impact ───────────────────────────────────────────────────────────────
-    after = [fr for fr in frames if attack_start is None or fr.get("timestamp", 0) >= attack_start - SLACK_S]
+    after = [
+        fr
+        for fr in frames
+        if attack_start is None or fr.get("timestamp", 0) >= attack_start - SLACK_S
+    ]
     win = after or frames
     abn = [fr for fr in win if fr.get("abnormal")]
     first_abn = abn[0]["timestamp"] if abn else None
     last_abn = abn[-1]["timestamp"] if abn else None
     ongoing = bool(frames) and bool(frames[-1].get("abnormal")) and bool(abn)
-    vs = [v for fr in win for v in (fr.get("v_load", V_NOMINAL), fr.get("v_dg", V_NOMINAL))
-          if v is not None]
+    vs = [
+        v
+        for fr in win
+        for v in (fr.get("v_load", V_NOMINAL), fr.get("v_dg", V_NOMINAL))
+        if v is not None
+    ]
     manual_spans = _manual_windows(frames, dt)
-    manual_after = sum(min(b, ts[-1] + dt) - max(a, attack_start) for a, b in manual_spans
-                       if attack_start is not None and b > attack_start) if frames else 0.0
+    manual_after = (
+        sum(
+            min(b, ts[-1] + dt) - max(a, attack_start)
+            for a, b in manual_spans
+            if attack_start is not None and b > attack_start
+        )
+        if frames
+        else 0.0
+    )
 
     energies = [fr.get("energy_kwh") for fr in frames if fr.get("energy_kwh") is not None]
     energy_attack = None
     if attack_start is not None and energies:
-        pre = [fr.get("energy_kwh") for fr in frames
-               if fr.get("timestamp", 0) < attack_start and fr.get("energy_kwh") is not None]
+        pre = [
+            fr.get("energy_kwh")
+            for fr in frames
+            if fr.get("timestamp", 0) < attack_start and fr.get("energy_kwh") is not None
+        ]
         if pre:
             energy_attack = round(energies[-1] - pre[-1], 5)
 
     # ── detection ────────────────────────────────────────────────────────────
     ot_findings = [e for e in events if e.get("kind") == "ot_finding"]
     it_findings = [e for e in it_events if e.get("kind") == "ot_finding"]
-    findings = ot_findings + it_findings       # combined / response see both sides
+    findings = ot_findings + it_findings  # combined / response see both sides
     normal_spans = [(a, b) for a, b in manual_spans if attack_start is None or a < attack_start]
-    per = {d: _detection([e for e in ot_findings if _detector(e) == d], attack_start,
-                         first_write, first_abn, normal_spans) for d in DETECTORS}
+    per = {
+        d: _detection(
+            [e for e in ot_findings if _detector(e) == d],
+            attack_start,
+            first_write,
+            first_abn,
+            normal_spans,
+        )
+        for d in DETECTORS
+    }
     if it_findings:
         per["it"] = _detection(it_findings, attack_start, first_write, first_abn, normal_spans)
     per["combined"] = _detection(findings, attack_start, first_write, first_abn, normal_spans)
@@ -262,14 +298,23 @@ def compute_metrics(out_dir: str) -> dict:
     # MTM: back in band for good = the first normal frame after the last abnormal one.
     mitigated_t = None
     if abn and not ongoing:
-        mitigated_t = next((fr["timestamp"] for fr in win
-                            if fr.get("timestamp", 0) > last_abn and not fr.get("abnormal")), None)
-    response = (_response(resp, gt, findings, attack_start, mode,
-                          ts[-1] + dt if ts else None) if resp is not None else None)
+        mitigated_t = next(
+            (
+                fr["timestamp"]
+                for fr in win
+                if fr.get("timestamp", 0) > last_abn and not fr.get("abnormal")
+            ),
+            None,
+        )
+    response = (
+        _response(resp, gt, findings, attack_start, mode, ts[-1] + dt if ts else None)
+        if resp is not None
+        else None
+    )
     return {
         "attack": attack_start is not None,
         "attack_mode": mode,
-        # combined detection (kept flat for backwards compatibility)
+        # Combined detection (kept flat for backwards compatibility)
         "detected": comb["detected"],
         "detection_latency_s": comb["detection_latency_s"],
         "false_alarms": comb["false_alarms"],
@@ -277,30 +322,44 @@ def compute_metrics(out_dir: str) -> dict:
         "first_finding_t": min((e["t"] for e in findings), default=None),
         "detectors": per,
         "model_threshold": fitted.get("threshold") if fitted else None,
-        # impact
-        "time_to_impact_s": (round(first_abn - first_write, 3)
-                             if first_abn is not None and first_write is not None else None),
+        # Impact
+        "time_to_impact_s": (
+            round(first_abn - first_write, 3)
+            if first_abn is not None and first_write is not None
+            else None
+        ),
         "abnormal_frames": len(abn),
         "abnormal_duration_s": round(last_abn - first_abn, 3) if abn else 0.0,
         "impact_duration_s": round(last_abn - first_abn + dt, 3) if abn else 0.0,
         "impact_ongoing_at_end": ongoing,
-        "impact_persists_after_attack": bool(abn) and attack_end is not None and
-                                        last_abn is not None and last_abn > attack_end + 2 * dt,
+        "impact_persists_after_attack": bool(abn)
+        and attack_end is not None
+        and last_abn is not None
+        and last_abn > attack_end + 2 * dt,
         "recovered": bool(abn) and not ongoing,
         "recovery_s": round(last_abn + dt - first_abn, 3) if abn and not ongoing else None,
         "manual_mode_s": round(manual_after, 3),
-        "mitigated_s": (round(mitigated_t - first_write, 3)
-                        if mitigated_t is not None and first_write is not None else None),
+        "mitigated_s": (
+            round(mitigated_t - first_write, 3)
+            if mitigated_t is not None and first_write is not None
+            else None
+        ),
         "response": response,
         # Tree-guided attacker (planner driver)
         "planner": planner,
         "attacker_profile": (mode.split(":", 1)[1] if planner else None),
         "stage_reached": attack_end_ev.get("stage_reached") if planner else None,
         "attack_succeeded": (bool(attack_end_ev.get("success")) if planner else None),
-        "prevented": (not any(e.get("kind") == "modbus_write" and e.get("ok") for e in gt)
-                      if planner else None),
-        "plan_steps": [{"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")}
-                       for e in plan_steps] if planner else None,
+        "prevented": (
+            not any(e.get("kind") == "modbus_write" and e.get("ok") for e in gt)
+            if planner
+            else None
+        ),
+        "plan_steps": [
+            {"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")} for e in plan_steps
+        ]
+        if planner
+        else None,
         "max_abs_deviation_pu": round(max((abs(v - V_NOMINAL) for v in vs), default=0.0), 4),
         "v_min": round(min(vs), 4) if vs else None,
         "v_max": round(max(vs), 4) if vs else None,
@@ -313,57 +372,81 @@ def compute_metrics(out_dir: str) -> dict:
 def format_report(m: dict) -> str:
     lines = ["# Cyber-physical run metrics", ""]
     det = "yes" if m["detected"] else "NO"
-    lines.append(f"- attack present: {m['attack']}"
-                 + (f" (mode: {m['attack_mode']})" if m.get("attack_mode") else ""))
-    lines.append(f"- detected: {det}  (findings={m['findings']}, "
-                 f"latency={m['detection_latency_s']}s)")
+    lines.append(
+        f"- attack present: {m['attack']}"
+        + (f" (mode: {m['attack_mode']})" if m.get("attack_mode") else "")
+    )
+    lines.append(
+        f"- detected: {det}  (findings={m['findings']}, latency={m['detection_latency_s']}s)"
+    )
     lines.append(f"- false alarms (normal phase): {m['false_alarms']}")
     lines.append("")
-    lines.append("| detector | detected | latency (s) | from write (s) | before impact "
-                 "| false alarms | …in operator windows | classes |")
+    lines.append(
+        "| detector | detected | latency (s) | from write (s) | before impact "
+        "| false alarms | …in operator windows | classes |"
+    )
     lines.append("|---|---|---|---|---|---|---|---|")
     det_rows = (*DETECTORS, *(["it"] if "it" in m["detectors"] else []), "combined")
     for d in det_rows:
         x = m["detectors"][d]
-        lines.append(f"| {d} | {'yes' if x['detected'] else 'no'} | {x['detection_latency_s']} "
-                     f"| {x['latency_from_write_s']} | {'yes' if x['before_impact'] and x['detected'] else 'no'} "
-                     f"| {x['false_alarms']} | {x['false_alarms_in_operator_windows']} "
-                     f"| {', '.join(c for c in x['classes'] if c) or '—'} |")
+        lines.append(
+            f"| {d} | {'yes' if x['detected'] else 'no'} | {x['detection_latency_s']} "
+            f"| {x['latency_from_write_s']} | "
+            f"{'yes' if x['before_impact'] and x['detected'] else 'no'} "
+            f"| {x['false_alarms']} | {x['false_alarms_in_operator_windows']} "
+            f"| {', '.join(c for c in x['classes'] if c) or '—'} |"
+        )
     lines.append("")
-    lines.append(f"- physical deviation: max |ΔV|={m['max_abs_deviation_pu']} pu "
-                 f"(V∈[{m['v_min']},{m['v_max']}]), abnormal {m['abnormal_frames']} frames "
-                 f"/ {m['abnormal_duration_s']}s")
-    lines.append(f"- impact: time-to-impact={m['time_to_impact_s']}s, "
-                 f"duration={m['impact_duration_s']}s, "
-                 f"persists after attack={m['impact_persists_after_attack']}, "
-                 f"ongoing at end={m['impact_ongoing_at_end']}, "
-                 f"recovered={m['recovered']} (recovery {m['recovery_s']}s)")
+    lines.append(
+        f"- physical deviation: max |ΔV|={m['max_abs_deviation_pu']} pu "
+        f"(V∈[{m['v_min']},{m['v_max']}]), abnormal {m['abnormal_frames']} frames "
+        f"/ {m['abnormal_duration_s']}s"
+    )
+    lines.append(
+        f"- impact: time-to-impact={m['time_to_impact_s']}s, "
+        f"duration={m['impact_duration_s']}s, "
+        f"persists after attack={m['impact_persists_after_attack']}, "
+        f"ongoing at end={m['impact_ongoing_at_end']}, "
+        f"recovered={m['recovered']} (recovery {m['recovery_s']}s)"
+    )
     lines.append(f"- control authority in MANUAL after the attack: {m['manual_mode_s']}s")
     lines.append(f"- mitigated (MTM, from first write): {m.get('mitigated_s')}s")
-    lines.append(f"- energy: total={m['energy_kwh_total']} kWh, "
-                 f"during attack={m['energy_kwh_during_attack']} kWh")
+    lines.append(
+        f"- energy: total={m['energy_kwh_total']} kWh, "
+        f"during attack={m['energy_kwh_during_attack']} kWh"
+    )
     if m.get("planner"):
-        lines.append(f"- tree-guided attacker ({m['attacker_profile']}): reached "
-                     f"{m['stage_reached']}, succeeded={m['attack_succeeded']}, "
-                     f"prevented={m['prevented']}")
+        lines.append(
+            f"- tree-guided attacker ({m['attacker_profile']}): reached "
+            f"{m['stage_reached']}, succeeded={m['attack_succeeded']}, "
+            f"prevented={m['prevented']}"
+        )
     r = m.get("response")
     if r:
         lines += ["", f"## Response (policy: {r['policy']}, approval: {r['approval']})", ""]
-        lines.append(f"- countermeasures applied: {', '.join(r['actions']) or '—'} "
-                     f"(expected: {', '.join(r['expected_actions']) or '—'}; "
-                     f"accurate: {r['accurate']}; over-response: "
-                     f"{', '.join(r['over_response']) or '—'}; failed: "
-                     f"{', '.join(r['failed_actions']) or '—'})")
+        lines.append(
+            f"- countermeasures applied: {', '.join(r['actions']) or '—'} "
+            f"(expected: {', '.join(r['expected_actions']) or '—'}; "
+            f"accurate: {r['accurate']}; over-response: "
+            f"{', '.join(r['over_response']) or '—'}; failed: "
+            f"{', '.join(r['failed_actions']) or '—'})"
+        )
         if r.get("prevented_before_impact"):
             lines.append("- attack prevented before the plant was touched")
-        lines.append(f"- decision latency (first finding -> first countermeasure done): "
-                     f"{r['decision_latency_s']}s")
-        lines.append(f"- decisions: {r['decisions']}, explained: {r['explained_decisions']} "
-                     f"(coverage {r['explained_coverage']})")
-        lines.append(f"- attacker writes that succeeded after the block: "
-                     f"{r['attacker_writes_after_block']}")
-        lines.append(f"- false responses: {r['false_responses']}; "
-                     f"HMI unavailable: {r['hmi_unavailable_s']}s")
+        lines.append(
+            f"- decision latency (first finding -> first countermeasure done): "
+            f"{r['decision_latency_s']}s"
+        )
+        lines.append(
+            f"- decisions: {r['decisions']}, explained: {r['explained_decisions']} "
+            f"(coverage {r['explained_coverage']})"
+        )
+        lines.append(
+            f"- attacker writes that succeeded after the block: {r['attacker_writes_after_block']}"
+        )
+        lines.append(
+            f"- false responses: {r['false_responses']}; HMI unavailable: {r['hmi_unavailable_s']}s"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -405,52 +488,74 @@ def aggregate(rows):
             ds = [m["detectors"][det] for m in runs if det in (m.get("detectors") or {})]
             hit = [d for d in ds if d["detected"]]
             lat = [d.get("latency_from_write_s") for d in hit]
-            detection.append({
-                "mode": mode, "detector": det, "runs": n,
-                "detected": len(hit) if attack else None,
-                "detection_rate": _rate(len(hit), n) if attack else None,
-                "latency_median_s": _median(lat) if attack else None,
-                "latency_min_s": min((x for x in lat if x is not None), default=None) if attack else None,
-                "latency_max_s": max((x for x in lat if x is not None), default=None) if attack else None,
-                "before_impact_rate": (_rate(sum(1 for d in hit if d.get("before_impact")), n)
-                                       if attack else None),
-                "false_alarms": sum(d.get("false_alarms", 0) for d in ds),
-                "runs_with_false_alarms": sum(1 for d in ds if d.get("false_alarms")),
-                "false_alarms_in_operator_windows":
-                    sum(d.get("false_alarms_in_operator_windows", 0) for d in ds),
-            })
-        impact.append({
-            "mode": mode, "runs": n,
-            "impact_rate": _rate(sum(1 for m in runs if m.get("abnormal_frames")), n),
-            "persists_rate": _rate(sum(1 for m in runs if m.get("impact_persists_after_attack")), n),
-            "recovered_rate": _rate(sum(1 for m in runs if m.get("recovered")), n),
-            "time_to_impact_median_s": _median(m.get("time_to_impact_s") for m in runs),
-            "impact_duration_median_s": _median(m.get("impact_duration_s") for m in runs),
-            "max_dev_median_pu": _median(m.get("max_abs_deviation_pu") for m in runs),
-            "manual_mode_median_s": _median(m.get("manual_mode_s") for m in runs),
-            "mitigated_median_s": _median(m.get("mitigated_s") for m in runs),
-        })
+            detection.append(
+                {
+                    "mode": mode,
+                    "detector": det,
+                    "runs": n,
+                    "detected": len(hit) if attack else None,
+                    "detection_rate": _rate(len(hit), n) if attack else None,
+                    "latency_median_s": _median(lat) if attack else None,
+                    "latency_min_s": min((x for x in lat if x is not None), default=None)
+                    if attack
+                    else None,
+                    "latency_max_s": max((x for x in lat if x is not None), default=None)
+                    if attack
+                    else None,
+                    "before_impact_rate": (
+                        _rate(sum(1 for d in hit if d.get("before_impact")), n) if attack else None
+                    ),
+                    "false_alarms": sum(d.get("false_alarms", 0) for d in ds),
+                    "runs_with_false_alarms": sum(1 for d in ds if d.get("false_alarms")),
+                    "false_alarms_in_operator_windows": sum(
+                        d.get("false_alarms_in_operator_windows", 0) for d in ds
+                    ),
+                }
+            )
+        impact.append(
+            {
+                "mode": mode,
+                "runs": n,
+                "impact_rate": _rate(sum(1 for m in runs if m.get("abnormal_frames")), n),
+                "persists_rate": _rate(
+                    sum(1 for m in runs if m.get("impact_persists_after_attack")), n
+                ),
+                "recovered_rate": _rate(sum(1 for m in runs if m.get("recovered")), n),
+                "time_to_impact_median_s": _median(m.get("time_to_impact_s") for m in runs),
+                "impact_duration_median_s": _median(m.get("impact_duration_s") for m in runs),
+                "max_dev_median_pu": _median(m.get("max_abs_deviation_pu") for m in runs),
+                "manual_mode_median_s": _median(m.get("manual_mode_s") for m in runs),
+                "mitigated_median_s": _median(m.get("mitigated_s") for m in runs),
+            }
+        )
     response = []
     for mode in modes:
-        rs = [r["metrics"]["response"] for r in rows
-              if r["mode"] == mode and (r["metrics"].get("response") or None)]
+        rs = [
+            r["metrics"]["response"]
+            for r in rows
+            if r["mode"] == mode and (r["metrics"].get("response") or None)
+        ]
         if not rs:
             continue
         n = len(rs)
         dec = sum(r.get("decisions", 0) for r in rs)
-        response.append({
-            "mode": mode, "policy": ",".join(sorted({str(r.get("policy")) for r in rs})),
-            "runs": n,
-            "accuracy": _rate(sum(1 for r in rs if r.get("accurate")), n),
-            "over_response_runs": sum(1 for r in rs if r.get("over_response")),
-            "decision_latency_median_s": _median(r.get("decision_latency_s") for r in rs),
-            "explained_coverage": _rate(sum(r.get("explained_decisions", 0) for r in rs), dec),
-            "attacker_writes_after_block_median":
-                _median(r.get("attacker_writes_after_block") for r in rs),
-            "false_responses": sum(r.get("false_responses", 0) for r in rs),
-            "failed_action_runs": sum(1 for r in rs if r.get("failed_actions")),
-            "hmi_unavailable_median_s": _median(r.get("hmi_unavailable_s") for r in rs),
-        })
+        response.append(
+            {
+                "mode": mode,
+                "policy": ",".join(sorted({str(r.get("policy")) for r in rs})),
+                "runs": n,
+                "accuracy": _rate(sum(1 for r in rs if r.get("accurate")), n),
+                "over_response_runs": sum(1 for r in rs if r.get("over_response")),
+                "decision_latency_median_s": _median(r.get("decision_latency_s") for r in rs),
+                "explained_coverage": _rate(sum(r.get("explained_decisions", 0) for r in rs), dec),
+                "attacker_writes_after_block_median": _median(
+                    r.get("attacker_writes_after_block") for r in rs
+                ),
+                "false_responses": sum(r.get("false_responses", 0) for r in rs),
+                "failed_action_runs": sum(1 for r in rs if r.get("failed_actions")),
+                "hmi_unavailable_median_s": _median(r.get("hmi_unavailable_s") for r in rs),
+            }
+        )
     return {"detection": detection, "impact": impact, "response": response}
 
 
@@ -463,39 +568,61 @@ def _fmt(v):
 
 
 def format_aggregate(agg) -> str:
-    lines = ["# CPS campaign summary", "", "## Detection", "",
-             "| mode | detector | runs | detection rate | latency from write (median, min–max s) "
-             "| before impact | false alarms (runs) | …in operator windows |",
-             "|---|---|---|---|---|---|---|---|"]
+    lines = [
+        "# CPS campaign summary",
+        "",
+        "## Detection",
+        "",
+        "| mode | detector | runs | detection rate | latency from write (median, min–max s) "
+        "| before impact | false alarms (runs) | …in operator windows |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     for r in agg["detection"]:
-        lat = (f"{_fmt(r['latency_median_s'])} ({_fmt(r['latency_min_s'])}–{_fmt(r['latency_max_s'])})"
-               if r["detected"] else "—")
-        lines.append(f"| {r['mode']} | {r['detector']} | {r['runs']} | {_fmt(r['detection_rate'])} "
-                     f"| {lat} | {_fmt(r['before_impact_rate'])} "
-                     f"| {r['false_alarms']} ({r['runs_with_false_alarms']}) "
-                     f"| {r['false_alarms_in_operator_windows']} |")
-    lines += ["", "## Physical impact", "",
-              "| mode | runs | impacted | persists | recovered | time-to-impact (s) "
-              "| impact duration (s) | max ΔV (pu) | MANUAL (s) |",
-              "|---|---|---|---|---|---|---|---|---|"]
+        lat = (
+            f"{_fmt(r['latency_median_s'])} ({_fmt(r['latency_min_s'])}–{_fmt(r['latency_max_s'])})"
+            if r["detected"]
+            else "—"
+        )
+        lines.append(
+            f"| {r['mode']} | {r['detector']} | {r['runs']} | {_fmt(r['detection_rate'])} "
+            f"| {lat} | {_fmt(r['before_impact_rate'])} "
+            f"| {r['false_alarms']} ({r['runs_with_false_alarms']}) "
+            f"| {r['false_alarms_in_operator_windows']} |"
+        )
+    lines += [
+        "",
+        "## Physical impact",
+        "",
+        "| mode | runs | impacted | persists | recovered | time-to-impact (s) "
+        "| impact duration (s) | max ΔV (pu) | MANUAL (s) |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
     for r in agg["impact"]:
-        lines.append(f"| {r['mode']} | {r['runs']} | {_fmt(r['impact_rate'])} "
-                     f"| {_fmt(r['persists_rate'])} | {_fmt(r['recovered_rate'])} "
-                     f"| {_fmt(r['time_to_impact_median_s'])} | {_fmt(r['impact_duration_median_s'])} "
-                     f"| {_fmt(r['max_dev_median_pu'])} | {_fmt(r['manual_mode_median_s'])} |")
+        lines.append(
+            f"| {r['mode']} | {r['runs']} | {_fmt(r['impact_rate'])} "
+            f"| {_fmt(r['persists_rate'])} | {_fmt(r['recovered_rate'])} "
+            f"| {_fmt(r['time_to_impact_median_s'])} | {_fmt(r['impact_duration_median_s'])} "
+            f"| {_fmt(r['max_dev_median_pu'])} | {_fmt(r['manual_mode_median_s'])} |"
+        )
     if agg.get("response"):
-        lines += ["", "## Response", "",
-                  "| mode | policy | runs | accuracy | over-response (runs) "
-                  "| decision latency (median s) | explained | writes after block (median) "
-                  "| false responses | failed (runs) | HMI unavailable (median s) |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|"]
+        lines += [
+            "",
+            "## Response",
+            "",
+            "| mode | policy | runs | accuracy | over-response (runs) "
+            "| decision latency (median s) | explained | writes after block (median) "
+            "| false responses | failed (runs) | HMI unavailable (median s) |",
+            "|---|---|---|---|---|---|---|---|---|---|---|",
+        ]
         for r in agg["response"]:
-            lines.append(f"| {r['mode']} | {r['policy']} | {r['runs']} | {_fmt(r['accuracy'])} "
-                         f"| {r['over_response_runs']} | {_fmt(r['decision_latency_median_s'])} "
-                         f"| {_fmt(r['explained_coverage'])} "
-                         f"| {_fmt(r['attacker_writes_after_block_median'])} "
-                         f"| {r['false_responses']} | {r['failed_action_runs']} "
-                         f"| {_fmt(r['hmi_unavailable_median_s'])} |")
+            lines.append(
+                f"| {r['mode']} | {r['policy']} | {r['runs']} | {_fmt(r['accuracy'])} "
+                f"| {r['over_response_runs']} | {_fmt(r['decision_latency_median_s'])} "
+                f"| {_fmt(r['explained_coverage'])} "
+                f"| {_fmt(r['attacker_writes_after_block_median'])} "
+                f"| {r['false_responses']} | {r['failed_action_runs']} "
+                f"| {_fmt(r['hmi_unavailable_median_s'])} |"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -509,20 +636,32 @@ def load_campaign_rows(campaign_dir):
         except (OSError, json.JSONDecodeError):
             continue
         run = m.get("run") or {}
-        rows.append({"mode": run.get("mode") or m.get("attack_mode") or "normal",
-                     "seed": run.get("seed"), "metrics": m})
+        rows.append(
+            {
+                "mode": run.get("mode") or m.get("attack_mode") or "normal",
+                "seed": run.get("seed"),
+                "metrics": m,
+            }
+        )
     return rows
 
 
-CI_HEADLINE = ("detectors.combined.detected", "detectors.combined.latency_from_write_s",
-               "impact_duration_s", "max_abs_deviation_pu", "false_alarms",
-               "response.accurate", "mitigated_s")
+CI_HEADLINE = (
+    "detectors.combined.detected",
+    "detectors.combined.latency_from_write_s",
+    "impact_duration_s",
+    "max_abs_deviation_pu",
+    "false_alarms",
+    "response.accurate",
+    "mitigated_s",
+)
 
 
 def write_aggregate(campaign_dir, rows=None):
     """Write summary.md / summary.csv / impact.csv; return the aggregate."""
     import csv
     from cyberrange.core import aggregate as core_agg
+
     rows = rows if rows is not None else load_campaign_rows(campaign_dir)
     agg = aggregate(rows)
     # Every numeric metric with its 95% CI, per mode (core statistics).
@@ -531,10 +670,18 @@ def write_aggregate(campaign_dir, rows=None):
     with open(os.path.join(campaign_dir, "summary.md"), "w") as f:
         f.write(format_aggregate(agg))
         f.write("\n## Headline metrics, mean [95% CI] (runs)\n\n")
-        f.write(core_agg.format_markdown(ci, by=("mode",), metrics=[
-            m for m in CI_HEADLINE if any(r["metric"] == m for r in ci)]))
-    for name, key in (("summary.csv", "detection"), ("impact.csv", "impact"),
-                      ("response.csv", "response")):
+        f.write(
+            core_agg.format_markdown(
+                ci,
+                by=("mode",),
+                metrics=[m for m in CI_HEADLINE if any(r["metric"] == m for r in ci)],
+            )
+        )
+    for name, key in (
+        ("summary.csv", "detection"),
+        ("impact.csv", "impact"),
+        ("response.csv", "response"),
+    ):
         table = agg.get(key) or []
         if key == "response" and not table:
             continue
@@ -551,8 +698,12 @@ def main():
     ap.add_argument("--out-dir", default=None, help="one run's directory")
     ap.add_argument("--report", default=None, help="write the markdown report here too")
     ap.add_argument("--json", default=None, help="write the metrics as JSON here too")
-    ap.add_argument("--aggregate", default=None, metavar="CAMPAIGN_DIR",
-                    help="aggregate <dir>/runs/*/metrics.json into summary.{md,csv}")
+    ap.add_argument(
+        "--aggregate",
+        default=None,
+        metavar="CAMPAIGN_DIR",
+        help="aggregate <dir>/runs/*/metrics.json into summary.{md,csv}",
+    )
     args = ap.parse_args()
     if args.aggregate:
         agg = write_aggregate(args.aggregate)

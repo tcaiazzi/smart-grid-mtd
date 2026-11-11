@@ -30,7 +30,7 @@ SEMP_FILES = [
 # only). mtd_rl_coordinator.py subclasses SEMPCoordinator from mtd_coordinator.py
 # above; rl_policy.py, which its decision loop imports, already ships above.
 SEMP_RL_FILES = [
-    ("cyberrange/planes/defense/agents/mtd_rl_coordinator.py", "/mtd_rl_coordinator.py"),
+    ("cyberrange/planes/defense/agents/mtd_rl_coordinator.py", "/mtd_rl_coordinator.py")
 ]
 
 # Copied onto every scmc machine, all variants: the QKD cert client always runs,
@@ -48,6 +48,4 @@ SCMC_FILES = [
 ]
 
 # Copied onto every router machine.
-ROUTER_FILES = [
-    ("cyberrange/planes/traffic/replay_background.sh", "/replay_background.sh"),
-]
+ROUTER_FILES = [("cyberrange/planes/traffic/replay_background.sh", "/replay_background.sh")]

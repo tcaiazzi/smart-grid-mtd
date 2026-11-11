@@ -4,24 +4,20 @@ enumeration solver, on synthetic campaign states.
 Run: `.venv/bin/python -m unittest tests.test_soar_policy`.
 """
 
-import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
-from cyberrange.planes.defense.soar import kg, mapping, policy, trees  # noqa: E402
+from cyberrange.planes.defense.soar import mapping, policy, trees  # noqa: E402
 from cyberrange.scenarios.cps import kg as cps_kg
 from tests.helpers.soar import HMI, finding, model  # noqa: E402
 
 SCENARIOS = {
-    "setpoint-overvoltage": [
-        finding("out_of_range_command", 1.0, HMI, "dg_setpoint", value=200.0)],
-    "breaker-open": [
-        finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0)],
+    "setpoint-overvoltage": [finding("out_of_range_command", 1.0, HMI, "dg_setpoint", value=200.0)],
+    "breaker-open": [finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0)],
     "manual-hijack": [
         finding("unsafe_command", 2.0, HMI, "ctrl_mode", conf=0.85, value=1.0),
-        finding("manual_mode_excursion", 3.0, None, "ctrl_mode")],
+        finding("manual_mode_excursion", 3.0, None, "ctrl_mode"),
+    ],
 }
 EXPECTED = {
     "setpoint-overvoltage": {"block_flow"},
@@ -96,8 +92,9 @@ class Policies(unittest.TestCase):
         self.assertIn("isolate_hmi", d.actions)
         self.assertEqual(d.needs_approval, ["isolate_hmi"])
         # ... and never proposes it when approvals are denied.
-        p2 = policy.make_policy("solver", [c for c in self.cms if c.id != "block_flow"],
-                                self.tree, approval="deny")
+        p2 = policy.make_policy(
+            "solver", [c for c in self.cms if c.id != "block_flow"], self.tree, approval="deny"
+        )
         d2 = p2.decide(st.snapshot(1.0), 1.0)
         self.assertNotIn("isolate_hmi", d2.actions)
 
@@ -119,14 +116,22 @@ class Policies(unittest.TestCase):
         for f in SCENARIOS["manual-hijack"]:
             st.update(f)
         d = p.decide(st.snapshot(3.0), 3.0)
-        self.assertIn("force_auto", d.actions)      # restoring is still worth it
+        self.assertIn("force_auto", d.actions)  # restoring is still worth it
         self.assertNotIn("causal pairing", d.rationale)
 
     def it_finding(self, klass, node, t, conf=0.9):
-        return {"i": 0, "t": t, "kind": "ot_finding", "detector": "it", "klass": klass,
-                "reasons": [klass], "confidence": conf, "maps_to": node,
-                "entities": {"src": HMI, "dst": None, "unit": None, "register": None,
-                             "name": None}, "evidence": {}}
+        return {
+            "i": 0,
+            "t": t,
+            "kind": "ot_finding",
+            "detector": "it",
+            "klass": klass,
+            "reasons": [klass],
+            "confidence": conf,
+            "maps_to": node,
+            "entities": {"src": HMI, "dst": None, "unit": None, "register": None, "name": None},
+            "evidence": {},
+        }
 
     def test_rules_early_response_on_it_exec(self):
         # With the IT sensor, a confirmed it_exec triggers an early response
@@ -137,7 +142,7 @@ class Policies(unittest.TestCase):
         st.update(self.it_finding("web_child_process", "it_exec", 1.0))
         d = p.decide(st.snapshot(1.0), 1.0)
         self.assertEqual(set(d.actions), {"kill_proc_tree", "block_flow"})
-        self.assertEqual(d.actions[0], "kill_proc_tree")   # order: earliest first
+        self.assertEqual(d.actions[0], "kill_proc_tree")  # order: earliest first
         self.assertTrue(d.explained)
 
     def test_it_countermeasures_absent_without_it_sensor(self):
@@ -150,7 +155,7 @@ class Policies(unittest.TestCase):
         st = mapping.CampaignState(self.tree, self.g)
         st.update(self.it_finding("web_child_process", "it_exec", 1.0))
         d = p.decide(st.snapshot(1.0), 1.0)
-        # an IT cut (kill_proc_tree / block_web_src) is cheaper than block_flow
+        # An IT cut (kill_proc_tree / block_web_src) is cheaper than block_flow.
         self.assertTrue({"kill_proc_tree", "block_web_src"} & set(d.actions))
         self.assertTrue(d.explained)
 
@@ -162,9 +167,12 @@ class Policies(unittest.TestCase):
             for b in front:
                 if a is b:
                     continue
-                self.assertFalse(b["risk"] <= a["risk"] and b["op"] <= a["op"]
-                                 and b["energy"] <= a["energy"]
-                                 and (b["risk"], b["op"], b["energy"]) != (a["risk"], a["op"], a["energy"]))
+                self.assertFalse(
+                    b["risk"] <= a["risk"]
+                    and b["op"] <= a["op"]
+                    and b["energy"] <= a["energy"]
+                    and (b["risk"], b["op"], b["energy"]) != (a["risk"], a["op"], a["energy"])
+                )
 
 
 if __name__ == "__main__":

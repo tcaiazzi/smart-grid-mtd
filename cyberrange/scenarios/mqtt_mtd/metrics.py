@@ -74,7 +74,8 @@ def ranking_nanogrid_detection(ranking_csv: str, scmc_pool) -> tuple:
 _LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)")
 _BROKER_HOP_RE = re.compile(
     r"\] hop seq=\d+\s+(\d{1,3}(?:\.\d{1,3}){3}):(\d+)\s+→\s+"
-    r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)")
+    r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)"
+)
 _SRC_HOP_RE = re.compile(r"\] src hop seq=\d+")
 _PAD_RE = re.compile(r"\] padding policy →")
 _FREQ_RE = re.compile(r"\] publish interval →")
@@ -92,10 +93,12 @@ def availability_cost(log_path: str) -> dict:
     Times are anchored to the first log line. Returns
     {"rel_events": [(rel_t, cost), ...] sorted, "total_cost": float, "window_s": float}.
     """
+
     def _ts(line: str):
         m = _LOG_TS_RE.match(line)
-        return (datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp()
-                if m else None)
+        return (
+            datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp() if m else None
+        )
 
     t0, events = None, []
     with open(log_path, errors="replace") as f:
@@ -133,8 +136,10 @@ def availability_cost(log_path: str) -> dict:
 # ── per-run metrics ───────────────────────────────────────────────────────────
 def _scmc_pool(run_dir):
     pool = {DEFAULT_SCMC_IP}
-    for path in (os.path.join(run_dir, "scmc_ips.txt"),
-                 os.path.join(run_dir, "..", "..", "datasets", "scmc_ips.txt")):
+    for path in (
+        os.path.join(run_dir, "scmc_ips.txt"),
+        os.path.join(run_dir, "..", "..", "datasets", "scmc_ips.txt"),
+    ):
         if os.path.exists(path):
             with open(path) as f:
                 pool |= {ip.strip() for ip in f.read().split(",") if ip.strip()}
@@ -149,20 +154,20 @@ def _nan_to_none(x):
 def compute_metrics(run_dir: str) -> dict:
     """Metrics of one attack run directory (see the module docstring)."""
     from cyberrange.scenarios.mqtt_mtd.scenario import count_publishes
+
     gt = read_jsonl(os.path.join(run_dir, "ground_truth.jsonl"))
     meta = next((e for e in gt if e.get("kind") == "run_meta"), {})
     pool = _scmc_pool(run_dir)
-    frac, n_ips = ranking_nanogrid_detection(os.path.join(run_dir, "nanogrid_ranking.csv"),
-                                             pool)
+    frac, n_ips = ranking_nanogrid_detection(os.path.join(run_dir, "nanogrid_ranking.csv"), pool)
     cnn_ip = meta.get("cnn_ip") or None
     blocks = [e for e in gt if e.get("kind") == "block"]
     client_log = os.path.join(run_dir, "client.log")
     cost = availability_cost(client_log) if os.path.exists(client_log) else {}
     tel = read_jsonl(os.path.join(run_dir, "telemetry.jsonl"))
-    outcomes = collections.Counter(e.get("status") for e in tel
-                                   if e.get("kind") == "action_outcome")
-    actions = collections.Counter(e.get("action") for e in tel
-                                  if e.get("kind") == "action_outcome")
+    outcomes = collections.Counter(
+        e.get("status") for e in tel if e.get("kind") == "action_outcome"
+    )
+    actions = collections.Counter(e.get("action") for e in tel if e.get("kind") == "action_outcome")
     gaps = [e for e in tel if e.get("kind") == "data_gap"]
     return {
         "variant": meta.get("variant"),
@@ -186,9 +191,21 @@ def compute_metrics(run_dir: str) -> dict:
 
 def format_report(m: dict) -> str:
     lines = ["# MQTT run metrics", ""]
-    for k in ("variant", "rl_policy", "seed", "publishes", "nanogrid_detect",
-              "n_nanogrid_ips", "blocked_ip", "blocked_is_scmc", "blocks",
-              "availability_cost", "n_costed_actions", "data_gaps", "max_data_gap_s"):
+    for k in (
+        "variant",
+        "rl_policy",
+        "seed",
+        "publishes",
+        "nanogrid_detect",
+        "n_nanogrid_ips",
+        "blocked_ip",
+        "blocked_is_scmc",
+        "blocks",
+        "availability_cost",
+        "n_costed_actions",
+        "data_gaps",
+        "max_data_gap_s",
+    ):
         lines.append(f"- {k}: {m.get(k)}")
     if m.get("mtd_outcomes"):
         lines.append(f"- mtd outcomes: {json.dumps(m['mtd_outcomes'], sort_keys=True)}")

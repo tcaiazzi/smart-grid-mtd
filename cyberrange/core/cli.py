@@ -18,15 +18,26 @@ LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 def build_parser(scenario, description=None):
     ap = argparse.ArgumentParser(description=description or f"{scenario.name} scenario run")
     common = ap.add_argument_group("platform")
-    common.add_argument("--seed", type=int, default=None,
-                        help="experiment seed; each role derives its own (core.context.role_seed)")
-    common.add_argument("--progress-file", default=None,
-                        help="progress ledger path (default <out-dir>/progress.jsonl)")
-    common.add_argument("--run-id", default=None,
-                        help="run id on the ledger (default: the output directory's name)")
-    common.add_argument("--poll-interval", type=float, default=2.0,
-                        help="seconds between live pulls of guest state into the ledger "
-                             "(0 = no live view)")
+    common.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="experiment seed; each role derives its own (core.context.role_seed)",
+    )
+    common.add_argument(
+        "--progress-file",
+        default=None,
+        help="progress ledger path (default <out-dir>/progress.jsonl)",
+    )
+    common.add_argument(
+        "--run-id", default=None, help="run id on the ledger (default: the output directory's name)"
+    )
+    common.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="seconds between live pulls of guest state into the ledger (0 = no live view)",
+    )
     scenario.add_arguments(ap)
     return ap
 

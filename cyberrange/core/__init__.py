@@ -1,6 +1,6 @@
 """cyberrange.core — the platform core every scenario runs on.
 
-A scenario is a composition of plane components (cyberrange.planes.attack, cyberrange.planes.defense,
+A scenario is a composition of plane components (the attack, defense,
 cyberrange.planes.traffic, monitor) on a declared topology. The core owns everything
 that is not specific to one scenario:
 

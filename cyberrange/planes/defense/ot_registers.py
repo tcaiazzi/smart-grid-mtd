@@ -20,40 +20,40 @@ registers, which is exactly what the DPI sensor watches for.
 """
 
 # ── Transport ────────────────────────────────────────────────────────────────
-MODBUS_PORT = 5020          # TCP port the engine's Modbus server listens on
-UNIT_ID     = 1             # Modbus unit / slave id of the physical engine
+MODBUS_PORT = 5020  # TCP port the engine's Modbus server listens on
+UNIT_ID = 1  # Modbus unit / slave id of the physical engine
 
 # Modbus function codes the sensor cares about (writes to holding registers).
-FC_READ_HOLDING_REGISTERS   = 0x03
-FC_READ_INPUT_REGISTERS     = 0x04
-FC_WRITE_SINGLE_REGISTER    = 0x06
+FC_READ_HOLDING_REGISTERS = 0x03
+FC_READ_INPUT_REGISTERS = 0x04
+FC_WRITE_SINGLE_REGISTER = 0x06
 FC_WRITE_MULTIPLE_REGISTERS = 0x10
 READ_FUNCTION_CODES = (FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS)
 WRITE_FUNCTION_CODES = (FC_WRITE_SINGLE_REGISTER, FC_WRITE_MULTIPLE_REGISTERS)
 
 # ── Input registers: sensors (engine -> PLC, read-only, fc 0x04) ─────────────
 # address -> (name, scale, unit)
-IR_V_LOAD    = 0   # voltage at the load bus          (pu * 1000)
-IR_V_DG      = 1   # voltage at the DG bus            (pu * 1000)
-IR_LINE_LOAD = 2   # feeder line loading              (percent * 10)
-IR_P_LOAD    = 3   # load active power                (kW * 10)
-IR_P_DG      = 4   # DG actual active power output    (kW * 10)
-IR_ABNORMAL  = 5   # 1 if any bus is out of the normal voltage band, else 0
+IR_V_LOAD = 0  # voltage at the load bus          (pu * 1000)
+IR_V_DG = 1  # voltage at the DG bus            (pu * 1000)
+IR_LINE_LOAD = 2  # feeder line loading              (percent * 10)
+IR_P_LOAD = 3  # load active power                (kW * 10)
+IR_P_DG = 4  # DG actual active power output    (kW * 10)
+IR_ABNORMAL = 5  # 1 if any bus is out of the normal voltage band, else 0
 
 SENSOR_REGISTERS = {
-    IR_V_LOAD:    ("v_load",    1000.0, "pu"),
-    IR_V_DG:      ("v_dg",      1000.0, "pu"),
-    IR_LINE_LOAD: ("line_load",  10.0,  "%"),
-    IR_P_LOAD:    ("p_load",     10.0,  "kW"),
-    IR_P_DG:      ("p_dg",       10.0,  "kW"),
-    IR_ABNORMAL:  ("abnormal",    1.0,  "bool"),
+    IR_V_LOAD: ("v_load", 1000.0, "pu"),
+    IR_V_DG: ("v_dg", 1000.0, "pu"),
+    IR_LINE_LOAD: ("line_load", 10.0, "%"),
+    IR_P_LOAD: ("p_load", 10.0, "kW"),
+    IR_P_DG: ("p_dg", 10.0, "kW"),
+    IR_ABNORMAL: ("abnormal", 1.0, "bool"),
 }
 SENSOR_COUNT = max(SENSOR_REGISTERS) + 1
 
 # ── Holding registers: actuators (PLC -> engine, read/write) ─────────────────
-HR_DG_SETPOINT = 0   # DG active-power setpoint   (kW * 10)
-HR_SWITCH_CMD  = 1   # feeder breaker: 0 = closed, 1 = open
-HR_CTRL_MODE   = 2   # control authority: 0 = AUTO (PLC regulates), 1 = MANUAL (operator)
+HR_DG_SETPOINT = 0  # DG active-power setpoint   (kW * 10)
+HR_SWITCH_CMD = 1  # feeder breaker: 0 = closed, 1 = open
+HR_CTRL_MODE = 2  # control authority: 0 = AUTO (PLC regulates), 1 = MANUAL (operator)
 
 CTRL_AUTO, CTRL_MANUAL = 0, 1
 
@@ -61,9 +61,9 @@ CTRL_AUTO, CTRL_MANUAL = 0, 1
 # valid_lo/valid_hi define the legitimate command envelope; a write outside it
 # is an out-of-range command (one of the sensor's finding classes).
 ACTUATOR_REGISTERS = {
-    HR_DG_SETPOINT: ("dg_setpoint", 10.0, 0.0, 60.0),   # DG rated 60 kW
-    HR_SWITCH_CMD:  ("switch_cmd",   1.0, 0.0,  1.0),    # boolean breaker
-    HR_CTRL_MODE:   ("ctrl_mode",    1.0, 0.0,  1.0),    # auto / manual
+    HR_DG_SETPOINT: ("dg_setpoint", 10.0, 0.0, 60.0),  # DG rated 60 kW
+    HR_SWITCH_CMD: ("switch_cmd", 1.0, 0.0, 1.0),  # boolean breaker
+    HR_CTRL_MODE: ("ctrl_mode", 1.0, 0.0, 1.0),  # auto / manual
 }
 ACTUATOR_COUNT = max(ACTUATOR_REGISTERS) + 1
 
@@ -77,20 +77,24 @@ SENSITIVE_ACTUATORS = {HR_DG_SETPOINT, HR_SWITCH_CMD, HR_CTRL_MODE}
 # dispatch a setpoint. Nobody operates the feeder breaker remotely (it is a
 # local/protection device), so any remote breaker write violates policy.
 ROLE_POLICY = {
-    "plc": {"reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
-            "writes": {HR_DG_SETPOINT}},
-    "hmi": {"reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
-            "writes": {HR_CTRL_MODE, HR_DG_SETPOINT}},
+    "plc": {
+        "reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
+        "writes": {HR_DG_SETPOINT},
+    },
+    "hmi": {
+        "reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
+        "writes": {HR_CTRL_MODE, HR_DG_SETPOINT},
+    },
 }
 
 # ── Control constants shared by the PLC and the sensor ───────────────────────
-DG_NOMINAL_KW = 20.0     # setpoint the PLC holds / returns to in AUTO
-V_REG_LOW  = 0.97        # PLC regulation band (tighter than the alarm band)
+DG_NOMINAL_KW = 20.0  # setpoint the PLC holds / returns to in AUTO
+V_REG_LOW = 0.97  # PLC regulation band (tighter than the alarm band)
 V_REG_HIGH = 1.03
 
 # ── Normal operating envelope (defines "out of normal state") ────────────────
-V_BAND_LOW  = 0.95   # pu
-V_BAND_HIGH = 1.05   # pu
+V_BAND_LOW = 0.95  # pu
+V_BAND_HIGH = 1.05  # pu
 LINE_LOAD_MAX = 100.0  # percent
 
 REG_WORD_MAX = 0xFFFF

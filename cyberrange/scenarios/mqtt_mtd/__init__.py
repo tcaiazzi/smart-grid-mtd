@@ -14,12 +14,17 @@ timers or an RL policy) morphs the traffic to defeat the fingerprinting."""
 # without inverting the plane -> scenario dependency.
 SOURCES = {
     "scenario (topology, episode, CLI, campaign, metrics, manifest)": [
-        "cyberrange/scenarios/mqtt_mtd/*.py", "main.py"],
+        "cyberrange/scenarios/mqtt_mtd/*.py",
+        "main.py",
+    ],
     "analysis & paper figures": ["cyberrange/scenarios/mqtt_mtd/analysis/*.py"],
     "offline training (RL coordinator, delivery detector)": [
-        "cyberrange/scenarios/mqtt_mtd/training/*.py"],
+        "cyberrange/scenarios/mqtt_mtd/training/*.py"
+    ],
     "dataset tooling": ["cyberrange/scenarios/mqtt_mtd/tools/*.py"],
     "host-side domain logic owned by the attack plane (CNN fingerprinter)": [
-        "cyberrange/planes/attack/classify.py", "cyberrange/planes/attack/thresholds.py"],
+        "cyberrange/planes/attack/classify.py",
+        "cyberrange/planes/attack/thresholds.py",
+    ],
 }
 GUEST_MANIFESTS = ("SEMP_FILES", "SEMP_RL_FILES", "SCMC_FILES", "ROUTER_FILES")

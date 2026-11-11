@@ -5,6 +5,24 @@
 # An editable install during a path refactor would shadow the sources with a
 # stale copy and make the suite pass for the wrong reason.
 
+[tool.ruff]
+# 100 columns, not the 88 default: the code sits well inside it (p99 is 95), so
+# the formatter reflows a hundred lines rather than nine hundred.
+line-length = 100
+# Markdown is excluded: ruff also formats Python inside fenced blocks, and the
+# examples in docs/ and .claude/skills/ are prose that is edited by hand.
+extend-exclude = [".venv", "output", "assets", "*.md"]
+
+[tool.ruff.format]
+quote-style = "double"
+skip-magic-trailing-comma = true
+
+[tool.ruff.lint]
+# pycodestyle errors, pyflakes, warnings. Import sorting (I) stays off on
+# purpose: local imports here are ordered by meaning — core before planes,
+# planes before scenarios — and I001 would alphabetise that away.
+select = ["E", "F", "W"]
+
 [tool.pytest.ini_options]
 # The repo root on sys.path, so `import cyberrange...` works without installing.
 pythonpath = ["."]

@@ -47,10 +47,11 @@ from cyberrange.core import paths
 @dataclass
 class Iface:
     """One NIC: the collision domain it joins and how it is addressed."""
+
     link: str
-    cidr: Optional[str] = None          # primary address, e.g. "10.0.0.2/24"
-    aliases: List[str] = field(default_factory=list)   # extra addresses (MTD pools)
-    promisc: bool = False               # passive sniffing NIC (brought up, no address)
+    cidr: Optional[str] = None  # primary address, e.g. "10.0.0.2/24"
+    aliases: List[str] = field(default_factory=list)  # extra addresses (MTD pools)
+    promisc: bool = False  # passive sniffing NIC (brought up, no address)
 
 
 @dataclass
@@ -58,7 +59,7 @@ class Route:
     dest: str
     via: str
     dev: str
-    replace: bool = False   # "replace" when another NIC (bridged mgmt) may own a default
+    replace: bool = False  # "replace" when another NIC (bridged mgmt) may own a default
 
     def command(self) -> str:
         verb = "replace" if self.replace else "add"
@@ -69,12 +70,12 @@ class Route:
 class Node:
     name: str
     ifaces: List[Iface] = field(default_factory=list)
-    image: Optional[str] = None         # None -> Topology.default_image; "" -> Kathará's default
-    role: str = "infra"                 # target | attacker | defender | plant | infra ...
+    image: Optional[str] = None  # None -> Topology.default_image; "" -> Kathará's default
+    role: str = "infra"  # target | attacker | defender | plant | infra ...
     routes: List[Route] = field(default_factory=list)
-    startup: List[str] = field(default_factory=list)    # after addressing + routes
-    files: List[Tuple[str, str]] = field(default_factory=list)   # (host path, guest path)
-    mgmt_port: Optional[str] = None     # "HOST:GUEST/tcp": bridged NIC + port forward
+    startup: List[str] = field(default_factory=list)  # after addressing + routes
+    files: List[Tuple[str, str]] = field(default_factory=list)  # (host path, guest path)
+    mgmt_port: Optional[str] = None  # "HOST:GUEST/tcp": bridged NIC + port forward
 
     def addresses(self) -> Dict[str, str]:
         """{ethN: primary cidr} for every addressed NIC (passive NICs omitted)."""
@@ -85,17 +86,17 @@ class Node:
         for i, f in enumerate(self.ifaces):
             if f.promisc:
                 cmds += [f"ip link set eth{i} promisc on", f"ip link set eth{i} up"]
-        cmds += [f"ip address add {f.cidr} dev eth{i}"
-                 for i, f in enumerate(self.ifaces) if f.cidr]
+        cmds += [f"ip address add {f.cidr} dev eth{i}" for i, f in enumerate(self.ifaces) if f.cidr]
         cmds += [r.command() for r in self.routes]
-        cmds += [f"ip address add {a} dev eth{i}"
-                 for i, f in enumerate(self.ifaces) for a in f.aliases]
+        cmds += [
+            f"ip address add {a} dev eth{i}" for i, f in enumerate(self.ifaces) for a in f.aliases
+        ]
         return cmds + list(self.startup)
 
 
 @dataclass
 class Topology:
-    name: str                           # Kathará lab name (a deploy replaces a lab of this name)
+    name: str  # Kathará lab name (a deploy replaces a lab of this name)
     nodes: List[Node] = field(default_factory=list)
     default_image: Optional[str] = None
 
@@ -121,7 +122,7 @@ def build_lab(topo: Topology):
     """Build (do not deploy) the Kathará Lab. Returns (lab, machines, startups):
     machines is {name: Machine}, startups {name: [command, ...]} — the exact
     startup commands, inspectable without materialising the filesystem."""
-    from Kathara.model.Lab import Lab   # Kathará only when a lab is actually built
+    from Kathara.model.Lab import Lab  # Kathará only when a lab is actually built
 
     lab = Lab(topo.name)
     machines, startups = {}, {}
@@ -151,15 +152,27 @@ def to_dict(topo: Topology) -> dict:
     return {
         "name": topo.name,
         "links": topo.links(),
-        "nodes": [{
-            "name": n.name, "image": topo.image_of(n), "role": n.role,
-            "ifaces": [{"name": f"eth{i}", "link": f.link, "cidr": f.cidr,
-                        "aliases": list(f.aliases), "promisc": f.promisc}
-                       for i, f in enumerate(n.ifaces)],
-            "routes": [r.command() for r in n.routes],
-            "files": [g for _h, g in n.files],
-            "mgmt_port": n.mgmt_port,
-        } for n in topo.nodes],
+        "nodes": [
+            {
+                "name": n.name,
+                "image": topo.image_of(n),
+                "role": n.role,
+                "ifaces": [
+                    {
+                        "name": f"eth{i}",
+                        "link": f.link,
+                        "cidr": f.cidr,
+                        "aliases": list(f.aliases),
+                        "promisc": f.promisc,
+                    }
+                    for i, f in enumerate(n.ifaces)
+                ],
+                "routes": [r.command() for r in n.routes],
+                "files": [g for _h, g in n.files],
+                "mgmt_port": n.mgmt_port,
+            }
+            for n in topo.nodes
+        ],
     }
 
 
@@ -174,6 +187,7 @@ def export_lab_conf(topo: Topology, out_dir: str, copy_files: bool = False) -> s
     Guest files are listed as comments unless ``copy_files`` (then they are
     copied under <out_dir>/<node>/). Returns the lab.conf path."""
     import shutil
+
     os.makedirs(out_dir, exist_ok=True)
     lines = [f'LAB_DESCRIPTION="{topo.name}"', ""]
     for n in topo.nodes:

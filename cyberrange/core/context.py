@@ -117,8 +117,7 @@ class RunContext:
     ``state`` is free per-run scratch space for components (poll cursors...).
     """
 
-    def __init__(self, manager, lab, machines, args, out_dir, emit, scenario=None,
-                 topology=None):
+    def __init__(self, manager, lab, machines, args, out_dir, emit, scenario=None, topology=None):
         self.manager, self.lab, self.machines = manager, lab, machines
         self.args, self.out_dir, self.emit = args, out_dir, emit
         self.scenario, self.topology = scenario, topology
@@ -127,7 +126,7 @@ class RunContext:
         self.gt = None
         self._extra_artifacts = []
 
-    # seeds
+    # Seeds
     @property
     def seed(self):
         return getattr(self.args, "seed", None)
@@ -135,7 +134,7 @@ class RunContext:
     def role_seed(self, role):
         return role_seed(self.seed, role)
 
-    # guest execution
+    # Guest execution
     def machine(self, node):
         return self.machines[node] if isinstance(node, str) else node
 
@@ -170,14 +169,13 @@ class RunContext:
             log.warning("could not download %s:%s (%s)", node, guest_path, e)
             return None
 
-    # streams
+    # Streams
     def open_ground_truth(self, **run_meta):
         """Open <out_dir>/ground_truth.jsonl (host-only) and record run_meta."""
         if self.gt is None:
             os.makedirs(self.out_dir, exist_ok=True)
             self.gt = GroundTruth(self.path(GROUND_TRUTH))
-            self.gt.record("run_meta", scenario=getattr(self.scenario, "name", None),
-                           **run_meta)
+            self.gt.record("run_meta", scenario=getattr(self.scenario, "name", None), **run_meta)
         return self.gt
 
     def close_ground_truth(self):
@@ -198,10 +196,9 @@ class RunContext:
             yield
             ok = True
         finally:
-            self.emit("phase", name=name, state="end", ok=ok,
-                      duration_s=round(time.time() - t0, 3))
+            self.emit("phase", name=name, state="end", ok=ok, duration_s=round(time.time() - t0, 3))
 
-    # components
+    # Components
     def start(self, component):
         component.start(self)
         self.components.append(component)
@@ -232,7 +229,7 @@ class RunContext:
     def telemetry_sources(self):
         return [s for c in self.components for s in c.telemetry()]
 
-    # live observation
+    # Live observation
     def poll(self):
         for c in self.components:
             try:

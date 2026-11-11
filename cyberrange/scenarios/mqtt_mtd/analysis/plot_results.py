@@ -63,19 +63,22 @@ import numpy as np
 plt.rcParams["axes.labelsize"] = 12  # axis (x/y) label font size
 plt.rcParams["xtick.labelsize"] = 12  # x tick-label font size
 plt.rcParams["ytick.labelsize"] = 12  # y tick-label font size
-import pandas as pd
+import pandas as pd  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
-from cyberrange.planes.attack.classify import (
+from cyberrange.planes.attack.classify import (  # noqa: E402  (after matplotlib.use above)
     extract_features,
     load_artifacts,
     predict_packets,
     rank_nanogrid_ips,
 )
-from cyberrange.scenarios.mqtt_mtd.analysis.entropy import plot_entropy_comparison, plot_entropy_timeseries
-from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD
+from cyberrange.scenarios.mqtt_mtd.analysis.entropy import (  # noqa: E402  (after matplotlib.use above)
+    plot_entropy_comparison,
+    plot_entropy_timeseries,
+)
+from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
-DEFAULT_SCMC_IP = "10.0.0.2"   # SCMC source IP as seen on the wire (lab default)
-CUTOFF_GAP_S = 8.0             # silence after which a surviving SCMC is deemed cut off
+DEFAULT_SCMC_IP = "10.0.0.2"  # SCMC source IP as seen on the wire (lab default)
+CUTOFF_GAP_S = 8.0  # silence after which a surviving SCMC is deemed cut off
 
 # Markers left by run_experiment.py in the attack run.log.
 BLOCK_RE = re.compile(r"Blocking nanogrid IP:\s*(\d{1,3}(?:\.\d{1,3}){3})")
@@ -86,21 +89,22 @@ LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3})")
 @dataclass
 class Scenario:
     """One experiment run: where its artifacts live and which model it used."""
+
     label: str
-    out_dir: str                 # holds attacker_capture.pcap, scmc/router captures, ...
-    model_dir: str               # <exp-dir>/model with model.pt + scaler.pkl
-    exp_dir: str = ""            # per-config root (holds entropy.csv / entropy_timeseries.csv)
-    ranking_csv: str = ""        # nanogrid_ranking.csv from attack run
-    predictions_csv: str = ""    # predictions.csv from evaluate run (has label_true)
-    # filled in by the analysis below
+    out_dir: str  # holds attacker_capture.pcap, scmc/router captures, ...
+    model_dir: str  # <exp-dir>/model with model.pt + scaler.pkl
+    exp_dir: str = ""  # per-config root (holds entropy.csv / entropy_timeseries.csv)
+    ranking_csv: str = ""  # nanogrid_ranking.csv from attack run
+    predictions_csv: str = ""  # predictions.csv from evaluate run (has label_true)
+    # Filled in by the analysis below.
     delivered_epochs: list = field(default_factory=list)
-    router_t_min: float = float("nan")   # link-B capture window start (axis anchor)
-    router_t_max: float = float("nan")   # link-B capture window end
+    router_t_min: float = float("nan")  # link-B capture window start (axis anchor)
+    router_t_max: float = float("nan")  # link-B capture window end
     nanogrid_detect: float = float("nan")  # avg attacker nanogrid_frac over the nanogrid IPs
     n_nanogrid_ips: int = 0
     sent_count: int = 0
     delivery_ratio: float = float("nan")
-    scmc_frac: float = float("nan")      # attacker score pooled over the SCMC IP pool
+    scmc_frac: float = float("nan")  # attacker score pooled over the SCMC IP pool
     top_ip: str = ""
     top_frac: float = float("nan")
     blocked_scmc: bool = False
@@ -123,14 +127,13 @@ def make_scenario(label: str, exp_dir: str, model_exp_dir: str, model_src: str) 
         os.path.join(model_exp_dir, "model"),
         exp_dir=exp_dir,
         ranking_csv=os.path.join(attack_dir, "nanogrid_ranking.csv"),
-        predictions_csv=os.path.join(
-            exp_dir, "eval", f"model-{model_src}", "predictions.csv"
-        ),
+        predictions_csv=os.path.join(exp_dir, "eval", f"model-{model_src}", "predictions.csv"),
     )
 
 
-def default_scenarios(root: str, mtd_params_slug: str, bg_replay_mbps: int = 2,
-                      mtd_prefix: str = "mtd") -> list:
+def default_scenarios(
+    root: str, mtd_params_slug: str, bg_replay_mbps: int = 2, mtd_prefix: str = "mtd"
+) -> list:
     """The three scenarios the experiment is designed to compare.
 
     `mtd_prefix` selects the coordinator dir under test (mtd / mtdrl / mtdrl-<tag>)
@@ -152,6 +155,7 @@ def baseline_scenarios(root: str, bg_replay_mbps: int = 2) -> list:
 
 
 # ── Availability: match SCMC-sent packets against what reached the SEMP ───────
+
 
 def _iter_tcp(pcap_path: str):
     """Yield (timestamp, src_ip, tcp) for every IPv4/TCP packet in a pcap."""
@@ -275,8 +279,9 @@ def parse_block_event(run_log_path: str) -> tuple:
     return block_epoch, blocked_ip, decided_no_block
 
 
-def scmc_cut_off(delivered_epochs: list, router_t_max: float,
-                 block_epoch, decided_no_block: bool) -> bool:
+def scmc_cut_off(
+    delivered_epochs: list, router_t_max: float, block_epoch, decided_no_block: bool
+) -> bool:
     """Did the attacker's drop rule actually sever the SCMC→SEMP telemetry?
 
     True iff delivery to the SEMP falls silent and stays silent until the capture
@@ -299,6 +304,7 @@ def scmc_cut_off(delivered_epochs: list, router_t_max: float,
 
 
 # ── Detection: re-score attacker_capture.pcap with the scenario's model ───────
+
 
 def score_detection(pcap_path: str, model_dir: str) -> pd.DataFrame:
     """Replicate run_experiment.detect_nanogrid_ip: rank source IPs by nanogrid frac."""
@@ -324,11 +330,12 @@ def scmc_pool_detection(ranking: pd.DataFrame, scmc_pool) -> float:
 
 
 from cyberrange.scenarios.mqtt_mtd.metrics import (  # noqa: E402  (shared with per-run metrics)
-    NANOGRID_SUBNET_PREFIXES, ranking_nanogrid_detection,
+    ranking_nanogrid_detection,
 )
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
+
 
 def plot_detection(scenarios: list, out_path: str) -> None:
     """Attacker fingerprinting of the nanogrid IPs — baseline vs MTD.
@@ -346,23 +353,28 @@ def plot_detection(scenarios: list, out_path: str) -> None:
     labels = [s.label.replace("\n", " ") for s in have]
     vals = [s.nanogrid_detect for s in have]
     x = np.arange(len(have))
-    # baseline grey, MTD green (matches the coordinator-comparison palette)
-    colors = ["#7f8c8d" if os.path.basename(s.exp_dir).startswith("baseline-")
-              else "#27ae60" for s in have]
+    # Baseline grey, MTD green (matches the coordinator-comparison palette)
+    colors = [
+        "#7f8c8d" if os.path.basename(s.exp_dir).startswith("baseline-") else "#27ae60"
+        for s in have
+    ]
 
     fig, ax = plt.subplots(figsize=(7, 5))
     bars = ax.bar(x, vals, color=colors, width=0.55, edgecolor="black")
 
-    
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylabel("Avg attacker accuracy on nanogrid IPs")
     ax.set_ylim(0, 1.05)
 
     for bar, s in zip(bars, have):
-        ax.annotate(f"{s.nanogrid_detect:.2f}\n({s.n_nanogrid_ips} IPs)",
-                    (bar.get_x() + bar.get_width() / 2, s.nanogrid_detect),
-                    ha="center", va="bottom", fontsize=9)
+        ax.annotate(
+            f"{s.nanogrid_detect:.2f}\n({s.n_nanogrid_ips} IPs)",
+            (bar.get_x() + bar.get_width() / 2, s.nanogrid_detect),
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
 
     ax.legend(loc="upper right", fontsize=9)
     fig.tight_layout()
@@ -398,11 +410,18 @@ def plot_availability(scenarios: list, out_path: str) -> None:
         t0 = s.router_t_min
         rel = np.array(sorted(max(e - t0, 0.0) for e in s.delivered_epochs), dtype=float)
         cum = np.arange(1, len(rel) + 1, dtype=float)
-        # frame at 0 and hold the final value to t_max (flat tail = no telemetry)
+        # Frame at 0 and hold the final value to t_max (flat tail = no telemetry)
         rel = np.concatenate(([0.0], rel, [t_max]))
         cum = np.concatenate(([0.0], cum, [cum[-1]]))
-        ax.step(rel, cum, where="post", lw=2.2, alpha=0.8,
-                ls=styles[i % len(styles)], label=s.label.replace("\n", " "))
+        ax.step(
+            rel,
+            cum,
+            where="post",
+            lw=2.2,
+            alpha=0.8,
+            ls=styles[i % len(styles)],
+            label=s.label.replace("\n", " "),
+        )
 
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Cumulative Updates Delivered")
@@ -424,7 +443,9 @@ def plot_topk_flows(scenarios: list, out_path: str, k: int = 5) -> None:
     valid = []
     for s in scenarios:
         if not s.predictions_csv or not os.path.exists(s.predictions_csv):
-            print(f"[warn] {s.predictions_csv or '(none)'} missing — skipping top-k for '{s.label}'")
+            print(
+                f"[warn] {s.predictions_csv or '(none)'} missing — skipping top-k for '{s.label}'"
+            )
             continue
         valid.append(s)
 
@@ -432,20 +453,16 @@ def plot_topk_flows(scenarios: list, out_path: str, k: int = 5) -> None:
         print("[plot] no predictions data — skipping top-k flows chart")
         return
 
-    fig, axes = plt.subplots(1, len(valid), figsize=(5 * len(valid), max(3, k * 0.55 + 1.5)),
-                             sharey=False)
+    fig, axes = plt.subplots(
+        1, len(valid), figsize=(5 * len(valid), max(3, k * 0.55 + 1.5)), sharey=False
+    )
     if len(valid) == 1:
         axes = [axes]
 
     for ax, s in zip(axes, valid):
         preds = pd.read_csv(s.predictions_csv)
 
-        flow_conf = (
-            preds.groupby("flow_key")["prob"]
-            .mean()
-            .sort_values(ascending=False)
-            .head(k)
-        )
+        flow_conf = preds.groupby("flow_key")["prob"].mean().sort_values(ascending=False).head(k)
 
         labels = [fk if len(fk) <= 35 else f"…{fk[-33:]}" for fk in flow_conf.index]
         confs = flow_conf.values
@@ -455,16 +472,22 @@ def plot_topk_flows(scenarios: list, out_path: str, k: int = 5) -> None:
         ax.set_yticklabels(labels, fontsize=8)
         ax.invert_yaxis()
         ax.set_xlim(0, 1.05)
-        ax.axvline(DETECT_THRESHOLD, ls="--", color="gray", lw=1,
-                   label=f"threshold ({DETECT_THRESHOLD})")
+        ax.axvline(
+            DETECT_THRESHOLD, ls="--", color="gray", lw=1, label=f"threshold ({DETECT_THRESHOLD})"
+        )
         ax.set_xlabel("confidence (mean prob)")
         ax.set_title(s.label.replace("\n", " "), fontsize=10)
         ax.legend(fontsize=8, loc="lower right")
         ax.grid(True, axis="x", alpha=0.3)
 
         for bar, conf in zip(bars, confs):
-            ax.text(min(conf + 0.02, 1.0), bar.get_y() + bar.get_height() / 2,
-                    f"{conf:.2f}", va="center", fontsize=8)
+            ax.text(
+                min(conf + 0.02, 1.0),
+                bar.get_y() + bar.get_height() / 2,
+                f"{conf:.2f}",
+                va="center",
+                fontsize=8,
+            )
 
     fig.suptitle(f"Top-{k} suspected flows by nanogrid confidence", fontsize=12, y=1.01)
     fig.tight_layout()
@@ -482,11 +505,10 @@ def plot_entropy_section(scenarios: list, plots_dir: str) -> None:
     the timeseries comes from the MTD config (or the baseline one for baseline-only
     runs). Missing CSVs are warn-skipped, like the top-k flows chart.
     """
+
     def _exp_dir(pred):
         return next(
-            (s.exp_dir for s in scenarios
-             if s.exp_dir and pred(os.path.basename(s.exp_dir))),
-            None,
+            (s.exp_dir for s in scenarios if s.exp_dir and pred(os.path.basename(s.exp_dir))), None
         )
 
     # The MTD dir is whichever scenario isn't the baseline — covers mtd / mtdrl /
@@ -514,11 +536,11 @@ def plot_entropy_section(scenarios: list, plots_dir: str) -> None:
         )
     else:
         missing = [p for p in (baseline_csv, mtd_csv) if not os.path.exists(p)]
-        print(f"[warn] {missing} missing — skipping entropy comparison "
-              f"(run `make entropy` first)")
+        print(f"[warn] {missing} missing — skipping entropy comparison (run `make entropy` first)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
+
 
 def load_scmc_pool(exp_dir: str, fallback_ip: str) -> set:
     """SCMC source-IP pool for a config, from datasets/scmc_ips.txt.
@@ -537,7 +559,7 @@ def load_scmc_pool(exp_dir: str, fallback_ip: str) -> set:
 
 
 def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
-    ip = scmc_ip or DEFAULT_SCMC_IP   # SCMC source IP on both link A and link B
+    ip = scmc_ip or DEFAULT_SCMC_IP  # SCMC source IP on both link A and link B
     for s in scenarios:
         scmc_pcap = os.path.join(s.out_dir, "scmc_capture.pcap")
         router_pcap = os.path.join(s.out_dir, "router_capture.pcap")
@@ -547,29 +569,30 @@ def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
         # Attacker fingerprinting of the nanogrid: average the saved ranking's
         # nanogrid_frac over the src_ips that belong to the nanogrid in this
         # experiment (SCMC pool + SEMP subnet). Cheap CSV read — always computed.
-        s.nanogrid_detect, s.n_nanogrid_ips = ranking_nanogrid_detection(
-            s.ranking_csv, scmc_pool
-        )
+        s.nanogrid_detect, s.n_nanogrid_ips = ranking_nanogrid_detection(s.ranking_csv, scmc_pool)
 
         # Availability: match SCMC-sent packets against what reached the SEMP, then
         # decide the outcome — was the SCMC actually cut off after the attacker's
         # drop rule? (independent of whether detection ranked it first).
         if os.path.exists(scmc_pcap) and os.path.exists(router_pcap):
-            print(f"[avail] {s.label!r}: matching {scmc_pcap} vs {router_pcap} "
-                  f"(scmc pool={sorted(scmc_pool)})")
-            s.delivered_epochs, s.sent_count, s.router_t_min, s.router_t_max = \
-                compute_delivery(scmc_pcap, router_pcap, scmc_pool)
+            print(
+                f"[avail] {s.label!r}: matching {scmc_pcap} vs {router_pcap} "
+                f"(scmc pool={sorted(scmc_pool)})"
+            )
+            s.delivered_epochs, s.sent_count, s.router_t_min, s.router_t_max = compute_delivery(
+                scmc_pcap, router_pcap, scmc_pool
+            )
             if s.sent_count > 0:
                 s.delivery_ratio = len(s.delivered_epochs) / s.sent_count
             block_epoch, s.blocked_ip, no_block = parse_block_event(
                 os.path.join(s.out_dir, "run.log")
             )
-            s.blocked_scmc = scmc_cut_off(
-                s.delivered_epochs, s.router_t_max, block_epoch, no_block
-            )
+            s.blocked_scmc = scmc_cut_off(s.delivered_epochs, s.router_t_max, block_epoch, no_block)
         else:
-            print(f"[warn] scmc/router capture missing in {s.out_dir} — "
-                  f"no availability for '{s.label}'")
+            print(
+                f"[warn] scmc/router capture missing in {s.out_dir} — "
+                f"no availability for '{s.label}'"
+            )
 
         # Detection (fingerprinting score / rank — separate from the block outcome)
         if do_detection:
@@ -583,8 +606,9 @@ def analyse(scenarios: list, scmc_ip: str, do_detection: bool) -> None:
                     s.top_frac = float(ranking.iloc[0]["nanogrid_frac"])
                     s.scmc_frac = scmc_pool_detection(ranking, scmc_pool)
             else:
-                print(f"[warn] cannot score '{s.label}' "
-                      f"(pcap or model missing) — skipping detection")
+                print(
+                    f"[warn] cannot score '{s.label}' (pcap or model missing) — skipping detection"
+                )
 
 
 def print_summary(scenarios: list) -> None:
@@ -592,19 +616,25 @@ def print_summary(scenarios: list) -> None:
     for s in scenarios:
         n_deliv = len(s.delivered_epochs)
         span = (max(s.delivered_epochs) - min(s.delivered_epochs)) if n_deliv else 0
-        rows.append({
-            "scenario": s.label.replace("\n", " "),
-            "nanogrid_detect_frac": round(s.nanogrid_detect, 3) if not np.isnan(s.nanogrid_detect) else None,
-            "n_nanogrid_ips": s.n_nanogrid_ips or None,
-            "scmc_nanogrid_frac": round(s.scmc_frac, 3) if not np.isnan(s.scmc_frac) else None,
-            "top_ip": s.top_ip,
-            "blocked_ip": s.blocked_ip,
-            "scmc_blocked": s.blocked_scmc,
-            "publishes": n_deliv,
-            "publish_span_s": round(span, 1),
-            "sent_msgs": s.sent_count if s.sent_count > 0 else None,
-            "delivery_ratio": round(s.delivery_ratio, 4) if not np.isnan(s.delivery_ratio) else None,
-        })
+        rows.append(
+            {
+                "scenario": s.label.replace("\n", " "),
+                "nanogrid_detect_frac": round(s.nanogrid_detect, 3)
+                if not np.isnan(s.nanogrid_detect)
+                else None,
+                "n_nanogrid_ips": s.n_nanogrid_ips or None,
+                "scmc_nanogrid_frac": round(s.scmc_frac, 3) if not np.isnan(s.scmc_frac) else None,
+                "top_ip": s.top_ip,
+                "blocked_ip": s.blocked_ip,
+                "scmc_blocked": s.blocked_scmc,
+                "publishes": n_deliv,
+                "publish_span_s": round(span, 1),
+                "sent_msgs": s.sent_count if s.sent_count > 0 else None,
+                "delivery_ratio": round(s.delivery_ratio, 4)
+                if not np.isnan(s.delivery_ratio)
+                else None,
+            }
+        )
     df = pd.DataFrame(rows)
     print("\n=== Summary ===")
     print(df.to_string(index=False))
@@ -613,42 +643,69 @@ def print_summary(scenarios: list) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Plot & compare experiment scenarios")
-    p.add_argument("--output-root", default="output",
-                   help="Root of the experiment output tree (default: output)")
-    p.add_argument("--plots-dir", default=None,
-                   help="Where to write the PNGs (default: <output-root>/plots)")
-    p.add_argument("--scmc-ip", default=None,
-                   help=f"Real SCMC source IP (default: auto from log, else {DEFAULT_SCMC_IP})")
-    p.add_argument("--no-detection", action="store_true",
-                   help="Skip pcap re-scoring (availability plot only)")
-    p.add_argument("--topk", type=int, default=5,
-                   help="Number of top suspected flows to show (default: 5)")
-    p.add_argument("--mtd-params-slug",
-                   default="hop2-padint3-ports5-pads7-mbps2",
-                   metavar="SLUG",
-                   help="MTD parameter slug used in output dir names "
-                        "(default: matches Makefile defaults: hop2-padint3-ports5-pads7-mbps2).")
-    p.add_argument("--mtd-prefix", default="mtd", metavar="PREFIX",
-                   help="Coordinator dir prefix under test: mtd (fixed timer), "
-                        "mtdrl, or mtdrl-<tag> (default: mtd). Selects which "
-                        "experiment dir the 3-scenario comparison reads.")
-    p.add_argument("--bg-replay-mbps", type=int, default=2, metavar="MBPS",
-                   help="Background replay rate used in this run (default: 2). "
-                        "Selects the baseline-mbps<M> experiment dir.")
-    p.add_argument("--baseline-only", action="store_true",
-                   help="Plot just the no-MTD baseline run (its own figures, into "
-                        "the baseline-mbps<M> dir) instead of the 3-scenario "
-                        "MTD comparison.")
-    p.add_argument("--replot-all", action="store_true",
-                   help="Regenerate figures + summary.csv for every experiment dir "
-                        "found under --output-root (each baseline-mbps<M>/ and "
-                        "mtd-<slug>/), writing into each dir. Ignores --plots-dir / "
-                        "--mtd-params-slug / --bg-replay-mbps / --baseline-only.")
+    p.add_argument(
+        "--output-root",
+        default="output",
+        help="Root of the experiment output tree (default: output)",
+    )
+    p.add_argument(
+        "--plots-dir", default=None, help="Where to write the PNGs (default: <output-root>/plots)"
+    )
+    p.add_argument(
+        "--scmc-ip",
+        default=None,
+        help=f"Real SCMC source IP (default: auto from log, else {DEFAULT_SCMC_IP})",
+    )
+    p.add_argument(
+        "--no-detection", action="store_true", help="Skip pcap re-scoring (availability plot only)"
+    )
+    p.add_argument(
+        "--topk", type=int, default=5, help="Number of top suspected flows to show (default: 5)"
+    )
+    p.add_argument(
+        "--mtd-params-slug",
+        default="hop2-padint3-ports5-pads7-mbps2",
+        metavar="SLUG",
+        help="MTD parameter slug used in output dir names "
+        "(default: matches Makefile defaults: hop2-padint3-ports5-pads7-mbps2).",
+    )
+    p.add_argument(
+        "--mtd-prefix",
+        default="mtd",
+        metavar="PREFIX",
+        help="Coordinator dir prefix under test: mtd (fixed timer), "
+        "mtdrl, or mtdrl-<tag> (default: mtd). Selects which "
+        "experiment dir the 3-scenario comparison reads.",
+    )
+    p.add_argument(
+        "--bg-replay-mbps",
+        type=int,
+        default=2,
+        metavar="MBPS",
+        help="Background replay rate used in this run (default: 2). "
+        "Selects the baseline-mbps<M> experiment dir.",
+    )
+    p.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Plot just the no-MTD baseline run (its own figures, into "
+        "the baseline-mbps<M> dir) instead of the 3-scenario "
+        "MTD comparison.",
+    )
+    p.add_argument(
+        "--replot-all",
+        action="store_true",
+        help="Regenerate figures + summary.csv for every experiment dir "
+        "found under --output-root (each baseline-mbps<M>/ and "
+        "mtd-<slug>/), writing into each dir. Ignores --plots-dir / "
+        "--mtd-params-slug / --bg-replay-mbps / --baseline-only.",
+    )
     return p.parse_args()
 
 
-def generate_figures(scenarios: list, plots_dir: str, scmc_ip, do_detection: bool,
-                     topk: int) -> None:
+def generate_figures(
+    scenarios: list, plots_dir: str, scmc_ip, do_detection: bool, topk: int
+) -> None:
     """Analyse the scenarios and write summary.csv + figures into plots_dir."""
     os.makedirs(plots_dir, exist_ok=True)
     analyse(scenarios, scmc_ip, do_detection=do_detection)
@@ -703,8 +760,7 @@ def main() -> None:
         print(f"[plot] replotting {len(configs)} experiment dir(s) under {args.output_root}")
         for scenarios, plots_dir in configs:
             print(f"\n=== {plots_dir} ===")
-            generate_figures(scenarios, plots_dir, args.scmc_ip,
-                             not args.no_detection, args.topk)
+            generate_figures(scenarios, plots_dir, args.scmc_ip, not args.no_detection, args.topk)
         return
 
     # Single config. Default the outputs (summary.csv + plots) into the relevant
@@ -713,15 +769,12 @@ def main() -> None:
         default_dir = os.path.join(args.output_root, f"baseline-mbps{args.bg_replay_mbps}")
         scenarios = baseline_scenarios(args.output_root, args.bg_replay_mbps)
     else:
-        default_dir = os.path.join(
-            args.output_root, f"{args.mtd_prefix}-{args.mtd_params_slug}")
+        default_dir = os.path.join(args.output_root, f"{args.mtd_prefix}-{args.mtd_params_slug}")
         scenarios = default_scenarios(
-            args.output_root, args.mtd_params_slug, args.bg_replay_mbps,
-            args.mtd_prefix,
+            args.output_root, args.mtd_params_slug, args.bg_replay_mbps, args.mtd_prefix
         )
     plots_dir = args.plots_dir or default_dir
-    generate_figures(scenarios, plots_dir, args.scmc_ip,
-                     not args.no_detection, args.topk)
+    generate_figures(scenarios, plots_dir, args.scmc_ip, not args.no_detection, args.topk)
 
 
 if __name__ == "__main__":

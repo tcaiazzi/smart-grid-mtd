@@ -18,19 +18,19 @@ Plus a snapshot of the four headline totals, so a move between categories is
 free but a move out of the accounting is not.
 
 Run: `.venv/bin/python -m pytest tests/test_loc_coverage.py`
-Update the totals on purpose: `UPDATE_SNAPSHOTS=1 .venv/bin/python -m pytest tests/test_loc_coverage.py`
+Update the totals on purpose:
+`UPDATE_SNAPSHOTS=1 .venv/bin/python -m pytest tests/core/test_loc_coverage.py`
 """
 
 import json
 import os
 import subprocess
-import sys
 import unittest
 from pathlib import Path
 
 from tests.helpers import REPO_ROOT  # noqa: E402
 
-from cyberrange.core import loc, registry            # noqa: E402
+from cyberrange.core import loc, registry  # noqa: E402
 
 from tests.helpers import SNAPSHOT_DIR  # noqa: E402
 
@@ -38,8 +38,19 @@ SNAPSHOT = SNAPSHOT_DIR / "loc-totals.json"
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
 # Directories that are not part of the platform/scenario accounting at all.
-OUT_OF_SCOPE = ("tests", "docker", "assets", "docs", "make", "scripts", "tools",
-                "output", ".venv", ".git", "__pycache__")
+OUT_OF_SCOPE = (
+    "tests",
+    "docker",
+    "assets",
+    "docs",
+    "make",
+    "scripts",
+    "tools",
+    "output",
+    ".venv",
+    ".git",
+    "__pycache__",
+)
 
 # Source files deliberately counted by nobody. Keep this list short and
 # justified: every entry is a file the paper's table does not see.
@@ -52,14 +63,19 @@ EXEMPT = {
 
 def tracked_sources():
     """Repo .py/.js/.html files inside the measured tree, per git."""
-    out = subprocess.run(["git", "ls-files", "*.py", "*.js", "*.html"],
-                         cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+    out = subprocess.run(
+        ["git", "ls-files", "*.py", "*.js", "*.html"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
     files = []
     for rel in out.stdout.split():
         parts = Path(rel).parts
         if parts[0] in OUT_OF_SCOPE or rel == "main.py":
             continue
-        if Path(rel).name == "__init__.py":      # package markers carry no cost
+        if Path(rel).name == "__init__.py":  # package markers carry no cost
             continue
         files.append(rel)
     return sorted(files)
@@ -68,6 +84,7 @@ def tracked_sources():
 def declared_patterns():
     """{where: [patterns]} over CORE, COMPONENTS and every scenario's SOURCES."""
     import importlib
+
     patterns = {}
     for label, pats in loc.CORE.items():
         patterns[f"CORE[{label}]"] = pats
@@ -90,7 +107,8 @@ class PatternsStillMatch(unittest.TestCase):
                         loc.expand([pattern]),
                         f"{where} declares {pattern!r}, which matches no file. The code it "
                         f"was counting is now counted by nobody, and the paper's table "
-                        f"silently understates it.")
+                        f"silently understates it.",
+                    )
 
 
 class CategoriesAreDisjoint(unittest.TestCase):
@@ -109,7 +127,8 @@ class CategoriesAreDisjoint(unittest.TestCase):
                         with self.subTest(file=f):
                             self.fail(
                                 f"{f} is matched by both {seen[f]!r} and "
-                                f"{group}[{category!r}], so its lines are counted twice.")
+                                f"{group}[{category!r}], so its lines are counted twice."
+                            )
                     seen[f] = f"{group}[{category!r}]"
 
     def test_no_file_counted_twice_within_a_scenario(self):
@@ -122,7 +141,8 @@ class CategoriesAreDisjoint(unittest.TestCase):
                             self.fail(
                                 f"{f} is matched by both {seen[f]!r} and {category!r} in the "
                                 f"{name} scenario, so its lines are counted twice. Keep the "
-                                f"SOURCES categories disjoint (one directory each).")
+                                f"SOURCES categories disjoint (one directory each)."
+                            )
                     seen[f] = category
 
 
@@ -131,9 +151,11 @@ class EveryFileIsCounted(unittest.TestCase):
         counted = set(loc.report()["files"])
         missing = [f for f in tracked_sources() if f not in counted and f not in EXEMPT]
         self.assertEqual(
-            [], missing,
+            [],
+            missing,
             f"these source files are counted by no pattern: {missing}. Either add them to a "
-            f"scenario's SOURCES / loc.CORE, or list them in EXEMPT with a reason.")
+            f"scenario's SOURCES / loc.CORE, or list them in EXEMPT with a reason.",
+        )
 
 
 class TotalsAreStable(unittest.TestCase):
@@ -150,11 +172,15 @@ class TotalsAreStable(unittest.TestCase):
             SNAPSHOT.parent.mkdir(exist_ok=True)
             SNAPSHOT.write_text(json.dumps(totals, indent=1, sort_keys=True) + "\n")
             return
-        self.assertTrue(SNAPSHOT.exists(), f"missing {SNAPSHOT}; regenerate with UPDATE_SNAPSHOTS=1")
+        self.assertTrue(
+            SNAPSHOT.exists(), f"missing {SNAPSHOT}; regenerate with UPDATE_SNAPSHOTS=1"
+        )
         self.assertEqual(
-            json.loads(SNAPSHOT.read_text()), totals,
+            json.loads(SNAPSHOT.read_text()),
+            totals,
             "the code-size totals changed. A refactor that only moves files must leave them "
-            "identical; if code was genuinely added or removed, update the snapshot on purpose.")
+            "identical; if code was genuinely added or removed, update the snapshot on purpose.",
+        )
 
 
 if __name__ == "__main__":

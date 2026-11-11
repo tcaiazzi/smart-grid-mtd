@@ -23,9 +23,7 @@ Run: `.venv/bin/python -m pytest tests/test_layering.py`
 """
 
 import ast
-import sys
 import unittest
-from pathlib import Path
 
 from tests.helpers import REPO_ROOT  # noqa: E402
 
@@ -67,19 +65,23 @@ class LayeringHolds(unittest.TestCase):
     def test_core_imports_no_plane_and_no_scenario(self):
         bad = offences(CORE, ["cyberrange.planes", "cyberrange.scenarios"])
         self.assertEqual(
-            [], bad,
-            "the platform core imports code that is layered above it:\n  " +
-            "\n  ".join(bad) +
-            "\nPass it in from the scenario (see Scenario.panel_js / Scenario.structure) "
-            "rather than importing downwards.")
+            [],
+            bad,
+            "the platform core imports code that is layered above it:\n  "
+            + "\n  ".join(bad)
+            + "\nPass it in from the scenario (see Scenario.panel_js / Scenario.structure) "
+            "rather than importing downwards.",
+        )
 
     def test_planes_import_no_scenario(self):
         bad = offences(PLANES, ["cyberrange.scenarios"])
         self.assertEqual(
-            [], bad,
-            "a plane imports a scenario, so it can only serve that one scenario:\n  " +
-            "\n  ".join(bad) +
-            "\nTake the scenario-specific part as a constructor argument instead.")
+            [],
+            bad,
+            "a plane imports a scenario, so it can only serve that one scenario:\n  "
+            + "\n  ".join(bad)
+            + "\nTake the scenario-specific part as a constructor argument instead.",
+        )
 
     def test_allowlist_is_empty(self):
         """The allowlist exists so a violation can be recorded rather than lost.

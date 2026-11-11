@@ -30,7 +30,7 @@ import ot_registers as reg
 log = logging.getLogger("plc")
 
 DG_SET = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT]  # (name, scale, lo, hi)
-V_TARGET_LOW  = reg.V_REG_LOW
+V_TARGET_LOW = reg.V_REG_LOW
 V_TARGET_HIGH = reg.V_REG_HIGH
 SETPOINT_STEP_KW = 2.0
 RELAX_MARGIN_PU = 0.01
@@ -43,10 +43,10 @@ def read_sensors(client, unit) -> dict:
     regs = rr.registers
     return {
         "v_load": reg.decode(regs[reg.IR_V_LOAD], reg.SENSOR_REGISTERS[reg.IR_V_LOAD][1]),
-        "v_dg":   reg.decode(regs[reg.IR_V_DG],   reg.SENSOR_REGISTERS[reg.IR_V_DG][1]),
+        "v_dg": reg.decode(regs[reg.IR_V_DG], reg.SENSOR_REGISTERS[reg.IR_V_DG][1]),
         "line_load": reg.decode(regs[reg.IR_LINE_LOAD], reg.SENSOR_REGISTERS[reg.IR_LINE_LOAD][1]),
         "p_load": reg.decode(regs[reg.IR_P_LOAD], reg.SENSOR_REGISTERS[reg.IR_P_LOAD][1]),
-        "p_dg":   reg.decode(regs[reg.IR_P_DG],   reg.SENSOR_REGISTERS[reg.IR_P_DG][1]),
+        "p_dg": reg.decode(regs[reg.IR_P_DG], reg.SENSOR_REGISTERS[reg.IR_P_DG][1]),
         "abnormal": int(regs[reg.IR_ABNORMAL]),
     }
 
@@ -74,9 +74,9 @@ def control(sensors: dict, setpoint_kw: float) -> float:
     v_max = max(sensors["v_load"], sensors["v_dg"])
     v_min = min(sensors["v_load"], sensors["v_dg"])
     if v_max > V_TARGET_HIGH:
-        setpoint_kw -= SETPOINT_STEP_KW      # lower DG -> reduce overvoltage
+        setpoint_kw -= SETPOINT_STEP_KW  # lower DG -> reduce overvoltage
     elif v_min < V_TARGET_LOW:
-        setpoint_kw += SETPOINT_STEP_KW      # raise DG -> support voltage
+        setpoint_kw += SETPOINT_STEP_KW  # raise DG -> support voltage
     elif setpoint_kw > reg.DG_NOMINAL_KW:
         setpoint_kw = max(reg.DG_NOMINAL_KW, setpoint_kw - SETPOINT_STEP_KW)
     elif setpoint_kw < reg.DG_NOMINAL_KW and v_max < V_TARGET_HIGH - RELAX_MARGIN_PU:
@@ -112,9 +112,11 @@ def main():
     ap.add_argument("--log-file", default=None)
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s",
-                        filename=args.log_file or None)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        filename=args.log_file or None,
+    )
 
     client = ModbusTcpClient(args.engine_host, port=args.port)
     while not client.connect():
@@ -137,12 +139,18 @@ def main():
                     if wr.isError():
                         log.warning("write_register failed: %s", wr)
                 polls += 1
-                log.info("poll=%d v_load=%.3f v_dg=%.3f line=%.1f%% mode=%s -> %s abn=%d",
-                         polls, sensors["v_load"], sensors["v_dg"], sensors["line_load"],
-                         "MANUAL" if holding["ctrl_mode"] == reg.CTRL_MANUAL else "auto",
-                         f"setpoint={setpoint_kw:.1f}kW" if write
-                         else f"hands-off (in force {holding['dg_setpoint']:.1f}kW)",
-                         sensors["abnormal"])
+                log.info(
+                    "poll=%d v_load=%.3f v_dg=%.3f line=%.1f%% mode=%s -> %s abn=%d",
+                    polls,
+                    sensors["v_load"],
+                    sensors["v_dg"],
+                    sensors["line_load"],
+                    "MANUAL" if holding["ctrl_mode"] == reg.CTRL_MANUAL else "auto",
+                    f"setpoint={setpoint_kw:.1f}kW"
+                    if write
+                    else f"hands-off (in force {holding['dg_setpoint']:.1f}kW)",
+                    sensors["abnormal"],
+                )
             except Exception as e:  # keep the controller alive across transient errors
                 log.warning("poll error: %s", e)
                 if not client.connected:

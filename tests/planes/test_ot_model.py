@@ -16,16 +16,15 @@ Run: `.venv/bin/python -m unittest tests.test_ot_model`.
 import random
 import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(guest_paths.DEFENSE_AGENTS))
 
-import ot_registers as reg                                       # noqa: E402
-from ot_model import FEATURES, RobustAnomalyModel, WindowFeaturizer   # noqa: E402
+import ot_registers as reg  # noqa: E402
+from ot_model import FEATURES, RobustAnomalyModel, WindowFeaturizer  # noqa: E402
 
 PLC, HMI = "10.20.0.10", "10.10.0.20"
 
@@ -35,9 +34,12 @@ class Plant:
 
     def __init__(self, seed=1):
         self.rng = random.Random(seed)
-        self.fz = WindowFeaturizer(PLC, setpoint_register=reg.HR_DG_SETPOINT,
-                                   mode_register=reg.HR_CTRL_MODE,
-                                   manual_value=reg.CTRL_MANUAL)
+        self.fz = WindowFeaturizer(
+            PLC,
+            setpoint_register=reg.HR_DG_SETPOINT,
+            mode_register=reg.HR_CTRL_MODE,
+            manual_value=reg.CTRL_MANUAL,
+        )
         self.windows = []
         self.setpoint = 20.0
         self.mode = reg.CTRL_AUTO
@@ -70,8 +72,10 @@ class Plant:
             take(t, fz.observe_read(t + 0.50, HMI, 0x04))
             take(t, fz.observe_state(t + 0.51, self._voltages()))
             take(t, fz.observe_read(t + 0.52, HMI, 0x03))
-            take(t, fz.observe_state(t + 0.53, {"ctrl_mode": self.mode,
-                                                "dg_setpoint": self.setpoint}))
+            take(
+                t,
+                fz.observe_state(t + 0.53, {"ctrl_mode": self.mode, "dg_setpoint": self.setpoint}),
+            )
         # HMI operator: legitimate MANUAL dispatch.
         if operator and self._release is None and t >= self._next_op:
             self.mode = reg.CTRL_MANUAL
@@ -93,7 +97,7 @@ class Plant:
         take(t, fz.observe_write(t + 0.72, HMI, reg.HR_DG_SETPOINT, 60.0))
         self.mode, self.setpoint = reg.CTRL_MANUAL, 60.0
         self._release = None
-        self._next_op = 1e9   # a careful operator does not fight a foreign MANUAL
+        self._next_op = 1e9  # a careful operator does not fight a foreign MANUAL
 
     def run(self, t0, t1, **kw):
         for t in range(t0, t1):
@@ -104,7 +108,7 @@ class Plant:
 class Model(unittest.TestCase):
     def setUp(self):
         self.p = Plant(seed=1)
-        self.p.run(0, 45)                       # calibration (normal + operator)
+        self.p.run(0, 45)  # calibration (normal + operator)
         self.model = RobustAnomalyModel()
         for _ws, vec in self.p.windows:
             self.model.add_calibration(vec)
@@ -121,16 +125,19 @@ class Model(unittest.TestCase):
             m.fit()
 
     def test_normal_with_operator_dispatches_is_quiet(self):
-        self.p.run(45, 105)                    # a minute more, ~4 dispatches
-        flagged = [(ws, self.model.explain(self.model.score(v)[1]))
-                   for ws, v in self.p.windows if self.model.is_anomalous(v)[0]]
+        self.p.run(45, 105)  # a minute more, ~4 dispatches
+        flagged = [
+            (ws, self.model.explain(self.model.score(v)[1]))
+            for ws, v in self.p.windows
+            if self.model.is_anomalous(v)[0]
+        ]
         self.assertEqual(flagged, [], f"false alarms on normal traffic: {flagged}")
 
     def test_hijack_flagged_at_write_time(self):
         self.p.run(45, 50, operator=False)
         self.p.windows.clear()
         self.p.hijack(50.0)
-        self.p.run(50, 52, operator=False)     # voltages not yet moved (v_extra = 0)
+        self.p.run(50, 52, operator=False)  # voltages not yet moved (v_extra = 0)
         ws, vec = self.p.windows[0]
         self.assertEqual(ws, 50.0)
         anomalous, score, z = self.model.is_anomalous(vec)
@@ -140,7 +147,7 @@ class Model(unittest.TestCase):
 
     def test_persistent_hijack_keeps_scoring(self):
         self.p.hijack(45.0)
-        self.p.v_extra = 0.06                   # the overvoltage it causes
+        self.p.v_extra = 0.06  # the overvoltage it causes
         self.p.run(45, 75, operator=False)
         late = [v for ws, v in self.p.windows if ws >= 65.0]
         self.assertTrue(late)

@@ -19,9 +19,7 @@ produce byte-identical slugs.
 
 import argparse
 import subprocess
-import sys
 import unittest
-from pathlib import Path
 
 from tests.helpers import REPO_ROOT  # noqa: E402
 
@@ -32,37 +30,130 @@ from cyberrange.scenarios.mqtt_mtd.slug import experiment_slug  # noqa: E402
 # Covers: baseline, a single-entry (hop-disabled) MTD config, the paper's
 # 6/7-entry config, an RL-blend config, and an RL-entropy (tagged) config.
 CONFIGS = [
-    ("baseline-mbps2", True, 2, 2, 3, "10.1.0.2", "8883,8884,8885,8886,8887",
-     "10.0.0.2", "128,256,384,512,640,768,1024", 30, "1.0", None, ""),
-    ("baseline-mbps100", True, 100, 2, 3, "10.1.0.2", "8883,8884,8885,8886,8887",
-     "10.0.0.2", "128,256,384,512,640,768,1024", 30, "1.0", None, ""),
-    ("mtd-defaults", False, 2, 2, 3, "10.1.0.2", "8883,8884,8885,8886,8887",
-     "10.0.0.2", "128,256,384,512,640,768,1024", 30, "1.0", None, ""),
-    ("mtd-paper", False, 2, 4, 3,
-     "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
-     "8883,8884,8885,8886,8887,8888,8889",
-     "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
-     "128,256,384,512,640,768,1024", 5, "0.1,0.2,0.4,0.6,0.8,1", None, ""),
-    ("mtdrl-blend-paper", False, 2, 4, 3,
-     "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
-     "8883,8884,8885,8886,8887,8888,8889",
-     "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
-     "128,256,384,512,640,768,1024", 5, "0.1,0.2,0.4,0.6,0.8,1",
-     "output/rl/policy.npz", ""),
-    ("mtdrl-entropy-paper", False, 2, 4, 3,
-     "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
-     "8883,8884,8885,8886,8887,8888,8889",
-     "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
-     "128,256,384,512,640,768,1024", 5, "0.1,0.2,0.4,0.6,0.8,1",
-     "output/rl-entropy/policy.npz", "entropy"),
-    ("mtd-odd-pools", False, 7, 9, 5, "10.1.0.2,10.1.0.4", "8883,8884,8885",
-     "10.0.0.2,10.0.0.4,10.0.0.5", "128,256", 11, "1.0,2.0", None, ""),
+    (
+        "baseline-mbps2",
+        True,
+        2,
+        2,
+        3,
+        "10.1.0.2",
+        "8883,8884,8885,8886,8887",
+        "10.0.0.2",
+        "128,256,384,512,640,768,1024",
+        30,
+        "1.0",
+        None,
+        "",
+    ),
+    (
+        "baseline-mbps100",
+        True,
+        100,
+        2,
+        3,
+        "10.1.0.2",
+        "8883,8884,8885,8886,8887",
+        "10.0.0.2",
+        "128,256,384,512,640,768,1024",
+        30,
+        "1.0",
+        None,
+        "",
+    ),
+    (
+        "mtd-defaults",
+        False,
+        2,
+        2,
+        3,
+        "10.1.0.2",
+        "8883,8884,8885,8886,8887",
+        "10.0.0.2",
+        "128,256,384,512,640,768,1024",
+        30,
+        "1.0",
+        None,
+        "",
+    ),
+    (
+        "mtd-paper",
+        False,
+        2,
+        4,
+        3,
+        "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
+        "8883,8884,8885,8886,8887,8888,8889",
+        "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
+        "128,256,384,512,640,768,1024",
+        5,
+        "0.1,0.2,0.4,0.6,0.8,1",
+        None,
+        "",
+    ),
+    (
+        "mtdrl-blend-paper",
+        False,
+        2,
+        4,
+        3,
+        "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
+        "8883,8884,8885,8886,8887,8888,8889",
+        "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
+        "128,256,384,512,640,768,1024",
+        5,
+        "0.1,0.2,0.4,0.6,0.8,1",
+        "output/rl/policy.npz",
+        "",
+    ),
+    (
+        "mtdrl-entropy-paper",
+        False,
+        2,
+        4,
+        3,
+        "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8",
+        "8883,8884,8885,8886,8887,8888,8889",
+        "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8",
+        "128,256,384,512,640,768,1024",
+        5,
+        "0.1,0.2,0.4,0.6,0.8,1",
+        "output/rl-entropy/policy.npz",
+        "entropy",
+    ),
+    (
+        "mtd-odd-pools",
+        False,
+        7,
+        9,
+        5,
+        "10.1.0.2,10.1.0.4",
+        "8883,8884,8885",
+        "10.0.0.2,10.0.0.4,10.0.0.5",
+        "128,256",
+        11,
+        "1.0,2.0",
+        None,
+        "",
+    ),
 ]
 
 
 def _python_slug(cfg) -> str:
-    (_label, no_mtd, mbps, hop, pad_interval, ip_pool, port_pool, scmc_pool,
-     pad_buckets, freq_interval, freq_pool, rl_policy, rl_tag) = cfg
+    (
+        _label,
+        no_mtd,
+        mbps,
+        hop,
+        pad_interval,
+        ip_pool,
+        port_pool,
+        scmc_pool,
+        pad_buckets,
+        freq_interval,
+        freq_pool,
+        rl_policy,
+        rl_tag,
+    ) = cfg
     args = argparse.Namespace(
         no_mtd=no_mtd,
         bg_replay_mbps=mbps,
@@ -84,8 +175,21 @@ def _makefile_slug(cfg) -> str:
     """The Makefile's own EXP_SLUG, read back via `make help` (side-effect-free:
     the target only echoes, see Makefile:159-211) so this test can never
     silently duplicate the Make formula in Python — it asks Make itself."""
-    (_label, no_mtd, mbps, hop, pad_interval, ip_pool, port_pool, scmc_pool,
-     pad_buckets, freq_interval, freq_pool, rl_policy, rl_tag) = cfg
+    (
+        _label,
+        no_mtd,
+        mbps,
+        hop,
+        pad_interval,
+        ip_pool,
+        port_pool,
+        scmc_pool,
+        pad_buckets,
+        freq_interval,
+        freq_pool,
+        rl_policy,
+        rl_tag,
+    ) = cfg
     make_vars = [
         f"NO_MTD={1 if no_mtd else 0}",
         f"BG_REPLAY_MBPS={mbps}",
@@ -104,13 +208,19 @@ def _makefile_slug(cfg) -> str:
             make_vars.append(f"RL_TAG={rl_tag}")
     result = subprocess.run(
         ["make", "help", *make_vars],
-        cwd=REPO_ROOT, capture_output=True, text=True, timeout=30, check=True,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
     )
     for line in result.stdout.splitlines():
         line = line.strip()
         if line.startswith("Experiment dir: output/"):
-            return line[len("Experiment dir: output/"):]
-    raise AssertionError(f"could not find 'Experiment dir:' line in `make help` output:\n{result.stdout}")
+            return line[len("Experiment dir: output/") :]
+    raise AssertionError(
+        f"could not find 'Experiment dir:' line in `make help` output:\n{result.stdout}"
+    )
 
 
 # The exact make_slug()/count_items() bash source, extracted once from
@@ -118,8 +228,8 @@ def _makefile_slug(cfg) -> str:
 # project's refactor plan specifies) so this test tracks the real
 # implementation instead of a hand-copied snapshot of it.
 _AWK_EXTRACT = (
-    r'/^count_items\(\)/{print; next} '
-    r'/^make_slug\(\)/{f=1} f{print; if(/^}/){f=0}}'
+    r"/^count_items\(\)/{print; next} "
+    r"/^make_slug\(\)/{f=1} f{print; if(/^}/){f=0}}"
 )
 
 
@@ -127,8 +237,21 @@ def _bash_slug(cfg) -> str:
     """scripts/run_single.sh's make_slug() (suffix) + the prefix its callers assemble
     around it (run_baseline / run_config), run as a real bash function call —
     never by sourcing scripts/run_single.sh itself, which would kick off a lab run."""
-    (_label, no_mtd, mbps, hop, pad_interval, ip_pool, port_pool, scmc_pool,
-     pad_buckets, freq_interval, freq_pool, rl_policy, rl_tag) = cfg
+    (
+        _label,
+        no_mtd,
+        mbps,
+        hop,
+        pad_interval,
+        ip_pool,
+        port_pool,
+        scmc_pool,
+        pad_buckets,
+        freq_interval,
+        freq_pool,
+        rl_policy,
+        rl_tag,
+    ) = cfg
     if no_mtd:
         return f"baseline-mbps{mbps}"
     prefix = "mtd"
@@ -137,12 +260,17 @@ def _bash_slug(cfg) -> str:
     script = f'''
 set -euo pipefail
 eval "$(awk '{_AWK_EXTRACT}' scripts/run_single.sh)"
-suffix=$(make_slug {hop} {pad_interval} "{ip_pool}" "{port_pool}" "{scmc_pool}" "{pad_buckets}" {mbps} {freq_interval} "{freq_pool}")
+suffix=$(make_slug {hop} {pad_interval} "{ip_pool}" "{port_pool}" \
+    "{scmc_pool}" "{pad_buckets}" {mbps} {freq_interval} "{freq_pool}")
 printf '%s-%s' "{prefix}" "$suffix"
 '''
     result = subprocess.run(
-        ["bash", "-c", script], cwd=REPO_ROOT,
-        capture_output=True, text=True, timeout=15, check=True,
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
     )
     return result.stdout.strip()
 

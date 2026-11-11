@@ -13,9 +13,7 @@ import json
 import logging
 import time
 
-from cyberrange.core.component import (
-    Artifact, Component, TelemetryCursor, tail_reader,
-)
+from cyberrange.core.component import Artifact, Component, TelemetryCursor, tail_reader
 
 log = logging.getLogger("cyberrange.planes.monitor.components")
 
@@ -37,7 +35,7 @@ class Capture(Component):
 
     def stop_capture(self, ctx, flush_s=2.0):
         ctx.run(self.node, "pkill -INT tcpdump")
-        time.sleep(flush_s)       # let tcpdump flush the file before the download
+        time.sleep(flush_s)  # let tcpdump flush the file before the download
 
     def artifacts(self):
         return [Artifact(self.node, self.file, self.local, required=True)]
@@ -62,7 +60,8 @@ class TelemetryMirror(Component):
                 cur = self._cursors.get(key)
                 if cur is None:
                     cur = self._cursors[key] = TelemetryCursor(
-                        tail_reader(ctx.exec_text, src.node, src.path))
+                        tail_reader(ctx.exec_text, src.node, src.path)
+                    )
                 try:
                     events = cur.poll()
                 except Exception as e:
@@ -88,8 +87,11 @@ class PlantMirror(Component):
         self.step = None
 
     def poll(self, ctx):
-        lines = [x for x in ctx.exec_text(self.node, f"tail -n 1 {self.frames}").splitlines()
-                 if x.strip()]
+        lines = [
+            x
+            for x in ctx.exec_text(self.node, f"tail -n 1 {self.frames}").splitlines()
+            if x.strip()
+        ]
         if not lines:
             return
         fr = json.loads(lines[-1])
@@ -97,8 +99,17 @@ class PlantMirror(Component):
             return
         self.step = fr.get("step")
         act = fr.get("actuators") or {}
-        ctx.emit("plant", step=fr.get("step"), frame_t=fr.get("timestamp"),
-                 v_load=fr.get("v_load"), v_dg=fr.get("v_dg"), abnormal=fr.get("abnormal"),
-                 line_load=fr.get("line_load"), p_dg=fr.get("p_dg"),
-                 energy_kwh=fr.get("energy_kwh"), dg_setpoint=act.get("dg_setpoint"),
-                 ctrl_mode=act.get("ctrl_mode"), switch_cmd=act.get("switch_cmd"))
+        ctx.emit(
+            "plant",
+            step=fr.get("step"),
+            frame_t=fr.get("timestamp"),
+            v_load=fr.get("v_load"),
+            v_dg=fr.get("v_dg"),
+            abnormal=fr.get("abnormal"),
+            line_load=fr.get("line_load"),
+            p_dg=fr.get("p_dg"),
+            energy_kwh=fr.get("energy_kwh"),
+            dg_setpoint=act.get("dg_setpoint"),
+            ctrl_mode=act.get("ctrl_mode"),
+            switch_cmd=act.get("switch_cmd"),
+        )

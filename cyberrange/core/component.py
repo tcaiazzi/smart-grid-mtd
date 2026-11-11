@@ -1,7 +1,7 @@
 """component.py — the unit a scenario is composed of.
 
-Each plane (cyberrange.planes.attack, cyberrange.planes.defense, cyberrange.planes.traffic, monitor) exposes
-its building blocks as Components in ``<plane>/components.py``. A scenario
+Each plane (cyberrange.planes.{traffic,attack,defense,monitor}) exposes its
+building blocks as Components in ``cyberrange/planes/<plane>/components.py``. A scenario
 picks the ones it needs, configures them and starts them from its episode;
 the core then stops them, collects their artifacts and mirrors their
 telemetry onto the progress ledger.
@@ -27,16 +27,17 @@ log = logging.getLogger("core.component")
 class Artifact:
     node: str
     guest_path: str
-    local_name: str          # file name inside the run's output directory
-    required: bool = False   # a missing required artifact fails the run
+    local_name: str  # file name inside the run's output directory
+    required: bool = False  # a missing required artifact fails the run
 
 
 @dataclass(frozen=True)
 class TelemetrySource:
     """A guest JSONL telemetry file written by a defense component."""
+
     node: str
-    path: str                # guest path, e.g. "/telemetry.jsonl"
-    name: str = ""           # label ("ot", "it", "mtd") for consumers that care
+    path: str  # guest path, e.g. "/telemetry.jsonl"
+    name: str = ""  # label ("ot", "it", "mtd") for consumers that care
 
 
 class Component:
@@ -65,8 +66,9 @@ class Component:
 class GuestAgent(Component):
     """A process launched in one container, its output captured to a console log."""
 
-    def __init__(self, node, command, console_log, plane="core", name=None,
-                 artifacts=(), wait=False):
+    def __init__(
+        self, node, command, console_log, plane="core", name=None, artifacts=(), wait=False
+    ):
         self.node, self.command, self.console_log = node, command, console_log
         self.plane, self.name = plane, name or console_log.rsplit(".", 1)[0]
         self._artifacts = list(artifacts)
@@ -76,8 +78,9 @@ class GuestAgent(Component):
         ctx.exec(self.node, self.command, console_log=self.console_log, wait=self.wait)
 
     def artifacts(self):
-        return [Artifact(self.node, f"/{self.console_log}", f"{self.node}.{self.console_log}")] \
-            + self._artifacts
+        return [
+            Artifact(self.node, f"/{self.console_log}", f"{self.node}.{self.console_log}")
+        ] + self._artifacts
 
 
 class TelemetryCursor:
@@ -94,7 +97,7 @@ class TelemetryCursor:
 
     def poll(self):
         raw = self.read(self.lines + 1) or ""
-        complete = raw.split("\n")[:-1]     # the last element is "" or a partial line
+        complete = raw.split("\n")[:-1]  # the last element is "" or a partial line
         self.lines += len(complete)
         out = []
         for line in complete:

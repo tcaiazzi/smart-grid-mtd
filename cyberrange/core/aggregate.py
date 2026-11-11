@@ -13,9 +13,38 @@ import math
 import os
 
 # Two-sided 95% Student t critical values, df = 1..30 (then the normal 1.96).
-_T95 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
-        2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
-        2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
+_T95 = [
+    12.706,
+    4.303,
+    3.182,
+    2.776,
+    2.571,
+    2.447,
+    2.365,
+    2.306,
+    2.262,
+    2.228,
+    2.201,
+    2.179,
+    2.160,
+    2.145,
+    2.131,
+    2.120,
+    2.110,
+    2.101,
+    2.093,
+    2.086,
+    2.080,
+    2.074,
+    2.069,
+    2.064,
+    2.060,
+    2.056,
+    2.052,
+    2.048,
+    2.045,
+    2.042,
+]
 
 
 def t95(df):
@@ -40,16 +69,35 @@ def flatten(d, prefix=""):
 def stats(xs):
     n = len(xs)
     if n == 0:
-        return {"n": 0, "mean": None, "std": None, "ci95_low": None, "ci95_high": None,
-                "median": None, "min": None, "max": None}
+        return {
+            "n": 0,
+            "mean": None,
+            "std": None,
+            "ci95_low": None,
+            "ci95_high": None,
+            "median": None,
+            "min": None,
+            "max": None,
+        }
     mean = sum(xs) / n
     std = math.sqrt(sum((x - mean) ** 2 for x in xs) / (n - 1)) if n > 1 else 0.0
     half = t95(n - 1) * std / math.sqrt(n) if n > 1 else 0.0
     s = sorted(xs)
     med = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
-    r = lambda x: round(x, 6)
-    return {"n": n, "mean": r(mean), "std": r(std), "ci95_low": r(mean - half),
-            "ci95_high": r(mean + half), "median": r(med), "min": r(s[0]), "max": r(s[-1])}
+
+    def r(x):
+        return round(x, 6)
+
+    return {
+        "n": n,
+        "mean": r(mean),
+        "std": r(std),
+        "ci95_low": r(mean - half),
+        "ci95_high": r(mean + half),
+        "median": r(med),
+        "min": r(s[0]),
+        "max": r(s[-1]),
+    }
 
 
 def summarize(rows, by=("group",), include=None, exclude=("run.",)):
@@ -97,8 +145,7 @@ def format_markdown(table, by=("group",), metrics=None):
         if g not in groups:
             groups.append(g)
     cell = {(tuple(r.get(b) for b in by), r["metric"]): r for r in table}
-    lines = ["| " + " | ".join(list(by) + names) + " |",
-             "|" + "---|" * (len(by) + len(names))]
+    lines = ["| " + " | ".join(list(by) + names) + " |", "|" + "---|" * (len(by) + len(names))]
     for g in groups:
         vals = []
         for n in names:
@@ -108,7 +155,8 @@ def format_markdown(table, by=("group",), metrics=None):
             elif r["n"] == 1:
                 vals.append(f"{r['mean']:.3g} (1)")
             else:
-                vals.append(f"{r['mean']:.3g} [{r['ci95_low']:.3g}, {r['ci95_high']:.3g}] "
-                            f"({r['n']})")
+                vals.append(
+                    f"{r['mean']:.3g} [{r['ci95_low']:.3g}, {r['ci95_high']:.3g}] ({r['n']})"
+                )
         lines.append("| " + " | ".join([str(x) for x in g] + vals) + " |")
     return "\n".join(lines) + "\n"

@@ -58,13 +58,17 @@ from mtd_wire import send_msg as _send_msg, recv_msg as _recv_msg
 
 log = logging.getLogger(__name__)
 
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqtt  # noqa: E402  (matplotlib.use must run before pyplot is imported)
 
-warnings.filterwarnings("ignore")   # suppress gym deprecation noise
+warnings.filterwarnings("ignore")  # suppress gym deprecation noise
 
 # Same pymgrid physics as simple_client.py (baseline publisher) — see
 # microgrid_sim.py, copied alongside this file on every scmc machine.
-from microgrid_sim import build_microgrid, sensor_rng, step_microgrid
+from microgrid_sim import (  # noqa: E402  (after the warning filter above)
+    build_microgrid,
+    sensor_rng,
+    step_microgrid,
+)
 
 # Bounded window for a hop's NEW broker to answer before we give up and keep
 # publishing on the old endpoint (make-before-break, see _do_hop). Short on
@@ -75,6 +79,7 @@ HOP_CONNECT_TIMEOUT = 3.0
 
 # ── Executor ──────────────────────────────────────────────────────────────────
 
+
 class SCMCExecutor:
     """
     Publishes MQTT telemetry from the pymgrid simulator and executes broker
@@ -84,42 +89,53 @@ class SCMCExecutor:
     main thread owns the publish loop and hop execution.
     """
 
-    def __init__(self, grid_id: str, broker: str, mqtt_port: int,
-                 semp_ip: str, semp_port: int, interval: float = 1.0,
-                 ssl: bool = False, cafile: str = None,
-                 certfile: str = None, keyfile: str = None,
-                 pad_buckets: list = None, src_ip: str = None,
-                 shared_key: str = None, seed: int = None):
-        self.grid_id   = grid_id
+    def __init__(
+        self,
+        grid_id: str,
+        broker: str,
+        mqtt_port: int,
+        semp_ip: str,
+        semp_port: int,
+        interval: float = 1.0,
+        ssl: bool = False,
+        cafile: str = None,
+        certfile: str = None,
+        keyfile: str = None,
+        pad_buckets: list = None,
+        src_ip: str = None,
+        shared_key: str = None,
+        seed: int = None,
+    ):
+        self.grid_id = grid_id
         # Seeded draws (seed=None → OS entropy). Padding and publish jitter are
         # both drawn on the publish thread, so one RNG gives a stable sequence.
-        self._rng       = random.Random(None if seed is None else f"{seed}:executor")
+        self._rng = random.Random(None if seed is None else f"{seed}:executor")
         self._noise_rng = sensor_rng(seed)
         # QKD-simulated shared key for control-channel encryption (None = plaintext).
-        self._key      = bytes.fromhex(shared_key) if shared_key else None
-        self.broker    = broker
+        self._key = bytes.fromhex(shared_key) if shared_key else None
+        self.broker = broker
         self.mqtt_port = mqtt_port
-        self.semp_ip   = semp_ip
+        self.semp_ip = semp_ip
         self.semp_port = semp_port
-        self.interval  = interval
-        self.ssl       = ssl
-        self.cafile    = cafile
-        self.certfile  = certfile
-        self.keyfile   = keyfile
-        self.pad_buckets = list(pad_buckets or [])   # active padding policy
+        self.interval = interval
+        self.ssl = ssl
+        self.cafile = cafile
+        self.certfile = certfile
+        self.keyfile = keyfile
+        self.pad_buckets = list(pad_buckets or [])  # active padding policy
         # Local source IP both connections (MQTT + control) bind to. Hopped on
         # SCHEDULE_SRC_HOP so the SCMC's own on-wire identity is also a moving
         # target. None → let the kernel pick the default source.
-        self.src_ip    = src_ip
+        self.src_ip = src_ip
 
-        self._lock           = threading.Lock()
-        self._pub_seq        = 0       # monotonic publish counter (never reset)
-        self._pending_hop    = None    # {..hop.., fire_at}, or None
-        self._pending_pad    = None    # {buckets, seq, fire_at}, or None
-        self._pending_src_hop = None   # {new_src_ip, seq, fire_at}, or None
-        self._pending_freq   = None    # {interval, seq, fire_at}, or None
-        self._ctrl_sock      = None    # TCP socket to coordinator
-        self._mqtt_client    = None
+        self._lock = threading.Lock()
+        self._pub_seq = 0  # monotonic publish counter (never reset)
+        self._pending_hop = None  # {..hop.., fire_at}, or None
+        self._pending_pad = None  # {buckets, seq, fire_at}, or None
+        self._pending_src_hop = None  # {new_src_ip, seq, fire_at}, or None
+        self._pending_freq = None  # {interval, seq, fire_at}, or None
+        self._ctrl_sock = None  # TCP socket to coordinator
+        self._mqtt_client = None
         self._mqtt_connected = False
 
         log.info("[%s] Building microgrid simulator...", grid_id)
@@ -129,7 +145,7 @@ class SCMCExecutor:
 
     def _on_connect(self, client, userdata, flags, rc, props=None):
         with self._lock:
-            self._mqtt_connected = (rc == 0)
+            self._mqtt_connected = rc == 0
         status = "ok" if rc == 0 else f"rc={rc}"
         log.info("[%s] MQTT → %s:%s (%s)", self.grid_id, self.broker, self.mqtt_port, status)
 
@@ -147,24 +163,19 @@ class SCMCExecutor:
                 pass
 
         c = mqtt.Client(client_id=self.grid_id, protocol=mqtt.MQTTv5)
-        c.on_connect    = self._on_connect
+        c.on_connect = self._on_connect
         c.on_disconnect = self._on_disconnect
         if self.ssl:
-            c.tls_set(
-                ca_certs=self.cafile,
-                certfile=self.certfile,
-                keyfile=self.keyfile,
-            )
+            c.tls_set(ca_certs=self.cafile, certfile=self.certfile, keyfile=self.keyfile)
         self._mqtt_client = c
 
         while True:
             try:
                 # bind_address pins the local source IP so MQTT rides the
                 # current src_ip (hopped on SCHEDULE_SRC_HOP). "" = kernel default.
-                c.connect(self.broker, self.mqtt_port, keepalive=60,
-                          bind_address=self.src_ip or "")
+                c.connect(self.broker, self.mqtt_port, keepalive=60, bind_address=self.src_ip or "")
                 c.loop_start()
-                for _ in range(20):          # wait up to 4 s for CONNACK
+                for _ in range(20):  # wait up to 4 s for CONNACK
                     with self._lock:
                         if self._mqtt_connected:
                             return
@@ -185,16 +196,12 @@ class SCMCExecutor:
         result = {"connected": False}
 
         def _on_conn(_client, _ud, _flags, rc, _props=None):
-            result["connected"] = (rc == 0)
+            result["connected"] = rc == 0
 
         c = mqtt.Client(client_id=self.grid_id, protocol=mqtt.MQTTv5)
         c.on_connect = _on_conn
         if self.ssl:
-            c.tls_set(
-                ca_certs=self.cafile,
-                certfile=self.certfile,
-                keyfile=self.keyfile,
-            )
+            c.tls_set(ca_certs=self.cafile, certfile=self.certfile, keyfile=self.keyfile)
 
         deadline = time.monotonic() + deadline_s
         while time.monotonic() < deadline:
@@ -202,11 +209,11 @@ class SCMCExecutor:
             try:
                 c.connect(broker, port, keepalive=60, bind_address=self.src_ip or "")
                 c.loop_start()
-                while time.monotonic() < deadline:    # await CONNACK within the budget
+                while time.monotonic() < deadline:  # await CONNACK within the budget
                     if result["connected"]:
                         return c
                     time.sleep(0.1)
-                break                                 # budget spent without CONNACK
+                break  # budget spent without CONNACK
             except Exception as e:
                 log.warning("[%s] MQTT connect failed (%s)", self.grid_id, e)
                 try:
@@ -237,12 +244,12 @@ class SCMCExecutor:
 
         candidates = [b for b in buckets if b >= len(raw)]
         if not candidates:
-            return raw                      # already larger than every bucket
+            return raw  # already larger than every bucket
         target = self._rng.choice(candidates)
 
         # Account for the overhead the "_pad" field itself adds to the JSON.
         overhead = len(json.dumps({**obj, "_pad": ""}).encode())
-        filler   = max(0, target - overhead)
+        filler = max(0, target - overhead)
         return json.dumps({**obj, "_pad": "A" * filler}).encode()
 
     def _publish(self, seq_num: int) -> None:
@@ -252,11 +259,9 @@ class SCMCExecutor:
         for metric in ("power_kw", "frequency", "voltage"):
             self._mqtt_client.publish(
                 f"{topic_base}/{metric}",
-                self._pad_payload({
-                    "value":   r[metric],
-                    "ts":      r["timestamp"],
-                    "scmc_id": self.grid_id,
-                }),
+                self._pad_payload(
+                    {"value": r[metric], "ts": r["timestamp"], "scmc_id": self.grid_id}
+                ),
                 qos=0,
             )
 
@@ -265,18 +270,31 @@ class SCMCExecutor:
         pad_label = ",".join(map(str, self.pad_buckets)) if self.pad_buckets else "off"
         log.info(
             "[%s] #%d → %s:%d  power=%6.1f kW  freq=%.4f Hz  volt=%.2f V  pad=[%s]",
-            self.grid_id, seq_num, self.broker, self.mqtt_port,
-            r["power_kw"], r["frequency"], r["voltage"], pad_label,
+            self.grid_id,
+            seq_num,
+            self.broker,
+            self.mqtt_port,
+            r["power_kw"],
+            r["frequency"],
+            r["voltage"],
+            pad_label,
         )
 
     # ── hop execution ──
 
     def _do_hop(self, hop: dict) -> None:
-        seq      = hop["seq"]
-        new_ip   = hop["new_ip"]
+        seq = hop["seq"]
+        new_ip = hop["new_ip"]
         new_port = hop["new_port"]
-        log.info("[%s] hop seq=%s  %s:%s → %s:%s",
-                 self.grid_id, seq, self.broker, self.mqtt_port, new_ip, new_port)
+        log.info(
+            "[%s] hop seq=%s  %s:%s → %s:%s",
+            self.grid_id,
+            seq,
+            self.broker,
+            self.mqtt_port,
+            new_ip,
+            new_port,
+        )
 
         # Make-before-break: bring up the NEW broker connection and only swap once
         # it is confirmed live. If it never answers within HOP_CONNECT_TIMEOUT we
@@ -285,8 +303,13 @@ class SCMCExecutor:
         # the publish loop forever — see the attack-scenario client.log).
         new_client = self._try_connect(new_ip, new_port, HOP_CONNECT_TIMEOUT)
         if new_client is None:
-            log.warning("[%s] hop seq=%s failed — staying on %s:%s",
-                        self.grid_id, seq, self.broker, self.mqtt_port)
+            log.warning(
+                "[%s] hop seq=%s failed — staying on %s:%s",
+                self.grid_id,
+                seq,
+                self.broker,
+                self.mqtt_port,
+            )
             self._send_ctrl({"type": "HOP_FAILED", "seq": seq, "scmc_id": self.grid_id})
             return
 
@@ -294,13 +317,13 @@ class SCMCExecutor:
         # old client's disconnect callback first so its teardown doesn't clobber
         # self._mqtt_connected after we've set it for the new one.
         old_client = self._mqtt_client
-        new_client.on_connect    = self._on_connect
+        new_client.on_connect = self._on_connect
         new_client.on_disconnect = self._on_disconnect
         with self._lock:
-            self._mqtt_client    = new_client
+            self._mqtt_client = new_client
             self._mqtt_connected = True
-            self.broker          = new_ip
-            self.mqtt_port       = new_port
+            self.broker = new_ip
+            self.mqtt_port = new_port
         if old_client is not None:
             old_client.on_disconnect = None
             try:
@@ -322,16 +345,15 @@ class SCMCExecutor:
     def _do_src_hop(self, hop: dict) -> None:
         """Hop the SCMC's own source IP: rebind both MQTT and the control channel
         to the new local address so the publisher is a moving target too."""
-        seq        = hop["seq"]
+        seq = hop["seq"]
         new_src_ip = hop["new_src_ip"]
-        log.info("[%s] src hop seq=%s  %s → %s",
-                 self.grid_id, seq, self.src_ip, new_src_ip)
+        log.info("[%s] src hop seq=%s  %s → %s", self.grid_id, seq, self.src_ip, new_src_ip)
         # DONE goes out on the OLD control socket (old source still valid) before
         # we rebind; then MQTT and the control channel move to the new source.
         self._send_ctrl({"type": "SRC_HOP_DONE", "seq": seq, "scmc_id": self.grid_id})
         self.src_ip = new_src_ip
-        self._mqtt_connect()                 # reconnect MQTT bound to the new source
-        self._reconnect_ctrl()               # control channel rebinds to the new source
+        self._mqtt_connect()  # reconnect MQTT bound to the new source
+        self._reconnect_ctrl()  # control channel rebinds to the new source
 
     # ── control channel ──
 
@@ -360,10 +382,10 @@ class SCMCExecutor:
         self._ctrl_sock and continues on the new socket instead of reconnecting.
         """
         old = self._ctrl_sock
-        self._ctrl_connect()                 # opens new, HELLO, sets self._ctrl_sock
+        self._ctrl_connect()  # opens new, HELLO, sets self._ctrl_sock
         if old is not None and old is not self._ctrl_sock:
             try:
-                old.shutdown(socket.SHUT_RDWR)   # wake reader blocked in recv()
+                old.shutdown(socket.SHUT_RDWR)  # wake reader blocked in recv()
             except OSError:
                 pass
             try:
@@ -374,50 +396,74 @@ class SCMCExecutor:
     def _ctrl_reader(self) -> None:
         """Daemon thread: receives MTD action commands from the coordinator."""
         while True:
-            sock = self._ctrl_sock           # snapshot: may be swapped by _reconnect_ctrl
+            sock = self._ctrl_sock  # snapshot: may be swapped by _reconnect_ctrl
             try:
-                msg   = _recv_msg(sock, self._key)
+                msg = _recv_msg(sock, self._key)
                 mtype = msg.get("type")
-                seq   = msg.get("seq")
-                in_m  = msg.get("in_messages", 0)
+                seq = msg.get("seq")
+                in_m = msg.get("in_messages", 0)
 
                 if mtype == "SCHEDULE_HOP":
-                    log.info("[%s] SCHEDULE_HOP seq=%s  action=%s  → %s:%s  in %d msgs",
-                             self.grid_id, seq, msg["action"],
-                             msg["new_ip"], msg["new_port"], in_m)
+                    log.info(
+                        "[%s] SCHEDULE_HOP seq=%s  action=%s  → %s:%s  in %d msgs",
+                        self.grid_id,
+                        seq,
+                        msg["action"],
+                        msg["new_ip"],
+                        msg["new_port"],
+                        in_m,
+                    )
                     with self._lock:
                         self._pending_hop = {**msg, "fire_at": self._pub_seq + in_m}
                     self._send_ctrl({"type": "HOP_ACK", "seq": seq, "scmc_id": self.grid_id})
 
                 elif mtype == "SET_PADDING":
                     buckets = msg.get("buckets", [])
-                    log.info("[%s] SET_PADDING seq=%s  buckets=%s  in %d msgs",
-                             self.grid_id, seq, buckets, in_m)
+                    log.info(
+                        "[%s] SET_PADDING seq=%s  buckets=%s  in %d msgs",
+                        self.grid_id,
+                        seq,
+                        buckets,
+                        in_m,
+                    )
                     with self._lock:
                         self._pending_pad = {
-                            "buckets": buckets, "seq": seq,
+                            "buckets": buckets,
+                            "seq": seq,
                             "fire_at": self._pub_seq + in_m,
                         }
                     self._send_ctrl({"type": "PAD_ACK", "seq": seq, "scmc_id": self.grid_id})
 
                 elif mtype == "SCHEDULE_SRC_HOP":
                     new_src_ip = msg["new_src_ip"]
-                    log.info("[%s] SCHEDULE_SRC_HOP seq=%s  → src %s  in %d msgs",
-                             self.grid_id, seq, new_src_ip, in_m)
+                    log.info(
+                        "[%s] SCHEDULE_SRC_HOP seq=%s  → src %s  in %d msgs",
+                        self.grid_id,
+                        seq,
+                        new_src_ip,
+                        in_m,
+                    )
                     with self._lock:
                         self._pending_src_hop = {
-                            "new_src_ip": new_src_ip, "seq": seq,
+                            "new_src_ip": new_src_ip,
+                            "seq": seq,
                             "fire_at": self._pub_seq + in_m,
                         }
                     self._send_ctrl({"type": "SRC_HOP_ACK", "seq": seq, "scmc_id": self.grid_id})
 
                 elif mtype == "SET_INTERVAL":
                     new_interval = msg.get("interval")
-                    log.info("[%s] SET_INTERVAL seq=%s  interval=%ss  in %d msgs",
-                             self.grid_id, seq, new_interval, in_m)
+                    log.info(
+                        "[%s] SET_INTERVAL seq=%s  interval=%ss  in %d msgs",
+                        self.grid_id,
+                        seq,
+                        new_interval,
+                        in_m,
+                    )
                     with self._lock:
                         self._pending_freq = {
-                            "interval": new_interval, "seq": seq,
+                            "interval": new_interval,
+                            "seq": seq,
                             "fire_at": self._pub_seq + in_m,
                         }
                     self._send_ctrl({"type": "INTERVAL_ACK", "seq": seq, "scmc_id": self.grid_id})
@@ -435,7 +481,8 @@ class SCMCExecutor:
                 # source_address pins the local source IP so the control channel
                 # rides the current src_ip too (hopped on SCHEDULE_SRC_HOP).
                 sock = socket.create_connection(
-                    (self.semp_ip, self.semp_port), timeout=5,
+                    (self.semp_ip, self.semp_port),
+                    timeout=5,
                     source_address=(self.src_ip, 0) if self.src_ip else None,
                 )
                 sock.settimeout(None)
@@ -476,8 +523,9 @@ class SCMCExecutor:
                         self.pad_buckets = pad["buckets"]
                         print(f"[{self.grid_id}] padding policy → {pad['buckets']}", flush=True)
                         log.info("[%s] padding policy → %s", self.grid_id, pad["buckets"])
-                        self._send_ctrl({"type": "PAD_DONE", "seq": pad["seq"],
-                                         "scmc_id": self.grid_id})
+                        self._send_ctrl(
+                            {"type": "PAD_DONE", "seq": pad["seq"], "scmc_id": self.grid_id}
+                        )
 
                     # Apply scheduled publish-frequency change (independent countdown).
                     # New interval takes effect at the time.sleep below.
@@ -489,10 +537,13 @@ class SCMCExecutor:
                             freq = None
                     if freq:
                         self.interval = freq["interval"]
-                        print(f"[{self.grid_id}] publish interval → {freq['interval']}s", flush=True)
+                        print(
+                            f"[{self.grid_id}] publish interval → {freq['interval']}s", flush=True
+                        )
                         log.info("[%s] publish interval → %ss", self.grid_id, freq["interval"])
-                        self._send_ctrl({"type": "INTERVAL_DONE", "seq": freq["seq"],
-                                         "scmc_id": self.grid_id})
+                        self._send_ctrl(
+                            {"type": "INTERVAL_DONE", "seq": freq["seq"], "scmc_id": self.grid_id}
+                        )
 
                     # Apply scheduled source-IP hop (independent countdown). Comes
                     # before the broker hop; both reconnect MQTT.
@@ -526,45 +577,72 @@ class SCMCExecutor:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(description="MTD executor — runs on each SCMC")
-    parser.add_argument("--grid-id",           default="scmc1",
-                        help="SCMC identifier (default: scmc1)")
-    parser.add_argument("--broker",            default="10.1.0.2",
-                        help="Initial MQTT broker IP (default: 10.1.0.2)")
-    parser.add_argument("--mqtt-port",         type=int,   default=None,
-                        help="Initial broker port (default: 8883 with --ssl, 1883 otherwise)")
-    parser.add_argument("--semp-control-ip",   default="10.1.0.2",
-                        help="SEMP coordinator IP (default: 10.1.0.2)")
-    parser.add_argument("--semp-control-port", type=int,   default=9998,
-                        help="SEMP coordinator control port (default: 9998)")
-    parser.add_argument("--interval",          type=float, default=1.0,
-                        help="Seconds between publish cycles (default: 1.0)")
-    parser.add_argument("--ssl",      action="store_true",  help="Enable MQTT over TLS")
-    parser.add_argument("--cafile",   default=None,
-                        help="CA certificate file (required with --ssl)")
-    parser.add_argument("--certfile", default=None,
-                        help="Client certificate for mutual TLS (optional)")
-    parser.add_argument("--keyfile",  default=None,
-                        help="Client private key for mutual TLS (optional)")
-    parser.add_argument("--pad-buckets", default="",
-                        help="Initial padding bucket sizes, comma-separated "
-                             "(default: empty = no padding until coordinator sets it)")
-    parser.add_argument("--scmc-ip-pool", default="",
-                        help="Comma-separated local source IP pool for source-IP "
-                             "hopping. The first entry is the initial source bound by "
-                             "MQTT and the control channel; the coordinator announces "
-                             "the rest via SCHEDULE_SRC_HOP (default: empty = no "
-                             "source hop, kernel-chosen source).")
-    parser.add_argument("--log-file", default="mtd_executor.log",
-                        help="File to write the message-exchange log "
-                             "(default: mtd_executor.log in the working directory)")
-    parser.add_argument("--shared-key", default=None,
-                        help="64-char hex QKD shared key for control-channel "
-                             "AES-256-GCM encryption (omit = plaintext)")
-    parser.add_argument("--seed", type=int, default=None,
-                        help="Seed for padding, publish jitter and sensor noise "
-                             "(omit = unseeded)")
+    parser.add_argument("--grid-id", default="scmc1", help="SCMC identifier (default: scmc1)")
+    parser.add_argument(
+        "--broker", default="10.1.0.2", help="Initial MQTT broker IP (default: 10.1.0.2)"
+    )
+    parser.add_argument(
+        "--mqtt-port",
+        type=int,
+        default=None,
+        help="Initial broker port (default: 8883 with --ssl, 1883 otherwise)",
+    )
+    parser.add_argument(
+        "--semp-control-ip", default="10.1.0.2", help="SEMP coordinator IP (default: 10.1.0.2)"
+    )
+    parser.add_argument(
+        "--semp-control-port",
+        type=int,
+        default=9998,
+        help="SEMP coordinator control port (default: 9998)",
+    )
+    parser.add_argument(
+        "--interval", type=float, default=1.0, help="Seconds between publish cycles (default: 1.0)"
+    )
+    parser.add_argument("--ssl", action="store_true", help="Enable MQTT over TLS")
+    parser.add_argument("--cafile", default=None, help="CA certificate file (required with --ssl)")
+    parser.add_argument(
+        "--certfile", default=None, help="Client certificate for mutual TLS (optional)"
+    )
+    parser.add_argument(
+        "--keyfile", default=None, help="Client private key for mutual TLS (optional)"
+    )
+    parser.add_argument(
+        "--pad-buckets",
+        default="",
+        help="Initial padding bucket sizes, comma-separated "
+        "(default: empty = no padding until coordinator sets it)",
+    )
+    parser.add_argument(
+        "--scmc-ip-pool",
+        default="",
+        help="Comma-separated local source IP pool for source-IP "
+        "hopping. The first entry is the initial source bound by "
+        "MQTT and the control channel; the coordinator announces "
+        "the rest via SCHEDULE_SRC_HOP (default: empty = no "
+        "source hop, kernel-chosen source).",
+    )
+    parser.add_argument(
+        "--log-file",
+        default="mtd_executor.log",
+        help="File to write the message-exchange log "
+        "(default: mtd_executor.log in the working directory)",
+    )
+    parser.add_argument(
+        "--shared-key",
+        default=None,
+        help="64-char hex QKD shared key for control-channel "
+        "AES-256-GCM encryption (omit = plaintext)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed for padding, publish jitter and sensor noise (omit = unseeded)",
+    )
     args = parser.parse_args()
 
     if args.shared_key is not None and len(args.shared_key) != 64:
@@ -593,20 +671,20 @@ def main():
     src_ip = scmc_ip_pool[0] if scmc_ip_pool else None
 
     SCMCExecutor(
-        grid_id     = args.grid_id,
-        broker      = args.broker,
-        mqtt_port   = args.mqtt_port,
-        semp_ip     = args.semp_control_ip,
-        semp_port   = args.semp_control_port,
-        interval    = args.interval,
-        ssl         = args.ssl,
-        cafile      = args.cafile,
-        certfile    = args.certfile,
-        keyfile     = args.keyfile,
-        pad_buckets = pad_buckets,
-        src_ip      = src_ip,
-        shared_key  = args.shared_key,
-        seed        = args.seed,
+        grid_id=args.grid_id,
+        broker=args.broker,
+        mqtt_port=args.mqtt_port,
+        semp_ip=args.semp_control_ip,
+        semp_port=args.semp_control_port,
+        interval=args.interval,
+        ssl=args.ssl,
+        cafile=args.cafile,
+        certfile=args.certfile,
+        keyfile=args.keyfile,
+        pad_buckets=pad_buckets,
+        src_ip=src_ip,
+        shared_key=args.shared_key,
+        seed=args.seed,
     ).run()
 
 

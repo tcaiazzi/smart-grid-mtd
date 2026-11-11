@@ -33,14 +33,14 @@ from cyberrange.planes.traffic import components as traffic
 
 log = logging.getLogger("scenarios.mqtt_mtd")
 
-EXIT_NO_PUBLISH = 3     # exit code of a run whose SCMC never published
-OVERHEAD_S = {"deploy": 5.0, "services": 12.0, "score": 15.0, "download": 3.0,
-              "undeploy": 3.0}
+EXIT_NO_PUBLISH = 3  # exit code of a run whose SCMC never published
+OVERHEAD_S = {"deploy": 5.0, "services": 12.0, "score": 15.0, "download": 3.0, "undeploy": 3.0}
 
 
 # ── run validity ──────────────────────────────────────────────────────────────
 def _publish_re():
     import re
+
     # A line the SCMC publisher logs per publish: mtd_executor "#<n> → ip:port",
     # simple_client "power=...".
     return re.compile(r"\] (?:#\d+ →|power=)")
@@ -68,8 +68,10 @@ def check_published(client_log: str, discard=()) -> bool:
     if n:
         log.info("SCMC published %d messages", n)
         return True
-    log.error("SCMC never published (see %s and the client.console.log next to it) "
-              "— run discarded", client_log)
+    log.error(
+        "SCMC never published (see %s and the client.console.log next to it) — run discarded",
+        client_log,
+    )
     for path in discard:
         if os.path.exists(path):
             os.remove(path)
@@ -102,46 +104,105 @@ class MqttMtdScenario(Scenario):
     # ── options ──────────────────────────────────────────────────────────────
     def add_arguments(self, ap):
         from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD
+
         mode = ap.add_mutually_exclusive_group()
-        mode.add_argument("--generate-dataset", type=int, metavar="DURATION", default=None,
-                          help="capture DURATION s of mixed traffic (background + SCMC)")
-        mode.add_argument("--attack", type=int, metavar="DURATION", default=None,
-                          help="sniff DURATION s, score the capture with the trained "
-                               "model, block the top-ranked nanogrid IP")
+        mode.add_argument(
+            "--generate-dataset",
+            type=int,
+            metavar="DURATION",
+            default=None,
+            help="capture DURATION s of mixed traffic (background + SCMC)",
+        )
+        mode.add_argument(
+            "--attack",
+            type=int,
+            metavar="DURATION",
+            default=None,
+            help="sniff DURATION s, score the capture with the trained "
+            "model, block the top-ranked nanogrid IP",
+        )
         g = ap.add_argument_group("mqtt scenario")
-        g.add_argument("--name", default="dataset",
-                       help="dataset mode: capture name (<datasets-dir>/<name>.pcap); it "
-                            "also seeds the run (train/test captures differ)")
-        g.add_argument("--trace", default="assets/pcap/traccia_2b.pcap",
-                       help="background PCAP trace replayed by the router")
+        g.add_argument(
+            "--name",
+            default="dataset",
+            help="dataset mode: capture name (<datasets-dir>/<name>.pcap); it "
+            "also seeds the run (train/test captures differ)",
+        )
+        g.add_argument(
+            "--trace",
+            default="assets/pcap/traccia_2b.pcap",
+            help="background PCAP trace replayed by the router",
+        )
         g.add_argument("--bg-replay-mbps", type=int, default=2, metavar="MBPS")
-        g.add_argument("--no-mtd", action="store_true",
-                       help="baseline: no MTD (mosquitto on 8883, plain publisher)")
-        g.add_argument("--datasets-dir", default=None, metavar="DIR",
-                       help="dataset mode output (default output/<slug>/datasets)")
-        g.add_argument("--results-dir", default=None, metavar="DIR",
-                       help="attack mode output (default output/<slug>/attack/model-<variant>)")
-        g.add_argument("--dashboard-port", type=int, default=8080, metavar="PORT",
-                       help="host port of the live MTD dashboard on the semp (0 = off)")
+        g.add_argument(
+            "--no-mtd",
+            action="store_true",
+            help="baseline: no MTD (mosquitto on 8883, plain publisher)",
+        )
+        g.add_argument(
+            "--datasets-dir",
+            default=None,
+            metavar="DIR",
+            help="dataset mode output (default output/<slug>/datasets)",
+        )
+        g.add_argument(
+            "--results-dir",
+            default=None,
+            metavar="DIR",
+            help="attack mode output (default output/<slug>/attack/model-<variant>)",
+        )
+        g.add_argument(
+            "--dashboard-port",
+            type=int,
+            default=8080,
+            metavar="PORT",
+            help="host port of the live MTD dashboard on the semp (0 = off)",
+        )
         a = ap.add_argument_group("mqtt attack")
-        a.add_argument("--post-attack", type=int, default=15, metavar="SECONDS",
-                       help="seconds observed after the block")
-        a.add_argument("--block-policy", choices=attack.BLOCK_POLICIES, default="top1",
-                       help="top1: always block the top-ranked IP (the paper); threshold: "
-                            "only if its nanogrid_frac >= --block-threshold")
+        a.add_argument(
+            "--post-attack",
+            type=int,
+            default=15,
+            metavar="SECONDS",
+            help="seconds observed after the block",
+        )
+        a.add_argument(
+            "--block-policy",
+            choices=attack.BLOCK_POLICIES,
+            default="top1",
+            help="top1: always block the top-ranked IP (the paper); threshold: "
+            "only if its nanogrid_frac >= --block-threshold",
+        )
         a.add_argument("--block-threshold", type=float, default=DETECT_THRESHOLD)
         a.add_argument("--model", default="output/model.pt")
         a.add_argument("--scaler", default="output/scaler.pkl")
-        a.add_argument("--oracle-block", choices=("src", "broker", "random"), default=None,
-                       help="blackhole the address the SCMC uses right now instead of "
-                            "the CNN's pick (worst-case attacker)")
-        a.add_argument("--block-duration", type=float, default=None, metavar="SECONDS",
-                       help="lift each blackhole after SECONDS (default: never)")
+        a.add_argument(
+            "--oracle-block",
+            choices=("src", "broker", "random"),
+            default=None,
+            help="blackhole the address the SCMC uses right now instead of "
+            "the CNN's pick (worst-case attacker)",
+        )
+        a.add_argument(
+            "--block-duration",
+            type=float,
+            default=None,
+            metavar="SECONDS",
+            help="lift each blackhole after SECONDS (default: never)",
+        )
         a.add_argument("--block-episodes", type=int, default=1, metavar="N")
-        a.add_argument("--impair-profile", choices=("none", "random"), default="none",
-                       help="random: seeded benign faults in the post-attack phase")
-        a.add_argument("--detector-model", default=None, metavar="NPZ",
-                       help="run the delivery-attack detector live on the semp")
+        a.add_argument(
+            "--impair-profile",
+            choices=("none", "random"),
+            default="none",
+            help="random: seeded benign faults in the post-attack phase",
+        )
+        a.add_argument(
+            "--detector-model",
+            default=None,
+            metavar="NPZ",
+            help="run the delivery-attack detector live on the semp",
+        )
         m = ap.add_argument_group("MTD (ignored with --no-mtd)")
         m.add_argument("--mtd-hop-interval", type=int, default=2, metavar="SECONDS")
         m.add_argument("--mtd-hop-timeout", type=float, default=10.0, metavar="SECONDS")
@@ -153,11 +214,19 @@ class MqttMtdScenario(Scenario):
         m.add_argument("--mtd-src-hop-interval", type=int, default=2, metavar="SECONDS")
         m.add_argument("--mtd-freq-pool", default="1.0", metavar="SECONDS")
         m.add_argument("--mtd-freq-interval", type=int, default=30, metavar="SECONDS")
-        m.add_argument("--rl-policy", default=None, metavar="NPZ",
-                       help="distilled RL policy: the RL coordinator decides the schedule")
+        m.add_argument(
+            "--rl-policy",
+            default=None,
+            metavar="NPZ",
+            help="distilled RL policy: the RL coordinator decides the schedule",
+        )
         m.add_argument("--rl-tick", type=float, default=1.0, metavar="SECONDS")
-        m.add_argument("--rl-tag", default="", metavar="TAG",
-                       help="labels competing RL policies in the default output dir name")
+        m.add_argument(
+            "--rl-tag",
+            default="",
+            metavar="TAG",
+            help="labels competing RL policies in the default output dir name",
+        )
 
     def topology(self, args):
         return T.topology(args)
@@ -197,22 +266,33 @@ class MqttMtdScenario(Scenario):
         if mode == "dataset":
             ph.append(PhaseSpec("capture", float(args.generate_dataset), timed=True))
         elif mode == "attack":
-            ph += [PhaseSpec("sniff", float(args.attack), timed=True),
-                   PhaseSpec("score", OVERHEAD_S["score"]),
-                   PhaseSpec("post_attack", float(args.post_attack), timed=True)]
+            ph += [
+                PhaseSpec("sniff", float(args.attack), timed=True),
+                PhaseSpec("score", OVERHEAD_S["score"]),
+                PhaseSpec("post_attack", float(args.post_attack), timed=True),
+            ]
         return ph
 
     def run_info(self, args):
-        return dict(mode=mode_of(args), variant=variant_of(args), seed=args.seed,
-                    run_seed=self._seed(args), name=args.name, mbps=args.bg_replay_mbps,
-                    rl_policy=args.rl_policy, oracle_block=args.oracle_block)
+        return dict(
+            mode=mode_of(args),
+            variant=variant_of(args),
+            seed=args.seed,
+            run_seed=self._seed(args),
+            name=args.name,
+            mbps=args.bg_replay_mbps,
+            rl_policy=args.rl_policy,
+            oracle_block=args.oracle_block,
+        )
 
     def _seed(self, args):
         from cyberrange.core.context import role_seed
+
         return role_seed(args.seed, self.role(args))
 
     def metrics(self, run_dir):
         from cyberrange.scenarios.mqtt_mtd.metrics import compute_metrics
+
         return compute_metrics(run_dir)
 
     # ── episode ──────────────────────────────────────────────────────────────
@@ -222,30 +302,44 @@ class MqttMtdScenario(Scenario):
         mode = mode_of(a)
         run_seed = ctx.role_seed(self.role(a))
         log.info("Seed: %s (run seed %s)", a.seed, run_seed)
-        key = defense.generate_shared_key()        # stands in for the QKD device output
+        key = defense.generate_shared_key()  # stands in for the QKD device output
 
         with ctx.phase("services"):
-            ctx.start(defense.QkdCertBootstrap("semp", "scmc", key, a.mtd_ip_pool,
-                                               a.mtd_scmc_ip_pool))
-            ctx.run("semp",
-                    'bash -c "chown mosquitto:mosquitto /etc/mosquitto/certs/server.key;'
-                    "chmod 640 /etc/mosquitto/certs/server.key;"
-                    "chown mosquitto:mosquitto /etc/mosquitto/certs/ca.crt "
-                    "/etc/mosquitto/certs/server.crt;"
-                    'chmod 644 /etc/mosquitto/certs/ca.crt /etc/mosquitto/certs/server.crt"')
+            ctx.start(
+                defense.QkdCertBootstrap("semp", "scmc", key, a.mtd_ip_pool, a.mtd_scmc_ip_pool)
+            )
+            ctx.run(
+                "semp",
+                'bash -c "chown mosquitto:mosquitto /etc/mosquitto/certs/server.key;'
+                "chmod 640 /etc/mosquitto/certs/server.key;"
+                "chown mosquitto:mosquitto /etc/mosquitto/certs/ca.crt "
+                "/etc/mosquitto/certs/server.crt;"
+                'chmod 644 /etc/mosquitto/certs/ca.crt /etc/mosquitto/certs/server.crt"',
+            )
             ctx.exec("semp", "mosquitto -c /etc/mosquitto/mosquitto.conf -d", wait=True)
             if mtd:
                 dashboard = T.dashboard_on(a)
-                ctx.start(defense.MtdCoordinator(
-                    "semp", key, a.mtd_ip_pool, a.mtd_port_pool, a.mtd_pad_buckets,
-                    a.mtd_scmc_ip_pool, a.mtd_freq_pool, hop_timeout=a.mtd_hop_timeout,
-                    hop_interval=a.mtd_hop_interval, pad_interval=a.mtd_pad_interval,
-                    src_hop_interval=a.mtd_src_hop_interval,
-                    freq_interval=a.mtd_freq_interval,
-                    rl_policy=T.POLICY_GUEST.lstrip("/") if a.rl_policy else None,
-                    rl_tick=a.rl_tick, seed=run_seed,
-                    dashboard_port=T.DASHBOARD_GUEST_PORT if dashboard else None,
-                    detector_model=T.DETECTOR_GUEST.lstrip("/") if a.detector_model else None))
+                ctx.start(
+                    defense.MtdCoordinator(
+                        "semp",
+                        key,
+                        a.mtd_ip_pool,
+                        a.mtd_port_pool,
+                        a.mtd_pad_buckets,
+                        a.mtd_scmc_ip_pool,
+                        a.mtd_freq_pool,
+                        hop_timeout=a.mtd_hop_timeout,
+                        hop_interval=a.mtd_hop_interval,
+                        pad_interval=a.mtd_pad_interval,
+                        src_hop_interval=a.mtd_src_hop_interval,
+                        freq_interval=a.mtd_freq_interval,
+                        rl_policy=T.POLICY_GUEST.lstrip("/") if a.rl_policy else None,
+                        rl_tick=a.rl_tick,
+                        seed=run_seed,
+                        dashboard_port=T.DASHBOARD_GUEST_PORT if dashboard else None,
+                        detector_model=T.DETECTOR_GUEST.lstrip("/") if a.detector_model else None,
+                    )
+                )
                 ctx.start(monitor.TelemetryMirror())
                 if dashboard:
                     log.info("[MTD] Dashboard: http://localhost:%d/", a.dashboard_port)
@@ -263,8 +357,15 @@ class MqttMtdScenario(Scenario):
 
     def _publisher(self, ctx, key, run_seed, console_log="client.console.log", state=None):
         a = ctx.args
-        return traffic.ScmcPublisher("scmc", not a.no_mtd, a.mtd_scmc_ip_pool, shared_key=key,
-                                     seed=run_seed, console_log=console_log, state=state)
+        return traffic.ScmcPublisher(
+            "scmc",
+            not a.no_mtd,
+            a.mtd_scmc_ip_pool,
+            shared_key=key,
+            seed=run_seed,
+            console_log=console_log,
+            state=state,
+        )
 
     def _dataset(self, ctx, key, run_seed):
         a = ctx.args
@@ -282,8 +383,11 @@ class MqttMtdScenario(Scenario):
         self.publisher = ctx.start(self._publisher(ctx, key, run_seed))
         router_cap = ctx.start(monitor.Capture("router", "eth1", "router_capture.pcap"))
         ctx.start(monitor.Capture("scmc", "eth0", "scmc_capture.pcap"))
-        fp = ctx.start(attack.PassiveFingerprinter("attacker", "eth0", a.model, a.scaler,
-                                                   a.block_policy, a.block_threshold))
+        fp = ctx.start(
+            attack.PassiveFingerprinter(
+                "attacker", "eth0", a.model, a.scaler, a.block_policy, a.block_threshold
+            )
+        )
         with ctx.phase("sniff"), ctx.live():
             capture = fp.sniff(ctx, a.attack)
         with ctx.phase("score"):
@@ -291,44 +395,73 @@ class MqttMtdScenario(Scenario):
 
         port_pool = T.pool(a.mtd_port_pool) if not a.no_mtd else ["8883"]
         gt = ctx.open_ground_truth(
-            variant=variant_of(a), rl_policy=a.rl_policy, seed=a.seed, run_seed=run_seed,
-            oracle_block=a.oracle_block, block_duration=a.block_duration,
-            block_episodes=a.block_episodes, impair_profile=a.impair_profile, cnn_ip=cnn_ip,
-            scmc_ip_pool=scmc_ips(a), ip_pool=a.mtd_ip_pool,
-            port_pool=",".join(port_pool), post_attack=a.post_attack)
+            variant=variant_of(a),
+            rl_policy=a.rl_policy,
+            seed=a.seed,
+            run_seed=run_seed,
+            oracle_block=a.oracle_block,
+            block_duration=a.block_duration,
+            block_episodes=a.block_episodes,
+            impair_profile=a.impair_profile,
+            cnn_ip=cnn_ip,
+            scmc_ip_pool=scmc_ips(a),
+            ip_pool=a.mtd_ip_pool,
+            port_pool=",".join(port_pool),
+            post_attack=a.post_attack,
+        )
 
         def relaunch(state, n):
-            ctx.exec("scmc", self._publisher(ctx, key, run_seed).command_for(state),
-                     console_log=f"client.console.restart{n}.log")
+            ctx.exec(
+                "scmc",
+                self._publisher(ctx, key, run_seed).command_for(state),
+                console_log=f"client.console.restart{n}.log",
+            )
 
         from cyberrange.scenarios.mqtt_mtd.attacks import FaultInjector
-        delivery = ctx.start(attack.DeliveryAttack(
-            "router", "scmc", [int(p) for p in port_pool], relaunch, oracle=a.oracle_block,
-            block_duration=a.block_duration, block_episodes=a.block_episodes,
-            impair=a.impair_profile == "random", injector=FaultInjector))
+
+        delivery = ctx.start(
+            attack.DeliveryAttack(
+                "router",
+                "scmc",
+                [int(p) for p in port_pool],
+                relaunch,
+                oracle=a.oracle_block,
+                block_duration=a.block_duration,
+                block_episodes=a.block_episodes,
+                impair=a.impair_profile == "random",
+                injector=FaultInjector,
+            )
+        )
         log.info("[Attack] Observing post-attack effect for %ds", a.post_attack)
         with ctx.phase("post_attack"), ctx.live():
             gt.record("post_attack_start")
             delivery.attack(ctx, cnn_ip)
-            drain(ctx.exec("attacker", f"timeout {a.post_attack} tcpdump -i eth0 "
-                                       "-w post_attack_capture.pcap"))
+            drain(
+                ctx.exec(
+                    "attacker",
+                    f"timeout {a.post_attack} tcpdump -i eth0 -w post_attack_capture.pcap",
+                )
+            )
             restarts = delivery.restarts
             delivery.stop(ctx)
             gt.record("post_attack_end")
         router_cap.stop_capture(ctx)
-        ctx.add_artifact("attacker", "/post_attack_capture.pcap", "post_attack_capture.pcap",
-                         required=True)
+        ctx.add_artifact(
+            "attacker", "/post_attack_capture.pcap", "post_attack_capture.pcap", required=True
+        )
         for n in range(1, restarts + 1):
-            ctx.add_artifact("scmc", f"/client.console.restart{n}.log",
-                             f"client.console.restart{n}.log")
+            ctx.add_artifact(
+                "scmc", f"/client.console.restart{n}.log", f"client.console.restart{n}.log"
+            )
 
     def _logs(self, ctx):
         """Publisher and broker logs (required: the run is judged on them), and
         the agents' consoles + MTD telemetry (diagnostics)."""
         a, p = ctx.args, self.prefix(ctx.args)
         ctx.add_artifact("scmc", f"/{self.publisher.log_file}", f"{p}client.log", required=True)
-        ctx.add_artifact("semp", "/var/log/mosquitto/mosquitto.log", f"{p}mosquitto.log",
-                         required=True)
+        ctx.add_artifact(
+            "semp", "/var/log/mosquitto/mosquitto.log", f"{p}mosquitto.log", required=True
+        )
         ctx.add_artifact("scmc", "/client.console.log", f"{p}client.console.log")
         if not a.no_mtd:
             ctx.add_artifact("semp", "/coordinator.log", f"{p}coordinator.log")
@@ -339,5 +472,6 @@ class MqttMtdScenario(Scenario):
         discard = [ctx.path(f"{a.name}.pcap")] if mode_of(a) == "dataset" else []
         if mode_of(a) == "idle":
             return 0
-        return 0 if check_published(ctx.path(f"{p}client.log"), discard=discard) \
-            else EXIT_NO_PUBLISH
+        return (
+            0 if check_published(ctx.path(f"{p}client.log"), discard=discard) else EXIT_NO_PUBLISH
+        )

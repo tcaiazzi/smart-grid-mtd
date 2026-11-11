@@ -23,3 +23,7 @@ networkx==3.6.1
 # Test runner (make selftest). Dev-only: never imported by the platform or the
 # guest agents, which stay stdlib+numpy.
 pytest==9.2.0
+
+# Formatter and linter (make fmt / make lint, tests/core/test_formatting.py).
+# Dev-only, like pytest: never imported by the platform or the guest agents.
+ruff==0.17.4

@@ -57,20 +57,23 @@ MACHINES = {
     "attacker_cps": ATTACKER_CPS_FILES,
 }
 
+
 def _project_packages() -> tuple[str, ...]:
     """The repo's top-level importable packages, discovered rather than listed.
 
-    This used to be a hardcoded tuple of names, which is a trap: the check below
-    is ``assertNotIn(f"from {pkg}.", text)``, so the day a package is renamed the
-    assertion keeps passing against a name nothing uses any more — vacuously
-    true, and a guest agent could quietly acquire a host-side import. Discovering
-    the names means the check can only go stale if the repo has no packages at
-    all, which the test asserts outright.
+    The names are discovered because the check below is
+    ``assertNotIn(f"from {pkg}.", text)``: a hardcoded list keeps passing against
+    a name nothing uses the day a package is renamed — vacuously true, while a
+    guest agent quietly acquires a host-side import. Discovery can only go stale
+    if the repo has no packages at all, which the test asserts outright.
     """
-    names = tuple(sorted(
-        p.name for p in REPO_ROOT.iterdir()
-        if p.is_dir() and (p / "__init__.py").is_file() and not p.name.startswith((".", "_"))
-    ))
+    names = tuple(
+        sorted(
+            p.name
+            for p in REPO_ROOT.iterdir()
+            if p.is_dir() and (p / "__init__.py").is_file() and not p.name.startswith((".", "_"))
+        )
+    )
     return names
 
 
@@ -112,7 +115,8 @@ class GuestFilesExistOnHost(unittest.TestCase):
                 with self.subTest(machine=machine, host_rel=host_rel):
                     self.assertTrue(
                         (REPO_ROOT / host_rel).is_file(),
-                        f"guest_files manifest for {machine!r} references missing host file: {host_rel}",
+                        f"guest_files manifest for {machine!r} references "
+                        f"a missing host file: {host_rel}",
                     )
 
 
@@ -147,7 +151,8 @@ class GuestModulesImportCleanly(unittest.TestCase):
                         result.returncode,
                         0,
                         f"guest module {mod!r} failed to import on machine {machine!r} "
-                        f"with only its staged files on sys.path (cwd={stage_dir}):\n{result.stderr}",
+                        f"with only its staged files on sys.path "
+                        f"(cwd={stage_dir}):\n{result.stderr}",
                     )
 
 
@@ -176,7 +181,8 @@ class NoStrayProjectImportsInGuestAgents(unittest.TestCase):
         self.assertTrue(
             PROJECT_PACKAGES,
             "no top-level packages discovered, so the host-import check above asserts "
-            "nothing. Check _project_packages() against the repo layout.")
+            "nothing. Check _project_packages() against the repo layout.",
+        )
 
 
 if __name__ == "__main__":

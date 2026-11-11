@@ -13,16 +13,15 @@ them). Run: `.venv/bin/python -m unittest tests.test_grid_sim`.
 
 import sys
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
-sys.path.insert(0, str(guest_paths.DEFENSE))                 # flat ot_registers
+
+sys.path.insert(0, str(guest_paths.DEFENSE))  # flat ot_registers
 sys.path.insert(0, str(guest_paths.TRAFFIC_AGENTS))  # flat grid_sim
 
-import ot_registers as reg      # noqa: E402
-import grid_sim                 # noqa: E402
+import ot_registers as reg  # noqa: E402
+import grid_sim  # noqa: E402
 
 
 def _settle(actuators, n=5, seed=7):
@@ -82,13 +81,23 @@ class BreakerManipulation(unittest.TestCase):
 
 class Reproducibility(unittest.TestCase):
     def test_same_seed_same_trajectory(self):
-        st1 = grid_sim.build_grid(seed=11); st2 = grid_sim.build_grid(seed=11)
-        seq1 = [grid_sim.step_grid(st1, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"] for _ in range(6)]
-        seq2 = [grid_sim.step_grid(st2, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"] for _ in range(6)]
+        st1 = grid_sim.build_grid(seed=11)
+        st2 = grid_sim.build_grid(seed=11)
+        seq1 = [
+            grid_sim.step_grid(st1, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"]
+            for _ in range(6)
+        ]
+        seq2 = [
+            grid_sim.step_grid(st2, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"]
+            for _ in range(6)
+        ]
         self.assertEqual(seq1, seq2)
         # a different seed should (almost surely) diverge somewhere
         st3 = grid_sim.build_grid(seed=12)
-        seq3 = [grid_sim.step_grid(st3, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"] for _ in range(6)]
+        seq3 = [
+            grid_sim.step_grid(st3, {"dg_setpoint": 20.0, "switch_cmd": 0})["v_load"]
+            for _ in range(6)
+        ]
         self.assertNotEqual(seq1, seq3)
 
 

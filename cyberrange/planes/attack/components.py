@@ -31,10 +31,19 @@ class VulnApp(GuestAgent):
 
     def __init__(self, node, port, access_log=None):
         access = f" --access-log {access_log}" if access_log else ""
-        arts = ([Artifact(node, access_log, f"{node}.{os.path.basename(access_log)}")]
-                if access_log else [])
-        super().__init__(node, f"python3 vuln_app.py --host 0.0.0.0 --port {port}{access}",
-                         "vuln_app.log", plane=PLANE, name="vuln_app", artifacts=arts)
+        arts = (
+            [Artifact(node, access_log, f"{node}.{os.path.basename(access_log)}")]
+            if access_log
+            else []
+        )
+        super().__init__(
+            node,
+            f"python3 vuln_app.py --host 0.0.0.0 --port {port}{access}",
+            "vuln_app.log",
+            plane=PLANE,
+            name="vuln_app",
+            artifacts=arts,
+        )
 
 
 def emit_attack_writes(ctx):
@@ -44,9 +53,14 @@ def emit_attack_writes(ctx):
             for line in f:
                 ev = json.loads(line)
                 if ev.get("kind") == "modbus_write":
-                    ctx.emit("attack_write", register=ev.get("register"),
-                             register_name=ev.get("register_name"), value=ev.get("value"),
-                             ok=ev.get("ok"), write_t=ev.get("t"))
+                    ctx.emit(
+                        "attack_write",
+                        register=ev.get("register"),
+                        register_name=ev.get("register_name"),
+                        value=ev.get("value"),
+                        ok=ev.get("ok"),
+                        write_t=ev.get("t"),
+                    )
     except Exception as e:
         log.debug("could not replay ground truth: %s", e)
 
@@ -78,9 +92,16 @@ class ScriptedChain(_ExploitDriver):
 
     def attack(self, ctx):
         rc = active_attack.drive_attack(
-            ctx.manager, ctx.machine(self.node), ctx.gt, target_url=self.target_url,
-            engine_ip=self.engine_ip, engine_port=self.engine_port,
-            attack_mode=self.mode, repeat=self.repeat, interval=self.interval)
+            ctx.manager,
+            ctx.machine(self.node),
+            ctx.gt,
+            target_url=self.target_url,
+            engine_ip=self.engine_ip,
+            engine_port=self.engine_port,
+            attack_mode=self.mode,
+            repeat=self.repeat,
+            interval=self.interval,
+        )
         emit_attack_writes(ctx)
         return rc
 
@@ -91,8 +112,18 @@ class PlannedAttacker(_ExploitDriver):
 
     name = "planned_attacker"
 
-    def __init__(self, profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0,
-                 max_steps=12, interval=0.5, kg=None):
+    def __init__(
+        self,
+        profile,
+        target_url,
+        engine_ip,
+        engine_port,
+        goal=None,
+        dwell=0.0,
+        max_steps=12,
+        interval=0.5,
+        kg=None,
+    ):
         super().__init__(target_url, engine_ip, engine_port, interval)
         self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
         # The attack tree is grown from the scenario's knowledge graph. The
@@ -106,11 +137,21 @@ class PlannedAttacker(_ExploitDriver):
 
     def attack(self, ctx):
         summary = active_attack.drive_attack_planned(
-            ctx.manager, ctx.machines, ctx.gt, self.kg(ctx.lab),
-            target_url=self.target_url, engine_ip=self.engine_ip,
-            engine_port=self.engine_port, profile=self.profile, goal=self.goal,
-            seed=ctx.seed, dwell=self.dwell, max_steps=self.max_steps,
-            interval=self.interval, emit=ctx.emit)
+            ctx.manager,
+            ctx.machines,
+            ctx.gt,
+            self.kg(ctx.lab),
+            target_url=self.target_url,
+            engine_ip=self.engine_ip,
+            engine_port=self.engine_port,
+            profile=self.profile,
+            goal=self.goal,
+            seed=ctx.seed,
+            dwell=self.dwell,
+            max_steps=self.max_steps,
+            interval=self.interval,
+            emit=ctx.emit,
+        )
         emit_attack_writes(ctx)
         return summary
 
@@ -119,8 +160,7 @@ class PlannedAttacker(_ExploitDriver):
 BLOCK_POLICIES = ("top1", "threshold")
 
 
-def detect_nanogrid_ip(pcap_path, model_path, scaler_path, block_policy="top1",
-                       threshold=None):
+def detect_nanogrid_ip(pcap_path, model_path, scaler_path, block_policy="top1", threshold=None):
     """Score a capture with the trained CNN and rank source IPs by how
     nanogrid-like their traffic is, then pick the IP to block.
 
@@ -132,9 +172,13 @@ def detect_nanogrid_ip(pcap_path, model_path, scaler_path, block_policy="top1",
     (indexed by src_ip, sorted by nanogrid_frac desc); top_ip is "" when nothing
     could be scored or the policy declines to block."""
     from cyberrange.planes.attack.classify import (
-        extract_features, load_artifacts, predict_packets, rank_nanogrid_ips,
+        extract_features,
+        load_artifacts,
+        predict_packets,
+        rank_nanogrid_ips,
     )
     from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD
+
     threshold = DETECT_THRESHOLD if threshold is None else threshold
     df = extract_features(pcap_path)  # unlabeled — the attacker has no ground truth
     model, scaler = load_artifacts(model_path, scaler_path)
@@ -162,6 +206,7 @@ class PassiveFingerprinter(Component):
 
     def sniff(self, ctx, seconds):
         from cyberrange.core.context import drain
+
         log.info("[Attack] Attacker sniffing for %ds", seconds)
         drain(ctx.exec(self.node, f"timeout {seconds} tcpdump -i {self.iface} -w {self.CAPTURE}"))
         log.info("[Attack] Downloading attacker capture")
@@ -171,8 +216,12 @@ class PassiveFingerprinter(Component):
         log.info("[Attack] Scoring capture with the trained model")
         log.info("[Attack] Block policy: %s (threshold %s)", self.block_policy, self.threshold)
         self.detected_ip, self.ranking = detect_nanogrid_ip(
-            capture, self.model, self.scaler, block_policy=self.block_policy,
-            threshold=self.threshold)
+            capture,
+            self.model,
+            self.scaler,
+            block_policy=self.block_policy,
+            threshold=self.threshold,
+        )
         log.info("[Attack] Per-IP nanogrid ranking:\n%s", self.ranking.to_string())
         with open(ctx.path("nanogrid_ranking.csv"), "w") as f:
             f.write(self.ranking.to_csv())
@@ -190,8 +239,18 @@ class DeliveryAttack(Component):
 
     plane, name = PLANE, "delivery_attack"
 
-    def __init__(self, router, scmc, port_pool, relaunch, oracle=None, block_duration=None,
-                 block_episodes=1, impair=False, injector=None):
+    def __init__(
+        self,
+        router,
+        scmc,
+        port_pool,
+        relaunch,
+        oracle=None,
+        block_duration=None,
+        block_episodes=1,
+        impair=False,
+        injector=None,
+    ):
         self.router, self.scmc, self.port_pool, self.relaunch = router, scmc, port_pool, relaunch
         self.oracle, self.block_duration = oracle, block_duration
         self.block_episodes, self.impair = block_episodes, impair
@@ -204,11 +263,18 @@ class DeliveryAttack(Component):
         return self.injector.restarts if self.injector else 0
 
     def attack(self, ctx, cnn_ip):
-        self.injector = self.injector_cls(ctx.manager, ctx.machine(self.router),
-                                      ctx.machine(self.scmc), ctx.gt, self.port_pool,
-                                      ctx.role_seed("attack"), self.relaunch)
-        self.injector.start(self.oracle, cnn_ip, self.block_duration, self.block_episodes,
-                            self.impair)
+        self.injector = self.injector_cls(
+            ctx.manager,
+            ctx.machine(self.router),
+            ctx.machine(self.scmc),
+            ctx.gt,
+            self.port_pool,
+            ctx.role_seed("attack"),
+            self.relaunch,
+        )
+        self.injector.start(
+            self.oracle, cnn_ip, self.block_duration, self.block_episodes, self.impair
+        )
 
     def stop(self, ctx):
         if self.injector is not None:

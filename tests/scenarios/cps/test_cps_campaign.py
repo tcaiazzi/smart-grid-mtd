@@ -11,44 +11,78 @@ Run: `.venv/bin/python -m unittest tests.test_cps_campaign`.
 
 import json
 import os
-import sys
 import tempfile
 import types
 import unittest
-from pathlib import Path
-
-from tests.helpers import REPO_ROOT  # noqa: E402
-
-from cyberrange.scenarios.cps.metrics import aggregate, compute_metrics, format_aggregate   # noqa: E402
-from cyberrange.core.progress import read_events                        # noqa: E402
-from cyberrange.scenarios.cps import campaign as cc                 # noqa: E402
 
 
-def _metrics(attack, rules_lat=None, model_lat=None, before=(True, True), fa=(0, 0),
-             persists=False, recovered=False, abnormal=0):
+from cyberrange.scenarios.cps.metrics import aggregate, compute_metrics, format_aggregate  # noqa: E402
+from cyberrange.core.progress import read_events  # noqa: E402
+from cyberrange.scenarios.cps import campaign as cc  # noqa: E402
+
+
+def _metrics(
+    attack,
+    rules_lat=None,
+    model_lat=None,
+    before=(True, True),
+    fa=(0, 0),
+    persists=False,
+    recovered=False,
+    abnormal=0,
+):
     def det(lat, b, f):
-        return {"detected": lat is not None, "latency_from_write_s": lat,
-                "detection_latency_s": lat, "before_impact": b, "classes": [],
-                "false_alarms": f, "false_alarms_in_operator_windows": 0, "findings": 1}
+        return {
+            "detected": lat is not None,
+            "latency_from_write_s": lat,
+            "detection_latency_s": lat,
+            "before_impact": b,
+            "classes": [],
+            "false_alarms": f,
+            "false_alarms_in_operator_windows": 0,
+            "findings": 1,
+        }
+
     rl = det(rules_lat, before[0], fa[0])
     ml = det(model_lat, before[1], fa[1])
     comb_lat = min(x for x in (rules_lat, model_lat, 99) if x is not None)
-    base = compute_metrics(tempfile.mkdtemp(prefix="empty-run-"))   # every key, real shape
-    return {**base, "attack": attack, "detected": rl["detected"] or ml["detected"],
+    base = compute_metrics(tempfile.mkdtemp(prefix="empty-run-"))  # every key, real shape
+    return {
+        **base,
+        "attack": attack,
+        "detected": rl["detected"] or ml["detected"],
         "detectors": {
-        "rules": rl, "model": ml,
-        "combined": det(comb_lat if comb_lat != 99 else None, any(before), sum(fa))},
-        "false_alarms": sum(fa), "abnormal_frames": abnormal,
-        "impact_persists_after_attack": persists, "recovered": recovered,
-        "time_to_impact_s": 0.8 if abnormal else None, "impact_duration_s": 29.0 if abnormal else 0.0,
-        "max_abs_deviation_pu": 0.08, "manual_mode_s": 0.0}
+            "rules": rl,
+            "model": ml,
+            "combined": det(comb_lat if comb_lat != 99 else None, any(before), sum(fa)),
+        },
+        "false_alarms": sum(fa),
+        "abnormal_frames": abnormal,
+        "impact_persists_after_attack": persists,
+        "recovered": recovered,
+        "time_to_impact_s": 0.8 if abnormal else None,
+        "impact_duration_s": 29.0 if abnormal else 0.0,
+        "max_abs_deviation_pu": 0.08,
+        "manual_mode_s": 0.0,
+    }
 
 
 def cfg(root, **kw):
-    base = dict(name="t", out_root=root, modes="normal,manual-hijack", seeds="1-2",
-                normal_duration=60.0, learn_seconds=45.0, post_attack_duration=30.0,
-                step_interval=1.0, detectors="rules,model", poll_interval=2.0,
-                dashboard_port=0, retries=1, resume=True)
+    base = dict(
+        name="t",
+        out_root=root,
+        modes="normal,manual-hijack",
+        seeds="1-2",
+        normal_duration=60.0,
+        learn_seconds=45.0,
+        post_attack_duration=30.0,
+        step_interval=1.0,
+        detectors="rules,model",
+        poll_interval=2.0,
+        dashboard_port=0,
+        retries=1,
+        resume=True,
+    )
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -67,18 +101,23 @@ class Grammar(unittest.TestCase):
 
     def test_grid_is_seed_major(self):
         g = cc.build_grid(["normal", "manual-hijack"], [1, 2])
-        self.assertEqual([e["run_id"] for e in g],
-                         ["normal-s1", "manual-hijack-s1", "normal-s2", "manual-hijack-s2"])
+        self.assertEqual(
+            [e["run_id"] for e in g],
+            ["normal-s1", "manual-hijack-s1", "normal-s2", "manual-hijack-s2"],
+        )
         self.assertEqual([e["attack"] for e in g], [False, True, False, True])
 
     def test_run_args_shape(self):
         e = {"run_id": "manual-hijack-s3", "mode": "manual-hijack", "seed": 3, "attack": True}
         a = cc.run_args(cfg("/tmp"), e, "/x")
-        self.assertEqual((a.attack, a.attack_mode, a.seed, a.out_dir), (True, "manual-hijack", 3, "/x"))
-        n = cc.run_args(cfg("/tmp"), {"run_id": "normal-s1", "mode": "normal", "seed": 1,
-                                      "attack": False}, "/y")
+        self.assertEqual(
+            (a.attack, a.attack_mode, a.seed, a.out_dir), (True, "manual-hijack", 3, "/x")
+        )
+        n = cc.run_args(
+            cfg("/tmp"), {"run_id": "normal-s1", "mode": "normal", "seed": 1, "attack": False}, "/y"
+        )
         self.assertFalse(n.attack)
-        self.assertEqual((a.respond, a.approval), ("off", "auto"))   # default: no responder
+        self.assertEqual((a.respond, a.approval), ("off", "auto"))  # default: no responder
         r = cc.run_args(cfg("/tmp", respond="solver", approval="delay:2"), e, "/x")
         self.assertEqual((r.respond, r.approval), ("solver", "delay:2"))
 
@@ -88,14 +127,23 @@ class PlannerGrid(unittest.TestCase):
         g = cc.build_grid(cc.parse_modes("normal,planner:stealthy"), [2])
         self.assertEqual([e["run_id"] for e in g], ["normal-s2", "planner-stealthy-s2"])
         a = cc.run_args(cfg("/tmp"), g[1], "/x")
-        self.assertEqual((a.attack, a.attack_driver, a.attacker_profile), (True, "planner", "stealthy"))
-        s = cc.run_args(cfg("/tmp", attack_driver="planner"),
-                        {"run_id": "m", "mode": "manual-hijack", "seed": 1, "attack": True}, "/y")
+        self.assertEqual(
+            (a.attack, a.attack_driver, a.attacker_profile), (True, "planner", "stealthy")
+        )
+        s = cc.run_args(
+            cfg("/tmp", attack_driver="planner"),
+            {"run_id": "m", "mode": "manual-hijack", "seed": 1, "attack": True},
+            "/y",
+        )
         self.assertEqual((s.attack_driver, s.attack_mode), ("scripted", "manual-hijack"))
 
     def test_attack_driver_planner_replaces_scripted_modes(self):
-        c = cfg("/tmp", modes="normal,breaker-open,manual-hijack", attack_driver="planner",
-                attacker_profile="opportunistic")
+        c = cfg(
+            "/tmp",
+            modes="normal,breaker-open,manual-hijack",
+            attack_driver="planner",
+            attacker_profile="opportunistic",
+        )
         self.assertEqual(cc.grid_modes(c), ["normal", "planner:opportunistic"])
 
     def test_targeted_without_goal_rejected_before_running(self):
@@ -117,21 +165,27 @@ class Campaign(unittest.TestCase):
             rid = args.run_id
             seen[rid] = seen.get(rid, 0) + 1
             self.calls.append(rid)
-            progress.emit("run_start", mode=args.attack_mode if args.attack else "normal",
-                          seed=args.seed, phases=[])
+            progress.emit(
+                "run_start",
+                mode=args.attack_mode if args.attack else "normal",
+                seed=args.seed,
+                phases=[],
+            )
             if rid in fail_ids or (rid in fail_once and seen[rid] == 1):
                 progress.emit("run_end", status="failed", error="boom")
                 raise RuntimeError(f"boom {rid}")
             os.makedirs(args.out_dir, exist_ok=True)
             progress.emit("run_end", status="ok")
+
         return run_fn
 
     @staticmethod
     def fake_metrics(out_dir):
         if os.path.basename(out_dir).startswith("normal"):
             return _metrics(False)
-        return _metrics(True, rules_lat=1.2, model_lat=0.02, before=(False, True),
-                        abnormal=29, persists=True)
+        return _metrics(
+            True, rules_lat=1.2, model_lat=0.02, before=(False, True), abnormal=29, persists=True
+        )
 
     def ledger(self, name="t"):
         return read_events(os.path.join(self.root, name, "progress.jsonl"))
@@ -155,17 +209,22 @@ class Campaign(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, f)), f)
         with open(os.path.join(d, "runs", "manual-hijack-s1", "metrics.json")) as f:
             m = json.load(f)
-        self.assertEqual(m["run"], {"run_id": "manual-hijack-s1", "mode": "manual-hijack", "seed": 1})
+        self.assertEqual(
+            m["run"], {"run_id": "manual-hijack-s1", "mode": "manual-hijack", "seed": 1}
+        )
 
     def test_resume_skips_scored_runs(self):
-        cc.run_campaign(cfg(self.root, seeds="1"), run_fn=self.fake_run(), metrics_fn=self.fake_metrics)
+        cc.run_campaign(
+            cfg(self.root, seeds="1"), run_fn=self.fake_run(), metrics_fn=self.fake_metrics
+        )
         self.calls.clear()
-        res = cc.run_campaign(cfg(self.root, seeds="1-2"), run_fn=self.fake_run(),
-                              metrics_fn=self.fake_metrics)
+        res = cc.run_campaign(
+            cfg(self.root, seeds="1-2"), run_fn=self.fake_run(), metrics_fn=self.fake_metrics
+        )
         self.assertEqual(self.calls, ["normal-s2", "manual-hijack-s2"])
         self.assertEqual((res["ok"], res["skipped"]), (2, 2))
         evs = self.ledger()
-        self.assertEqual([e["seq"] for e in evs], list(range(len(evs))))   # one ledger, appended
+        self.assertEqual([e["seq"] for e in evs], list(range(len(evs))))  # one ledger, appended
         skipped = [e for e in evs if e["kind"] == "run_skipped"]
         self.assertEqual({e["run_id"] for e in skipped}, {"normal-s1", "manual-hijack-s1"})
         self.assertIn("metrics", skipped[0])
@@ -174,27 +233,38 @@ class Campaign(unittest.TestCase):
         self.assertTrue(all(r["runs"] == 2 for r in hij))
 
     def test_no_resume_reruns(self):
-        cc.run_campaign(cfg(self.root, seeds="1"), run_fn=self.fake_run(), metrics_fn=self.fake_metrics)
+        cc.run_campaign(
+            cfg(self.root, seeds="1"), run_fn=self.fake_run(), metrics_fn=self.fake_metrics
+        )
         self.calls.clear()
-        cc.run_campaign(cfg(self.root, seeds="1", resume=False), run_fn=self.fake_run(),
-                        metrics_fn=self.fake_metrics)
+        cc.run_campaign(
+            cfg(self.root, seeds="1", resume=False),
+            run_fn=self.fake_run(),
+            metrics_fn=self.fake_metrics,
+        )
         self.assertEqual(len(self.calls), 2)
 
     def test_retry_then_continue(self):
-        res = cc.run_campaign(cfg(self.root, seeds="1"),
-                              run_fn=self.fake_run(fail_ids={"normal-s1"},
-                                                   fail_once={"manual-hijack-s1"}),
-                              metrics_fn=self.fake_metrics)
-        self.assertEqual(self.calls, ["normal-s1", "normal-s1", "manual-hijack-s1", "manual-hijack-s1"])
+        res = cc.run_campaign(
+            cfg(self.root, seeds="1"),
+            run_fn=self.fake_run(fail_ids={"normal-s1"}, fail_once={"manual-hijack-s1"}),
+            metrics_fn=self.fake_metrics,
+        )
+        self.assertEqual(
+            self.calls, ["normal-s1", "normal-s1", "manual-hijack-s1", "manual-hijack-s1"]
+        )
         self.assertEqual((res["status"], res["ok"], res["failed"]), ("done_with_failures", 1, 1))
         kinds = [e["kind"] for e in self.ledger()]
         self.assertEqual(kinds.count("run_retry"), 2)
         self.assertEqual(kinds.count("run_failed"), 1)
-        self.assertFalse(os.path.exists(os.path.join(self.root, "t", "runs", "normal-s1", "metrics.json")))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.root, "t", "runs", "normal-s1", "metrics.json"))
+        )
 
     def test_interrupt_closes_campaign(self):
         def run_fn(args, progress):
             raise KeyboardInterrupt
+
         with self.assertRaises(KeyboardInterrupt):
             cc.run_campaign(cfg(self.root, seeds="1"), run_fn=run_fn, metrics_fn=self.fake_metrics)
         end = self.ledger()[-1]
@@ -202,8 +272,11 @@ class Campaign(unittest.TestCase):
 
     def test_bad_timing_rejected_before_running(self):
         with self.assertRaises(SystemExit):
-            cc.run_campaign(cfg(self.root, normal_duration=30.0), run_fn=self.fake_run(),
-                            metrics_fn=self.fake_metrics)
+            cc.run_campaign(
+                cfg(self.root, normal_duration=30.0),
+                run_fn=self.fake_run(),
+                metrics_fn=self.fake_metrics,
+            )
         self.assertEqual(self.calls, [])
 
     def test_dry_run(self):
@@ -217,9 +290,23 @@ class Campaign(unittest.TestCase):
 class Aggregate(unittest.TestCase):
     def test_numbers(self):
         rows = [
-            {"mode": "manual-hijack", "seed": 1, "metrics": _metrics(True, 1.0, 0.02, (False, True), abnormal=29, persists=True)},
-            {"mode": "manual-hijack", "seed": 2, "metrics": _metrics(True, 2.0, None, (False, False), fa=(0, 1), abnormal=29, persists=True)},
-            {"mode": "manual-hijack", "seed": 3, "metrics": _metrics(True, 1.5, 0.04, (False, True), abnormal=29, persists=True)},
+            {
+                "mode": "manual-hijack",
+                "seed": 1,
+                "metrics": _metrics(True, 1.0, 0.02, (False, True), abnormal=29, persists=True),
+            },
+            {
+                "mode": "manual-hijack",
+                "seed": 2,
+                "metrics": _metrics(
+                    True, 2.0, None, (False, False), fa=(0, 1), abnormal=29, persists=True
+                ),
+            },
+            {
+                "mode": "manual-hijack",
+                "seed": 3,
+                "metrics": _metrics(True, 1.5, 0.04, (False, True), abnormal=29, persists=True),
+            },
             {"mode": "normal", "seed": 1, "metrics": _metrics(False, fa=(0, 2))},
         ]
         agg = aggregate(rows)

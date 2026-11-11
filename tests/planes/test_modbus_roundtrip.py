@@ -18,11 +18,10 @@ import subprocess
 import sys
 import time
 import unittest
-from pathlib import Path
 
-from tests.helpers import REPO_ROOT  # noqa: E402
 
 from tests.helpers import guest_paths  # noqa: E402
+
 sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(guest_paths.TRAFFIC_AGENTS))
 
@@ -30,6 +29,7 @@ import ot_registers as reg  # noqa: E402
 
 try:
     from pymodbus.client import ModbusTcpClient
+
     HAVE_PYMODBUS = True
 except Exception:
     HAVE_PYMODBUS = False
@@ -61,14 +61,28 @@ class ModbusEngineRoundTrip(unittest.TestCase):
     def setUp(self):
         self.port = _free_port()
         env = dict(os.environ)
-        env["PYTHONPATH"] = os.pathsep.join([
-            str(AGENTS), str(guest_paths.DEFENSE), env.get("PYTHONPATH", "")])
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(AGENTS), str(guest_paths.DEFENSE), env.get("PYTHONPATH", "")]
+        )
         self.proc = subprocess.Popen(
-            [sys.executable, "-m", "modbus_engine",
-             "--port", str(self.port), "--interval", "0.3",
-             "--duration", "20", "--seed", "7"],
-            cwd=str(AGENTS), env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            [
+                sys.executable,
+                "-m",
+                "modbus_engine",
+                "--port",
+                str(self.port),
+                "--interval",
+                "0.3",
+                "--duration",
+                "20",
+                "--seed",
+                "7",
+            ],
+            cwd=str(AGENTS),
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         self.assertTrue(_wait_port(self.port), "engine did not open its Modbus port")
         time.sleep(0.6)  # let the first physics steps run
 

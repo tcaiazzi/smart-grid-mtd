@@ -66,7 +66,7 @@ class BoundProgress:
         return BoundProgress(self._log, {**self._fixed, **more})
 
     def close(self):
-        pass   # the owner of the log closes it
+        pass  # the owner of the log closes it
 
 
 class NullProgress:

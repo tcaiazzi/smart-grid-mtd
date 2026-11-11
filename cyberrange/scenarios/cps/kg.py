@@ -22,5 +22,10 @@ def build(lab=None):
     if lab is None:
         lab, _m, _s = cps.build_lab()
     services, roles = catalog()
-    return kgmod.build_kg(lab, cps.firewall_rules(), services=services, roles=roles,
-                          plant_service=("engine", "modbus"))
+    return kgmod.build_kg(
+        lab,
+        cps.firewall_rules(),
+        services=services,
+        roles=roles,
+        plant_service=("engine", "modbus"),
+    )

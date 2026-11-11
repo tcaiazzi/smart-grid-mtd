@@ -33,13 +33,16 @@ def manifest_entries():
     for scenario, module in manifest_modules().items():
         for attr in dir(module):
             value = getattr(module, attr)
-            if (attr.isupper() and isinstance(value, list) and value
-                    and all(isinstance(e, tuple) and len(e) == 2 for e in value)):
+            if (
+                attr.isupper()
+                and isinstance(value, list)
+                and value
+                and all(isinstance(e, tuple) and len(e) == 2 for e in value)
+            ):
                 entries += [(host, guest, f"{scenario}.{attr}") for host, guest in value]
     return entries
 
 
 def guest_module_names():
     """Flat module names as they land in a container ("modbus_engine", ...)."""
-    return {Path(guest).stem for _host, guest, _m in manifest_entries()
-            if guest.endswith(".py")}
+    return {Path(guest).stem for _host, guest, _m in manifest_entries() if guest.endswith(".py")}

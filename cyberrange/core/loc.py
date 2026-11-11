@@ -24,12 +24,13 @@ REPO_ROOT = str(paths.REPO_ROOT)
 
 # Categories must stay disjoint: each is summed on its own, so a file matched
 # by two of them is counted twice (tests/test_loc_coverage.py enforces this).
-# The ledger and the dashboard had their own entry while they lived in the
-# monitor package; now that they sit in core with everything else they share
-# its glob instead of being listed a second time.
+# The ledger and the dashboard sit in core with everything else, so they are
+# covered by its glob rather than listed a second time.
 CORE = {
     "run lifecycle, topology, context, streams, campaigns, CLI, ledger, dashboard": [
-        "cyberrange/core/*.py", "cyberrange/core/dashboard.html"],
+        "cyberrange/core/*.py",
+        "cyberrange/core/dashboard.html",
+    ]
 }
 COMPONENTS = {
     "attack plane": ["cyberrange/planes/attack/components.py"],
@@ -94,39 +95,51 @@ def report():
     per = {n: scenario_files(n) for n in registry.names()}
     owners = {}
     for name, cats in per.items():
-        for paths in cats.values():
-            for p in paths:
+        for category_files in cats.values():
+            for p in category_files:
                 owners.setdefault(p, set()).add(name)
     shared = sorted(p for p, o in owners.items() if len(o) > 1)
-    scen = {name: {c: count([p for p in paths if p not in shared]) for c, paths in cats.items()}
-            for name, cats in per.items()}
-    return {"core": core, "components": comps, "scenarios": scen,
-            "shared": {"files": shared, "sloc": count(shared)}, "files": files}
+    scen = {
+        name: {c: count([p for p in paths if p not in shared]) for c, paths in cats.items()}
+        for name, cats in per.items()
+    }
+    return {
+        "core": core,
+        "components": comps,
+        "scenarios": scen,
+        "shared": {"files": shared, "sloc": count(shared)},
+        "files": files,
+    }
 
 
 def format_markdown(r):
     names = sorted(r["scenarios"])
     core_total = sum(r["core"].values())
     comp_total = sum(r["components"].values())
-    lines = ["# Platform vs scenario code (source lines)", "",
-             "| platform | lines |", "|---|---:|"]
+    lines = ["# Platform vs scenario code (source lines)", "", "| platform | lines |", "|---|---:|"]
     lines += [f"| core: {c} | {n} |" for c, n in r["core"].items()]
     lines += [f"| components: {c} | {n} |" for c, n in r["components"].items()]
     lines += [f"| **platform total** | **{core_total + comp_total}** |", ""]
     cats = []
     for name in names:
         cats += [c for c in r["scenarios"][name] if c not in cats]
-    lines += ["| scenario-specific | " + " | ".join(names) + " |",
-              "|---|" + "---:|" * len(names)]
+    lines += ["| scenario-specific | " + " | ".join(names) + " |", "|---|" + "---:|" * len(names)]
     for c in cats:
-        lines.append(f"| {c} | " + " | ".join(str(r["scenarios"][n].get(c, 0)) for n in names)
-                     + " |")
+        lines.append(
+            f"| {c} | " + " | ".join(str(r["scenarios"][n].get(c, 0)) for n in names) + " |"
+        )
     totals = {n: sum(r["scenarios"][n].values()) for n in names}
     lines.append("| **scenario total** | " + " | ".join(f"**{totals[n]}**" for n in names) + " |")
-    lines += ["", f"Shared by more than one scenario (counted once): {r['shared']['sloc']} lines "
-              f"({', '.join(r['shared']['files']) or '—'}).", ""]
+    lines += [
+        "",
+        f"Shared by more than one scenario (counted once): {r['shared']['sloc']} lines "
+        f"({', '.join(r['shared']['files']) or '—'}).",
+        "",
+    ]
     plat = core_total + comp_total
     for n in names:
-        lines.append(f"- {n}: {totals[n]} scenario lines on {plat} platform lines "
-                     f"({100 * plat / (plat + totals[n]):.0f}% of what it runs on is platform).")
+        lines.append(
+            f"- {n}: {totals[n]} scenario lines on {plat} platform lines "
+            f"({100 * plat / (plat + totals[n]):.0f}% of what it runs on is platform)."
+        )
     return "\n".join(lines) + "\n"

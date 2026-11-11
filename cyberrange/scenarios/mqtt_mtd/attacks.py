@@ -12,9 +12,10 @@ an --attack run's post-attack phase this module drives, from the host:
   • benign faults (--impair-profile random) — tc netem loss, delay and burst loss on
     the router, and executor restarts.
 
-Every action is written to ground_truth.jsonl (one JSON object per line, host clock,
-which the containers share) next to the run's captures. The ground truth stays on the
-host: the SEMP never sees it. cyberrange/scenarios/mqtt_mtd/analysis/delivery_dataset.py turns it into labels.
+Every action is written to ground_truth.jsonl (one JSON object per line, host
+clock, which the containers share) next to the run's captures. The ground truth
+stays on the host: the SEMP never sees it. analysis/delivery_dataset.py turns it
+into labels.
 """
 
 import logging
@@ -27,7 +28,7 @@ from cyberrange.core.streams import GroundTruth
 log = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)")
-ROUTER_DEVS = ("eth0", "eth1")       # eth0 → SCMC side (link A), eth1 → SEMP side (link B)
+ROUTER_DEVS = ("eth0", "eth1")  # eth0 → SCMC side (link A), eth1 → SEMP side (link B)
 
 
 def _run(manager, machine, cmd: str) -> str:
@@ -44,8 +45,11 @@ def mqtt_path(manager, scmc, port_pool) -> dict:
     for line in _run(manager, scmc, "ss -Htn state established").splitlines():
         addrs = _ADDR_RE.findall(line)
         if len(addrs) >= 2 and int(addrs[1][1]) in port_pool:
-            return {"src_ip": addrs[0][0], "broker_ip": addrs[1][0],
-                    "broker_port": int(addrs[1][1])}
+            return {
+                "src_ip": addrs[0][0],
+                "broker_ip": addrs[1][0],
+                "broker_port": int(addrs[1][1]),
+            }
     return {}
 
 
@@ -98,7 +102,7 @@ class FaultInjector:
     def __init__(self, manager, router, scmc, gt: GroundTruth, port_pool, seed, relaunch):
         self.manager, self.router, self.scmc, self.gt = manager, router, scmc, gt
         self.port_pool = set(port_pool)
-        self.relaunch = relaunch          # relaunch(state: dict, n: int) → restart executor
+        self.relaunch = relaunch  # relaunch(state: dict, n: int) → restart executor
         self.stop = threading.Event()
         self._rng_block = random.Random(None if seed is None else f"{seed}:block")
         self._rng_impair = random.Random(None if seed is None else f"{seed}:impair")
@@ -125,8 +129,9 @@ class FaultInjector:
         if not oracle:
             return cnn_ip, "cnn"
         which = oracle if oracle != "random" else self._rng_block.choice(["src", "broker"])
-        path = (mqtt_path(self.manager, self.scmc, self.port_pool)
-                or executor_state(self.manager, self.scmc, self.port_pool))
+        path = mqtt_path(self.manager, self.scmc, self.port_pool) or executor_state(
+            self.manager, self.scmc, self.port_pool
+        )
         ip = path.get("src_ip" if which == "src" else "broker_ip")
         if ip is None:
             log.warning("[FaultInjector] SCMC path unknown — oracle block skipped")
@@ -185,25 +190,38 @@ class FaultInjector:
                 self._netem(ROUTER_DEVS, f"loss {p:.1f}%", kind, {"loss_pct": p}, duration)
             elif kind == "delay":
                 d = rng.uniform(50.0, 300.0)
-                self._netem(("eth1",), f"delay {d:.0f}ms {d * 0.2:.0f}ms distribution normal",
-                            kind, {"delay_ms": d}, duration)
+                self._netem(
+                    ("eth1",),
+                    f"delay {d:.0f}ms {d * 0.2:.0f}ms distribution normal",
+                    kind,
+                    {"delay_ms": d},
+                    duration,
+                )
             elif kind == "burst":
                 p, r, h = rng.uniform(1, 5), rng.uniform(10, 40), rng.uniform(50, 100)
-                self._netem(ROUTER_DEVS, f"loss gemodel {p:.1f}% {r:.1f}% {h:.1f}%", kind,
-                            {"p_pct": p, "r_pct": r, "bad_loss_pct": h}, duration)
+                self._netem(
+                    ROUTER_DEVS,
+                    f"loss gemodel {p:.1f}% {r:.1f}% {h:.1f}%",
+                    kind,
+                    {"p_pct": p, "r_pct": r, "bad_loss_pct": h},
+                    duration,
+                )
             else:
                 self._restart()
 
     # ── lifecycle ──
 
-    def start(self, oracle: str, cnn_ip: str, duration: float, episodes: int,
-              impair: bool) -> None:
+    def start(self, oracle: str, cnn_ip: str, duration: float, episodes: int, impair: bool) -> None:
         if oracle or (cnn_ip and duration):
-            self._threads.append(threading.Thread(
-                target=self._blocks, args=(oracle, cnn_ip, duration or 1e9, episodes),
-                daemon=True))
+            self._threads.append(
+                threading.Thread(
+                    target=self._blocks,
+                    args=(oracle, cnn_ip, duration or 1e9, episodes),
+                    daemon=True,
+                )
+            )
         elif cnn_ip:
-            self.block(cnn_ip, "cnn")             # the paper's single permanent block
+            self.block(cnn_ip, "cnn")  # the paper's single permanent block
         if impair:
             self._threads.append(threading.Thread(target=self._impairments, daemon=True))
         for t in self._threads:

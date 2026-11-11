@@ -28,25 +28,34 @@ import math
 import numpy as np
 
 FEATURES = (
-    "reads_ir",        # fc 0x04 requests
-    "reads_hr",        # fc 0x03 requests
-    "writes",          # write requests (any source)
-    "writes_nonplc",   # write requests not from the PLC
-    "plc_writes",      # PLC write requests (drop to 0 when it hands off)
-    "new_sessions",    # TCP SYNs toward the engine's Modbus port
-    "n_sources",       # distinct client IPs talking Modbus in the window
-    "mode_writes",     # writes to the control-mode register
-    "max_dsetpoint",   # largest |Δ| of a DG setpoint write vs the setpoint in force (kW)
-    "manual_run_s",    # seconds control has continuously been in MANUAL
-    "v_max",           # worst-high bus voltage observed (pu)
-    "v_min",           # worst-low bus voltage observed (pu)
+    "reads_ir",  # fc 0x04 requests
+    "reads_hr",  # fc 0x03 requests
+    "writes",  # write requests (any source)
+    "writes_nonplc",  # write requests not from the PLC
+    "plc_writes",  # PLC write requests (drop to 0 when it hands off)
+    "new_sessions",  # TCP SYNs toward the engine's Modbus port
+    "n_sources",  # distinct client IPs talking Modbus in the window
+    "mode_writes",  # writes to the control-mode register
+    "max_dsetpoint",  # largest |Δ| of a DG setpoint write vs the setpoint in force (kW)
+    "manual_run_s",  # seconds control has continuously been in MANUAL
+    "v_max",  # worst-high bus voltage observed (pu)
+    "v_min",  # worst-low bus voltage observed (pu)
 )
 
 # Per-feature scale floors (natural units).
 FLOORS = {
-    "reads_ir": 1.0, "reads_hr": 1.0, "writes": 1.0, "writes_nonplc": 1.0,
-    "plc_writes": 1.0, "new_sessions": 0.2, "n_sources": 0.5, "mode_writes": 0.5,
-    "max_dsetpoint": 5.0, "manual_run_s": 2.0, "v_max": 0.008, "v_min": 0.008,
+    "reads_ir": 1.0,
+    "reads_hr": 1.0,
+    "writes": 1.0,
+    "writes_nonplc": 1.0,
+    "plc_writes": 1.0,
+    "new_sessions": 0.2,
+    "n_sources": 0.5,
+    "mode_writes": 0.5,
+    "max_dsetpoint": 5.0,
+    "manual_run_s": 2.0,
+    "v_max": 0.008,
+    "v_min": 0.008,
 }
 
 MAD_TO_SIGMA = 1.4826
@@ -59,14 +68,13 @@ class WindowFeaturizer:
     closes every window that ended at or before `now` (empty windows included,
     so silence is a signal too) and returns [(window_start, vector)]."""
 
-    def __init__(self, plc_ip, window_s=1.0, setpoint_register=0, mode_register=2,
-                 manual_value=1):
+    def __init__(self, plc_ip, window_s=1.0, setpoint_register=0, mode_register=2, manual_value=1):
         self.plc_ip = plc_ip
         self.window_s = float(window_s)
         self.sp_reg = setpoint_register
         self.mode_reg = mode_register
         self.manual_value = manual_value
-        self._win = None              # current window index
+        self._win = None  # current window index
         self._c = self._empty()
         # Process state carried across windows.
         self.setpoint = None
@@ -76,9 +84,19 @@ class WindowFeaturizer:
         self.v_min = None
 
     def _empty(self):
-        return {"reads_ir": 0, "reads_hr": 0, "writes": 0, "writes_nonplc": 0,
-                "plc_writes": 0, "new_sessions": 0, "sources": set(), "mode_writes": 0,
-                "max_dsetpoint": 0.0, "v_max": None, "v_min": None}
+        return {
+            "reads_ir": 0,
+            "reads_hr": 0,
+            "writes": 0,
+            "writes_nonplc": 0,
+            "plc_writes": 0,
+            "new_sessions": 0,
+            "sources": set(),
+            "mode_writes": 0,
+            "max_dsetpoint": 0.0,
+            "v_max": None,
+            "v_min": None,
+        }
 
     def _index(self, t):
         return int(math.floor(t / self.window_s))
@@ -110,13 +128,23 @@ class WindowFeaturizer:
         manual_run = (end - self.manual_since) if self.manual_since is not None else 0.0
         v_max = c["v_max"] if c["v_max"] is not None else self.v_max
         v_min = c["v_min"] if c["v_min"] is not None else self.v_min
-        return np.array([
-            c["reads_ir"], c["reads_hr"], c["writes"], c["writes_nonplc"], c["plc_writes"],
-            c["new_sessions"], len(c["sources"]), c["mode_writes"], c["max_dsetpoint"],
-            max(0.0, manual_run),
-            v_max if v_max is not None else 1.0,
-            v_min if v_min is not None else 1.0,
-        ], dtype=float)
+        return np.array(
+            [
+                c["reads_ir"],
+                c["reads_hr"],
+                c["writes"],
+                c["writes_nonplc"],
+                c["plc_writes"],
+                c["new_sessions"],
+                len(c["sources"]),
+                c["mode_writes"],
+                c["max_dsetpoint"],
+                max(0.0, manual_run),
+                v_max if v_max is not None else 1.0,
+                v_min if v_min is not None else 1.0,
+            ],
+            dtype=float,
+        )
 
     # ── observations ────────────────────────────────────────────────────────
     def observe_syn(self, t, src):
@@ -207,8 +235,9 @@ class RobustAnomalyModel:
 
     def fit(self):
         if len(self._calib) < self.min_calibration:
-            raise ValueError(f"need >= {self.min_calibration} calibration windows, "
-                             f"got {len(self._calib)}")
+            raise ValueError(
+                f"need >= {self.min_calibration} calibration windows, got {len(self._calib)}"
+            )
         X = np.vstack(self._calib)
         self.center = np.median(X, axis=0)
         mad = np.median(np.abs(X - self.center), axis=0) * MAD_TO_SIGMA

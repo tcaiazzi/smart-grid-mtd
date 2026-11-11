@@ -83,16 +83,23 @@ def write_structure(out_dir, g=None, it=False):
     os.makedirs(out_dir, exist_ok=True)
     kgmod.save(g, os.path.join(out_dir, "kg.json"))
     with open(os.path.join(out_dir, "tree.json"), "w") as f:
-        json.dump(trees.to_json(trees.cps_attack_tree(g), trees.cps_countermeasures(g, it=it)), f,
-                  indent=1)
+        json.dump(
+            trees.to_json(trees.cps_attack_tree(g), trees.cps_countermeasures(g, it=it)),
+            f,
+            indent=1,
+        )
     return g
 
 
 def compact_state(snap):
     """Campaign state in the small form put on the progress ledger."""
-    return {"nodes": {n: [v["state"], v["score"]] for n, v in snap["nodes"].items()},
-            "active": snap["active_impacts"], "hosts": snap["hosts_implicated"],
-            "next": snap["next"], "guest_t": snap.get("t")}
+    return {
+        "nodes": {n: [v["state"], v["score"]] for n, v in snap["nodes"].items()},
+        "active": snap["active_impacts"],
+        "hosts": snap["hosts_implicated"],
+        "next": snap["next"],
+        "guest_t": snap.get("t"),
+    }
 
 
 class ResponseEngine:
@@ -103,8 +110,9 @@ class ResponseEngine:
         self.tree = trees.cps_attack_tree(self.g)
         self.cms = {c.id: c for c in trees.cps_countermeasures(self.g, it=it)}
         mode, _delay = parse_approval(approval)
-        self.policy = policy.make_policy(kind, list(self.cms.values()), self.tree,
-                                         approval="deny" if mode == "deny" else "auto")
+        self.policy = policy.make_policy(
+            kind, list(self.cms.values()), self.tree, approval="deny" if mode == "deny" else "auto"
+        )
         self.state = mapping.CampaignState(self.tree, self.g)
         self.record = record or (lambda kind, **f: None)
         self.on_state = on_state or (lambda snap: None)
@@ -129,17 +137,36 @@ class ResponseEngine:
         self.policy.mark_applied([a for a in d.actions if a != "notify"])
         body = d.to_dict()
         body.pop("t")
-        self.record("decision", t=stamp, decided_t=now, trigger_t=ev.get("t"),
-                    trigger_klass=ev.get("klass"), **body)
+        self.record(
+            "decision",
+            t=stamp,
+            decided_t=now,
+            trigger_t=ev.get("t"),
+            trigger_klass=ev.get("klass"),
+            **body,
+        )
         return d
 
 
 class Responder(threading.Thread):
     """Live responder: tails the sensor, decides, applies countermeasures."""
 
-    def __init__(self, manager, machines, kind, out_dir, emit=None, interval=0.5,
-                 approval="auto", exec_fn=None, read_fn=None, it=False, it_read_fn=None,
-                 sources=None, g=None):
+    def __init__(
+        self,
+        manager,
+        machines,
+        kind,
+        out_dir,
+        emit=None,
+        interval=0.5,
+        approval="auto",
+        exec_fn=None,
+        read_fn=None,
+        it=False,
+        it_read_fn=None,
+        sources=None,
+        g=None,
+    ):
         """``sources`` are read functions ``read(start_line) -> text`` over the
         guest telemetry files (core.component.tail_reader); by default the OT
         sensor's and, with ``it``, the HMI's IT sensor's. ``g`` is the knowledge
@@ -153,8 +180,13 @@ class Responder(threading.Thread):
         os.makedirs(out_dir, exist_ok=True)
         self.record = JsonlRecorder(os.path.join(out_dir, "response.jsonl"))
         self.engine = ResponseEngine(
-            kind, approval, g=g, record=self.record, it=self.it,
-            on_state=lambda snap: self.emit("tree_state", **compact_state(snap)))
+            kind,
+            approval,
+            g=g,
+            record=self.record,
+            it=self.it,
+            on_state=lambda snap: self.emit("tree_state", **compact_state(snap)),
+        )
         write_structure(out_dir, self.engine.g, it=self.it)
         self._exec = exec_fn or self._exec_in_lab
         # One cursor per telemetry source (complete lines only, see TelemetryCursor).
@@ -164,31 +196,33 @@ class Responder(threading.Thread):
                 sources.append(it_read_fn or self._read_it_sensor)
         self._cursors = [TelemetryCursor(r) for r in sources]
         self._halt = threading.Event()
-        self._pending = []            # (due_t, decision, countermeasure id)
-        self.record("response_up", policy=kind, approval=approval, interval=self.interval,
-                    it=self.it)
+        self._pending = []  # (due_t, decision, countermeasure id)
+        self.record(
+            "response_up", policy=kind, approval=approval, interval=self.interval, it=self.it
+        )
 
     @property
     def _lines(self):
-        return self._cursors[0].lines     # OT source cursor
+        return self._cursors[0].lines  # OT source cursor
 
     # ── lab I/O ──────────────────────────────────────────────────────────────
     def _exec_in_lab(self, machine, cmd):
-        out, err, rc = self.manager.exec_obj(self.machines[machine], ["sh", "-c", cmd],
-                                             stream=False)
+        out, err, rc = self.manager.exec_obj(
+            self.machines[machine], ["sh", "-c", cmd], stream=False
+        )
         text = ((out or b"") + (err or b"")).decode(errors="replace")
         return rc, text
 
     def _read_sensor(self, start_line):
-        out, _err, _rc = self.manager.exec_obj(self.machines["sensor"],
-                                               f"tail -n +{start_line} {SENSOR_TELEMETRY}",
-                                               stream=False)
+        out, _err, _rc = self.manager.exec_obj(
+            self.machines["sensor"], f"tail -n +{start_line} {SENSOR_TELEMETRY}", stream=False
+        )
         return (out or b"").decode(errors="replace")
 
     def _read_it_sensor(self, start_line):
-        out, _err, _rc = self.manager.exec_obj(self.machines["hmi"],
-                                               f"tail -n +{start_line} {IT_TELEMETRY}",
-                                               stream=False)
+        out, _err, _rc = self.manager.exec_obj(
+            self.machines["hmi"], f"tail -n +{start_line} {IT_TELEMETRY}", stream=False
+        )
         return (out or b"").decode(errors="replace")
 
     # ── loop ─────────────────────────────────────────────────────────────────
@@ -201,7 +235,7 @@ class Responder(threading.Thread):
         while not self._halt.is_set():
             try:
                 self.poll_once()
-            except Exception as e:      # never let monitoring kill the episode
+            except Exception as e:  # never let monitoring kill the episode
                 log.warning("responder poll failed: %s", e)
             self._halt.wait(self.interval)
 
@@ -214,8 +248,15 @@ class Responder(threading.Thread):
         self._run_due()
 
     def _dispatch(self, d):
-        self.emit("decision", policy=d.policy, actions=d.actions, guest_t=d.t,
-                  rationale=d.rationale, covers=d.covers, needs_approval=d.needs_approval)
+        self.emit(
+            "decision",
+            policy=d.policy,
+            actions=d.actions,
+            guest_t=d.t,
+            rationale=d.rationale,
+            covers=d.covers,
+            needs_approval=d.needs_approval,
+        )
         for a in d.actions:
             cm = self.engine.cms[a]
             if cm.requires_approval and self.approval == "delay":
@@ -245,16 +286,29 @@ class Responder(threading.Thread):
             results.append({"cmd": cmd, "rc": rc, "out": out[-300:]})
             ok = ok and rc == 0
         done = time.time()
-        self.record("action", t=done, id=action_id, machine=cm.machine, ok=ok,
-                    issued_t=round(issued, 3), done_t=round(done, 3),
-                    decided_t=decision.t if decision else None, commands=results)
+        self.record(
+            "action",
+            t=done,
+            id=action_id,
+            machine=cm.machine,
+            ok=ok,
+            issued_t=round(issued, 3),
+            done_t=round(done, 3),
+            decided_t=decision.t if decision else None,
+            commands=results,
+        )
         self.emit("action", id=action_id, ok=ok, machine=cm.machine)
-        log.info("countermeasure %s%s: %s", action_id,
-                 f" on {cm.machine}" if cm.machine else "", "ok" if ok else "FAILED")
+        log.info(
+            "countermeasure %s%s: %s",
+            action_id,
+            f" on {cm.machine}" if cm.machine else "",
+            "ok" if ok else "FAILED",
+        )
         return ok
 
 
 # ── Offline replay ───────────────────────────────────────────────────────────
+
 
 def replay_run(run_dir, kind, approval="auto", out_path=None):
     """Run mapping + policy over a finished run's sensor telemetry. Decisions
@@ -268,12 +322,16 @@ def replay_run(run_dir, kind, approval="auto", out_path=None):
     if tel is None:
         raise FileNotFoundError(f"no sensor telemetry in {run_dir}")
     # With the IT sensor, its findings join the OT ones in time order.
-    it_tel = next((os.path.join(run_dir, n) for n in ("hmi.it_telemetry.jsonl",
-                                                      "it_telemetry.jsonl")
-                   if os.path.exists(os.path.join(run_dir, n))), None)
+    it_tel = next(
+        (
+            os.path.join(run_dir, n)
+            for n in ("hmi.it_telemetry.jsonl", "it_telemetry.jsonl")
+            if os.path.exists(os.path.join(run_dir, n))
+        ),
+        None,
+    )
     rec = JsonlRecorder(out_path)
-    rec("response_up", policy=kind, approval=approval, replay=True, source=tel,
-        it=bool(it_tel))
+    rec("response_up", policy=kind, approval=approval, replay=True, source=tel, it=bool(it_tel))
     eng = ResponseEngine(kind, approval, record=rec, it=bool(it_tel))
     events = read_jsonl(tel) + (read_jsonl(it_tel) if it_tel else [])
     events.sort(key=lambda e: e.get("t") or 0)
@@ -285,8 +343,16 @@ def replay_run(run_dir, kind, approval="auto", out_path=None):
         decisions.append(d)
         for a in d.actions:
             if a != "notify":
-                rec("action", t=ev.get("t"), id=a, machine=eng.cms[a].machine,
-                    ok=True, planned=True, issued_t=ev.get("t"), done_t=ev.get("t"))
+                rec(
+                    "action",
+                    t=ev.get("t"),
+                    id=a,
+                    machine=eng.cms[a].machine,
+                    ok=True,
+                    planned=True,
+                    issued_t=ev.get("t"),
+                    done_t=ev.get("t"),
+                )
     rec.close()
     return decisions, rec.rows
 
@@ -296,8 +362,9 @@ def main():
     ap.add_argument("--replay", required=True, help="finished run directory")
     ap.add_argument("--policy", default="rules", choices=POLICIES[1:])
     ap.add_argument("--approval", default="auto")
-    ap.add_argument("--out", default=None,
-                    help="response log (default <run>/response.<policy>.replay.jsonl)")
+    ap.add_argument(
+        "--out", default=None, help="response log (default <run>/response.<policy>.replay.jsonl)"
+    )
     args = ap.parse_args()
     out = args.out or os.path.join(args.replay, f"response.{args.policy}.replay.jsonl")
     decisions, _rows = replay_run(args.replay, args.policy, args.approval, out)
