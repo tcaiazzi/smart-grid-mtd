@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the AI-MTD smart-grid system architecture as a publication figure.
 
-Reflects the Kathara lab built in run_experiment.py:
+Reflects the Kathara lab built in the scenario CLI:
   - Nanogrid LAN 10.0.0.0/24 : SCMC  <-> Router (gw)
   - Public backbone 10.1.0.0/24 : Router <-> SEMP broker + passive Attacker
 Components, MTD knobs and the QKD-secured control channel are taken from the

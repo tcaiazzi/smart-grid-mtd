@@ -1,8 +1,8 @@
-"""Regression test for run_experiment's "did the SCMC publish?" gate.
+"""Regression test for the scenario's "did the SCMC publish?" gate.
 
 A lab run whose SCMC publisher dies at startup still produces a capture (the
 background replay alone), and Make's order-only rules would then keep and train
-on it. run_experiment therefore counts the publishes in the downloaded client
+on it. The scenario's check_run therefore counts the publishes in the downloaded client
 log and, if there are none, deletes the run's capture and exits non-zero (so
 main.py retries it). The log lines below are verbatim formats of the two
 publishers (mtd_executor, simple_client).

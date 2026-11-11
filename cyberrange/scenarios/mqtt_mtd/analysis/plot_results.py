@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-plot_results.py — compare the experiment scenarios produced by run_experiment.py
+plot_results.py — compare the experiment scenarios produced by the scenario CLI
 
 Three scenarios are compared (defaults match the per-experiment output dirs
 built by the Makefile targets — output/<exp-slug>/{eval,attack}/model-<src>/):
@@ -16,7 +16,7 @@ Two metrics are derived straight from the artifacts each attack run leaves on
 disk — no need to re-run the lab:
 
   • Detection (security): re-score the scenario's attacker_capture.pcap with the
-    model that scenario used (same code path as run_experiment.detect_nanogrid_ip)
+    model that scenario used (same code path as attack.components.detect_nanogrid_ip)
     and read off the nanogrid score of the SCMC (pooled over its whole source-IP
     pool, see scmc_pool_detection) and the top-ranked IP. Higher score / SCMC
     rank-1 = the attacker's fingerprinting succeeds.
@@ -80,7 +80,7 @@ from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD  # noqa: E402  
 DEFAULT_SCMC_IP = "10.0.0.2"  # SCMC source IP as seen on the wire (lab default)
 CUTOFF_GAP_S = 8.0  # silence after which a surviving SCMC is deemed cut off
 
-# Markers left by run_experiment.py in the attack run.log.
+# Markers left by the scenario CLI in the attack run.log.
 BLOCK_RE = re.compile(r"Blocking nanogrid IP:\s*(\d{1,3}(?:\.\d{1,3}){3})")
 NOBLOCK_RE = re.compile(r"No nanogrid IP detected")
 LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3})")
@@ -307,7 +307,7 @@ def scmc_cut_off(
 
 
 def score_detection(pcap_path: str, model_dir: str) -> pd.DataFrame:
-    """Replicate run_experiment.detect_nanogrid_ip: rank source IPs by nanogrid frac."""
+    """Replicate attack.components.detect_nanogrid_ip: rank source IPs by nanogrid frac."""
     model_path = os.path.join(model_dir, "model.pt")
     scaler_path = os.path.join(model_dir, "scaler.pkl")
     df = extract_features(pcap_path)  # unlabeled, like the attacker sees it

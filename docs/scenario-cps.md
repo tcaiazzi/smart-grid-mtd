@@ -1,236 +1,389 @@
-# Scenario cyber-fisico (OT/Modbus): descrizione ad alto livello
+# The cyber-physical scenario (OT/Modbus)
 
-## 1. Obiettivo
+## 1. What it is for
 
-Lo scenario cyber-fisico (CPS) emula un piccolo impianto industriale di
-distribuzione elettrica e riproduce, in un ambiente isolato e ripetibile, una
-catena di attacco completa che parte dalla rete IT e arriva a produrre un effetto
-fisico sull'impianto:
+This scenario emulates a small electrical distribution plant and reproduces, in
+an isolated and repeatable environment, a complete attack chain that starts on
+the IT network and ends in a physical effect:
 
-> intrusione IT → pivot verso la rete OT → scrittura Modbus non autorizzata →
-> effetto fisico sul processo → rilevamento
+> IT intrusion → pivot into OT → unauthorized Modbus write → physical effect →
+> detection
 
-Lo scenario serve a valutare se e con quale tempestività un sensore difensivo
-passivo riesce a riconoscere l'attacco, idealmente prima che l'effetto fisico si
-manifesti, e a misurare l'impatto sul processo quando l'attacco va a segno.
+The question it is built to answer: can a passive defensive sensor recognise the
+attack, ideally **before** the physical effect appears, and what does the plant
+suffer when it does not?
 
-È indipendente dallo scenario MQTT/MTD già presente nel repository. Usa una
-propria immagine dei nodi (`kathara/cps`) e un proprio lab Kathará (`cps`), e i
-due scenari non interferiscono.
+It is independent of the MQTT/MTD scenario. It has its own node image
+(`kathara/cps`) and its own Kathará lab (`cps`), and the two never interfere.
 
-## 2. Architettura in sintesi
+## 2. Architecture
 
-L'ambiente è diviso in tre zone di rete, separate da un firewall di confine
-IT/OT:
+Three network zones, separated by an IT/OT boundary firewall:
 
 ```
-        ZONA IT                 FIREWALL               ZONA OT
-     10.10.0.0/24              IT/OT                10.20.0.0/24
-  ┌──────────────────┐     ┌─────────────┐     ┌──────────────────────┐
-  │ attaccante       │     │ FORWARD:    │     │ PLC                  │
-  │ HMI / SCADA      │────▶│ DROP salvo  │────▶│ motore fisico        │
-  │  (+ app web      │     │ HMI→motore  │     │  (gemello digitale   │
-  │   vulnerabile)   │     │ Modbus/TCP  │     │   + server Modbus)   │
-  └──────────────────┘     └─────────────┘     └──────────┬───────────┘
-                                                          │ copia passiva
-                                                          ▼ del traffico
-                                               ┌──────────────────────┐
-                                               │ sensore DPI Modbus   │
-                                               │ (ZONA DIFESA,        │
-                                               │  10.30.0.0/24)       │
-                                               └──────────────────────┘
+        IT ZONE                  FIREWALL                OT ZONE
+     10.10.0.0/24             10.10.0.1 |            10.20.0.0/24
+  ┌──────────────────┐        10.20.0.1       ┌──────────────────────┐
+  │ attacker  .0.10  │     ┌─────────────┐    │ plc        10.20.0.10│
+  │ hmi       .0.20  │────▶│ FORWARD:    │───▶│ engine     10.20.0.20│
+  │  (+ vulnerable   │     │ DROP except │    │  (digital twin +     │
+  │   diagnostics)   │     │ HMI→engine  │    │   Modbus server)     │
+  └──────────────────┘     │ Modbus/TCP  │    └──────────┬───────────┘
+                           └─────────────┘               │ passive tap
+                                                         ▼
+                                              ┌──────────────────────┐
+                                              │ sensor     10.30.0.10│
+                                              │ DEF ZONE 10.30.0.0/24│
+                                              └──────────────────────┘
 ```
 
-- **Zona IT**: ospita la postazione HMI/SCADA dell'operatore e l'attaccante.
-- **Zona OT**: ospita il PLC e il "motore fisico", cioè il gemello digitale
-  dell'impianto esposto in Modbus/TCP.
-- **Zona difesa**: ospita il sensore. Il sensore ha un'interfaccia passiva sulla
-  rete OT, da cui osserva il traffico senza trasmettere, e un'interfaccia di
-  gestione separata su cui pubblica i risultati. Dalla rete OT l'interfaccia di
-  gestione non è raggiungibile.
-- **Firewall di confine**: blocca tutto il traffico IT→OT tranne un solo flusso
-  autorizzato, quello dall'HMI al motore fisico su Modbus. L'attaccante quindi
-  non può raggiungere direttamente l'impianto: deve prima compromettere l'HMI e
-  usarla come trampolino. Le sue scritture arrivano così da un host legittimo.
+- **IT zone**: the operator's HMI/SCADA workstation and the attacker.
+- **OT zone**: the PLC and the physical engine — the plant's digital twin,
+  exposed over Modbus/TCP.
+- **Defence zone**: the sensor. It has a passive interface on the OT network,
+  where it listens without transmitting, and a separate management interface
+  where it publishes its findings. The management interface is not reachable
+  from OT.
+- **Boundary firewall**: drops all IT→OT traffic except one authorised flow,
+  HMI to engine over Modbus. The attacker therefore cannot reach the plant
+  directly: it must compromise the HMI first and use it as a springboard, which
+  is what makes its writes arrive **from a legitimate host**.
 
-## 3. Il processo fisico
+## 3. The physical process
 
-Il processo controllato è una linea di distribuzione in bassa tensione (0,4 kV),
-modellata con **pandapower** come un vero calcolo di flusso di potenza. Valori
-come tensioni e carichi non sono sceneggiati: risultano dal calcolo.
+A low-voltage (0.4 kV) distribution feeder, modelled in **pandapower** as a real
+power-flow computation. Voltages and loadings are not scripted — they are
+computed.
 
 ```
-rete esterna ──linea feeder (interruttore)── bus carico ──linea── bus generatore
-  (slack)                                    (~50 kW)              (DG, 60 kW nominali)
+external grid ──feeder line (breaker)── load bus ──line── generator bus
+   (slack)                               (~50 kW)          (DG, 60 kW rated)
 ```
 
-- Un **carico** di circa 50 kW, con una variazione casuale riproducibile tramite
-  seed.
-- Un **generatore distribuito (DG)** con potenza nominale di 60 kW, che in
-  condizioni normali eroga circa 20 kW.
-- Due **attuatori**: il setpoint di potenza del DG e l'interruttore della linea.
-  A questi si aggiunge un registro di **modalità di controllo** (AUTO/MANUALE).
-- Uno **stato normale** definito da tensioni comprese tra 0,95 e 1,05 pu e da un
-  carico di linea non superiore al 100%.
+- A **load** of about 50 kW, with a seeded random variation.
+- A **distributed generator (DG)** rated 60 kW, delivering about 20 kW normally.
+- Two **actuators**: the DG power setpoint and the feeder breaker, plus a
+  **control mode** register (AUTO/MANUAL).
+- A **normal state** defined as bus voltages within 0.95–1.05 pu and line
+  loading at or below 100%.
 
-La linea è dimensionata in modo che anche un comando *lecito*, cioè il DG al
-100% della potenza nominale, provochi una sovratensione. Questo è il punto che
-rende interessante lo scenario: un comando può essere formalmente valido e
-comunque pericoloso.
+The feeder is deliberately sized so that even a *legal* command — the DG at
+100% of its rating — causes an overvoltage. That is what makes the scenario
+interesting: a command can be formally valid and still dangerous.
 
-## 4. I componenti
+## 4. The components
 
-| Componente | Ruolo | Dove |
+| Component | Role | Zone |
 |---|---|---|
-| **Motore fisico** | Gemello digitale pandapower dietro un server Modbus/TCP. Le misure (tensioni, carichi, potenze, flag di anomalia) sono *input register*, gli attuatori sono *holding register*. | OT |
-| **PLC** | Master Modbus e unico regolatore legittimo. In AUTO legge le misure, tiene la tensione nella banda di regolazione, rifiuta setpoint fuori dall'inviluppo e riporta il DG al valore nominale di 20 kW. In MANUALE cede il controllo all'operatore. | OT |
-| **HMI / SCADA** | Client IT legittimo. Interroga periodicamente l'impianto e circa ogni 12 s esegue un dispacciamento operatore sicuro: passa in MANUALE, imposta 15–35 kW per qualche secondo e torna in AUTO. È il comportamento "normale" che il sensore deve distinguere dall'attacco. | IT |
-| **App diagnostica vulnerabile** | Piccola web app sull'host HMI con una reale command injection, che offre all'attaccante l'esecuzione di codice da remoto. È volutamente insicura e confinata nel lab. | IT |
-| **Attaccante** | Sfrutta l'app, ottiene RCE sull'HMI e da lì invia scritture Modbus verso il motore fisico. | IT |
-| **Sensore DPI Modbus** | Analizza passivamente richieste e risposte Modbus, ricostruisce lo stato dell'impianto e produce *finding* e *alert*. | Difesa |
+| **Physical engine** (`planes/traffic/agents/grid_sim.py` + `modbus_engine.py`) | pandapower digital twin behind a Modbus/TCP server. Measurements (voltages, loadings, powers, anomaly flags) are input registers; actuators are holding registers. | OT |
+| **PLC** (`planes/traffic/agents/plc_controller.py`) | The Modbus master and the only legitimate regulator. In AUTO it holds the worst bus voltage in band, rejects out-of-envelope setpoints and relaxes back to the 20 kW nominal. In MANUAL it hands authority to the operator. | OT |
+| **HMI / SCADA** (`planes/traffic/agents/hmi_client.py`) | The legitimate IT client: one persistent session polling the plant, and every ~12 s a safe operator dispatch (MANUAL, 15–35 kW for 5 s, back to AUTO). This is the normal behaviour the sensor must tell the attack apart from. | IT |
+| **Vulnerable diagnostics app** (`planes/attack/agents/vuln_app.py`) | A small web app on the HMI host with a real OS command injection, giving the attacker remote code execution. Deliberately insecure, confined to the lab. | IT |
+| **Attacker** (`planes/attack/agents/exploit_client.py`, `ot_write.py`; driver `planes/attack/active_attack.py`) | Exploits the app, gains RCE on the HMI, and from there writes Modbus to the engine. | IT |
+| **Modbus DPI sensor** (`planes/defense/agents/ot_sensor.py`, `ot_model.py`) | Passively parses Modbus requests and responses, reconstructs the plant state, and emits findings and alerts. | Defence |
 
-Tutti i nodi condividono un unico **contratto d'impianto**
-(`cyberrange/planes/defense/ot_registers.py`), che definisce la mappa dei registri, le
-scale, gli inviluppi validi dei comandi, la policy di accesso per ruolo (chi può
-leggere e scrivere cosa) e le bande operative.
+Every node shares one **plant contract**
+(`cyberrange/planes/defense/ot_registers.py`): the register map, the scales, the
+valid command envelopes, the per-role access policy, and the operating bands.
 
-## 5. Gli scenari di attacco
+## 5. The attack modes
 
-La fase iniziale è la stessa per tutti gli scenari: exploit dell'app
-diagnostica, esecuzione di codice sull'HMI e pivot attraverso il firewall
-usando l'indirizzo dell'HMI. Cambia invece l'azione eseguita sull'impianto:
+The opening is the same in every mode: exploit the diagnostics app, execute code
+on the HMI, pivot through the firewall using the HMI's address. What differs is
+the action on the plant (`CPS_ATTACK_MODE`):
 
-| Modalità | Azione | Effetto fisico | Difficoltà di rilevamento |
+| Mode | Action | Physical effect | Detection difficulty |
 |---|---|---|---|
-| `setpoint-overvoltage` | Imposta il setpoint del DG a un valore fuori dall'inviluppo (200 kW). | Sovratensione al bus del DG e sovraccarico di linea. Il PLC rifiuta il valore e l'impianto rientra. | Bassa: il comando è palesemente fuori range. |
-| `breaker-open` | Apre l'interruttore della linea, che per policy nessuno deve comandare da remoto. | La sezione a valle resta senza alimentazione e l'impatto persiste. | Bassa: è una violazione della policy di ruolo. |
-| `manual-hijack` | Prende l'autorità MANUALE e dispaccia 60 kW, entro i limiti del DG. | Sovratensione persistente: il PLC si è fatto da parte e l'effetto resta anche dopo che l'attaccante se ne va. | Alta: ogni valore è lecito e la sorgente è l'HMI, quindi le regole basate su sorgente e range non bastano. |
+| `setpoint-overvoltage` | DG setpoint outside the envelope (200 kW) | Overvoltage at the DG bus and line overload. The PLC rejects the value and the plant recovers. | Low: the command is plainly out of range |
+| `breaker-open` | Opens the feeder breaker, which by policy no one may command remotely | The downstream section loses supply and the impact persists | Low: a role-policy violation |
+| `manual-hijack` | Takes MANUAL authority and dispatches 60 kW, within the DG's limits | Persistent overvoltage: the PLC has stood down, so the effect outlives the attacker | **High**: every value is legal and the source is the HMI, so source and range rules cannot see it |
 
-Ogni scrittura dell'attaccante viene registrata con il suo istante di emissione
-(*ground truth*). Su questa base si calcolano le metriche di rilevamento.
+Every attacker write is recorded with the instant it was issued (*ground
+truth*), and the detection metrics are computed against it.
 
-## 6. Il rilevamento
+## 6. Detection
 
-Il sensore usa solo librerie standard e numpy. Decodifica a mano i frame
-Ethernet/IP/TCP/Modbus e accoppia ogni richiesta alla sua risposta, così da
-conoscere sia i comandi inviati sia lo stato osservato dell'impianto. Lavorano in
-parallelo due rilevatori, e ogni finding indica quale dei due l'ha prodotto.
+The sensor uses only the standard library and numpy. It decodes
+Ethernet/IP/TCP/Modbus frames by hand and pairs each request with its response,
+so it knows both the commands issued and the observed plant state. Two detectors
+run in parallel, and every finding says which one produced it.
 
-**Regole (rules):**
-- comando fuori range;
-- client sconosciuto, in lettura o in scrittura;
-- violazione della policy di ruolo, per esempio una scrittura sull'interruttore;
-- *unsafe command*: una scrittura sensibile seguita dall'uscita della tensione
-  osservata dalla banda normale;
-- *manual mode excursion*: impianto in MANUALE mentre è fuori banda.
+**Rules:**
 
-**Modello comportamentale (model):**
-- calcola feature al secondo, tra cui ricambio delle sessioni, ampiezza dei salti
-  di setpoint, tempo in MANUALE e tensioni osservate;
-- assegna un punteggio con un modello robusto (mediana/MAD) calibrato online sui
-  primi secondi della fase normale;
-- valuta la finestra corrente subito a ogni scrittura, così da poter segnalare
-  un'anomalia prima che l'effetto fisico si manifesti.
+- out-of-range command;
+- unknown client, reading or writing;
+- role-policy violation — a write to the breaker, for instance;
+- *unsafe command*: a sensitive write followed by the observed voltage leaving
+  the normal band;
+- *manual mode excursion*: the plant in MANUAL while out of band.
 
-Gli alert vengono sollevati una sola volta e chiusi quando la condizione cessa.
-Finding e alert viaggiano sul bus di telemetria e sulla dashboard già usati
-dallo scenario MTD.
+**Behavioural model:**
 
-## 7. Svolgimento di un esperimento
+- computes per-second features, among them session turnover, setpoint jump
+  size, time in MANUAL and observed voltages;
+- scores them with a robust model (median/MAD) calibrated online over the first
+  seconds of the normal phase;
+- evaluates the current window immediately on every write, so it can flag an
+  anomaly before the physical effect appears.
 
-Ogni esecuzione segue sempre la stessa sequenza di fasi:
+Alerts are raised once and closed when the condition ends. Findings and alerts
+travel on the same telemetry bus and dashboard the MTD scenario uses.
 
-1. **deploy**: avvio del lab Kathará a tre zone e configurazione del firewall.
-2. **services**: avvio del motore fisico, del PLC, dell'HMI, dell'app
-   vulnerabile e del sensore.
-3. **normal**: esercizio normale, di default 60 s. Nei primi 45 s il modello
-   comportamentale si calibra.
-4. **attack**: esecuzione della catena d'attacco nella modalità scelta. Questa
-   fase manca nelle esecuzioni di sola operatività normale.
-5. **post_attack**: osservazione del comportamento dell'impianto dopo l'attacco,
-   di default 30 s.
-6. **download / undeploy**: raccolta dei log (frame, finding, ground truth) e
-   smantellamento del lab.
+## 7. Running an experiment
 
-Un'esecuzione dura circa 1 minuto in modalità normale e circa 1 minuto e mezzo
-con attacco. Le **campagne** ripetono la griglia *modalità × seed* in modo
-riproducibile. Sono riprendibili e producono un riepilogo aggregato. Una
-**dashboard di avanzamento** locale mostra fasi, tempo stimato, tensioni dei bus
-in tempo reale, finding e risultati.
+Every run follows the same sequence of phases:
 
-## 8. Cosa si misura
+1. **deploy** — bring up the three-zone lab and configure the firewall;
+2. **services** — start the engine, the PLC, the HMI, the vulnerable app and
+   the sensor;
+3. **normal** — normal operation, 60 s by default; the behavioural model
+   calibrates during the first 45 s;
+4. **attack** — run the attack chain in the chosen mode (absent in
+   normal-operation runs);
+5. **post_attack** — watch the plant after the attack, 30 s by default;
+6. **download / undeploy** — collect the logs (frames, findings, ground truth)
+   and tear the lab down.
 
-**Sul rilevamento**, per ciascun rilevatore (regole, modello, combinato):
-- tasso di rilevamento;
-- latenza misurata dall'inizio dell'attacco e dalla prima scrittura malevola;
-- se il rilevamento è avvenuto prima dell'impatto fisico;
-- falsi allarmi, e quanti di questi cadono durante i dispacciamenti legittimi
-  dell'operatore.
+A run takes about a minute in normal mode and about a minute and a half with an
+attack.
 
-**Sull'impianto:**
-- tempo all'impatto e durata dell'impatto;
-- massima deviazione di tensione;
-- se l'impatto persiste dopo l'attacco o se l'impianto rientra;
-- tempo trascorso in MANUALE;
-- energia.
+```bash
+make cps-selftest      # physics, Modbus, PLC, both detectors, attack chain — NO Kathará
+make cps-image         # build the kathara/cps node image (pandapower + pymodbus)
+make cps-lab    CPS_OUT=output/cps/normal SEED=1                        # normal operation only
+make cps-attack CPS_OUT=output/cps/hijack CPS_ATTACK_MODE=manual-hijack SEED=1
+make cps-metrics CPS_OUT=output/cps/hijack   # per-detector detection, impact, energy
+```
 
-Le prime esecuzioni di verifica, singole e con seed fisso, danno risultati
-indicativi:
+`make cps-selftest` needs no Docker: it runs the pandapower twin, a real Modbus
+round trip, the PLC decision logic, both detectors off-wire, and the
+exploit → pivot → write chain end to end against a live engine and PLC on the
+host.
 
-- gli attacchi rumorosi vengono rilevati in pochi centesimi di secondo dalla
-  prima scrittura;
-- nel `manual-hijack` il modello comportamentale segnala l'attacco prima
-  dell'impatto, mentre le regole se ne accorgono solo a impatto avvenuto;
-- in operatività normale non si sono registrati falsi allarmi.
+| Knob | Default | Meaning |
+|---|---|---|
+| `CPS_NORMAL` | 60 s | length of the normal phase |
+| `CPS_LEARN` | 45 s | model calibration; **must end ≥ 5 s before the attack** |
+| `CPS_POST` | 30 s | post-attack observation |
+| `CPS_DETECTORS` | `rules,model` | which detectors run |
+| `DASHBOARD_PORT` | 8090 | live findings dashboard off the sensor's mgmt NIC |
 
-Una valutazione statistica su più seed è affidata alle campagne.
+Every option of the run (`python -m cyberrange.scenarios.cps.cli --help`) is also
+accepted by a campaign and applies to all of its runs.
 
-## 9. Perimetro e sviluppi futuri
+## 8. Campaigns and the progress dashboard
 
-Lo scenario copre le fasi **1–4** del prototipo: fondamenta, emulazione OT,
-confine IT/OT e rilevamento.
+```bash
+make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5           # 4 modes x 5 seeds = 20 runs (~30 min)
+make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5 DRY=1     # print the grid and the planned time
+make cps-campaign CPS_CAMPAIGN=p1 CPS_RESPOND=solver CPS_IT=1 CPS_ATTACK_DRIVER=planner
+make dashboard                                            # http://127.0.0.1:8765, every scenario
+```
 
-Sopra queste fasi c'è ora un **primo prototipo di risposta**
-(`cyberrange/planes/defense/soar/`, attivabile con `CPS_RESPOND=rules|solver`; dettagli nel
-README, sezione "Response (SOAR prototype)"). Comprende:
+`cps-campaign` (`cyberrange/scenarios/cps/campaign.py`) runs `CPS_MODES`
+(default `normal,setpoint-overvoltage,breaker-open,manual-hijack`) × `CPS_SEEDS`,
+seed-major, one lab at a time, under `output/cps/campaigns/<name>/`. Each run in
+`runs/<mode>-s<seed>/` is scored as it finishes (`metrics.json`, `metrics.md`)
+and the aggregate is refreshed (`summary.md`, `summary.csv` per mode × detector,
+`impact.csv` per mode, `ci.csv` with every metric's mean [95% CI] per mode).
 
-- un knowledge graph del lab;
-- l'albero di attacco della catena;
-- il mapping dai finding ai nodi dell'albero;
-- le contromisure eseguibili nel lab;
-- due policy: un playbook a regole fisse e un primo risolutore a costo
-  atteso;
-- un'approvazione dell'operatore simulata.
-- una **telemetria IT sull'HMI** (`CPS_IT=1`): un sensore lato host
-  (`cyberrange/planes/defense/agents/it_sensor.py`) che rende osservabili i primi passi
-  dell'attacco — accesso all'app web, esecuzione di comandi, pivot — che il
-  sensore OT può solo inferire. Impara il normale (traffico diagnostico
-  legittimo) nella fase iniziale. Con questa telemetria la difesa ferma
-  l'attacco **prima** che l'impianto venga toccato; senza, può reagire solo
-  alla scrittura.
-- un **attaccante guidato dall'albero** (`CPS_ATTACK_DRIVER=planner`): invece di una sequenza
-  fissa, un pianificatore cammina sull'albero d'attacco e sceglie il passo successivo in base
-  allo stato, componendo le stesse primitive del lab (nessuna nuova capacità offensiva, solo
-  per il lab). Reagisce agli esiti: se una contromisura gli chiude una strada, ne prova
-  un'altra o si ferma. È anche l'avversario baseline del gioco di WP3.
+Re-running the same `CPS_CAMPAIGN` **resumes** it: scored runs are skipped, a
+failed run is retried once and then recorded and skipped, and Ctrl-C undeploys
+the lab and marks the campaign interrupted.
 
-È un prototipo in piccolo, pensato per fissare le interfacce di WP2 e WP3
-(vedi [piano-wp2-wp3.md](piano-wp2-wp3.md)). Restano da fare:
+Everything goes onto a progress ledger, `progress.jsonl` (a standalone
+`make cps-lab`/`cps-attack` writes one into its `CPS_OUT` too): phases, the live
+plant state and the sensor's findings pulled from the containers every ~2 s, the
+attacker's writes, each run's metrics and the aggregate. `make dashboard` reads
+every ledger under `output/`; `make cps-dashboard` only `output/cps`. It can be
+started before, during or after a campaign.
 
-- la generazione automatica degli alberi;
-- il modello a gioco stocastico;
-- la misura energetica reale delle contromisure;
-- un nodo SOAR dentro il lab al posto del risponditore lato host.
+For the selected run, a **Topology · knowledge graph · attack tree** card draws
+three views in SVG with no libraries (`cyberrange/scenarios/cps/panel.js`),
+reading the run's `kg.json` / `tree.json` through
+`GET /api/structure?id=&run=`. Every run writes both files; for runs that predate
+them the structure is rebuilt from today's lab model and the card says so.
 
-## 10. Riferimenti rapidi
+- **Topology**: zones as columns, firewall and sensor on their boundaries, the
+  sensor's passive tap dashed, with addresses, services and the boundary allow
+  rule.
+- **Knowledge graph**: all typed nodes in layers, edges coloured by relation;
+  hovering a node shows its attributes.
+- **Attack tree**: each node's state (suspected / confirmed / inferred) with the
+  countermeasures that prevent (⊘) or restore (↺) it.
 
-| Cosa | Dove |
+With the responder on, the response state is overlaid on all three: implicated
+hosts, blocked flow and attacker-write count, restored or isolated hosts, active
+impacts, applied countermeasures. A time slider replays the state event by event
+and lists the decisions with their justification.
+`?view=topology|kg|tree&run=<run_id>` opens a view directly.
+
+## 9. What is measured
+
+**On detection**, per detector (rules, model, combined):
+
+- detection rate;
+- latency from the attack start and from the first malicious write;
+- whether it fired before the physical impact;
+- false alarms, and how many fell inside legitimate operator windows.
+
+**On the plant:**
+
+- time to impact and impact duration;
+- maximum voltage deviation;
+- whether the impact persists after the attack or the plant recovers;
+- time spent in MANUAL;
+- energy.
+
+Single seeded verification runs give indicative results: the loud attacks are
+detected within hundredths of a second of the first write; in `manual-hijack`
+the behavioural model flags the attack before the impact while the rules only
+notice once the impact has happened; and normal operation produced no false
+alarms. A statistical evaluation across seeds is what campaigns are for.
+
+## 10. Response (the SOAR prototype)
+
+A first end-to-end data → detection → response loop on top of the sensor
+(`cyberrange/planes/defense/soar/`, host-side; the runtime loop in
+`cyberrange/scenarios/cps/responder.py`). It is off by default
+(`CPS_RESPOND=off`), which leaves the scenario unchanged.
+
+- **Knowledge graph** (`soar/kg.py`, networkx), built from the Kathará Lab
+  model: hosts, zones and the `addresses` meta that `core.topology.build_lab`
+  sets on every machine, plus services, the plant's registers, role permissions
+  (`ot_registers.ROLE_POLICY`) and the boundary FORWARD rules.
+  `reachable(g, src, dst, port)` decides whether a host can reach a port on
+  another from zones, addresses and rules. The CPS binding lives in
+  `cyberrange/scenarios/cps/kg.py` — the plane itself knows no scenario.
+- **Attack tree** (`soar/trees.py`), a template of the chain grounded on the
+  graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
+  the sanctioned HMI→plant flow → one of three impacts: setpoint out of range
+  (T0855), breaker open (T0855), MANUAL hijack (T0831). Preconditions are
+  checked on the graph, so removing the allow rule makes a branch infeasible.
+  The ATT&CK mapping still has open review notes.
+- **Countermeasures**, the defence tree; each one *prevents* or *restores* tree
+  nodes:
+  - `block_flow` — an iptables DROP at the top of FORWARD on the firewall;
+  - `isolate_hmi` — link down on the HMI; needs operator approval;
+  - `force_auto` — back to AUTO plus the nominal setpoint;
+  - `restore_breaker` — re-close the breaker.
+
+  `force_auto` and `restore_breaker` are local Modbus writes on 127.0.0.1 inside
+  the engine container, so the sensor does not see them and the plant contract
+  is unchanged.
+- **Mapping** (`soar/mapping.py`): findings become weighted evidence on tree
+  nodes. Command-level evidence (a wrong write) is kept apart from consequence
+  evidence (the voltage left the band); once a leaf is confirmed by a wrong
+  write, voltage-derived evidence for the other leaves is discounted; an open
+  breaker also makes the operator's routine dispatch "unsafe", which is not a
+  hijack; the unobservable IT steps are *inferred* from an observed OT step.
+  `CampaignState.snapshot()` is the belief handed to the policy.
+- **Policies** (`soar/policy.py`): `rules` is the static playbook and the
+  baseline — confirmed leaf → fixed countermeasures, each fired once. `solver`
+  picks the countermeasure subset minimising expected loss plus weighted
+  operational, time and energy cost, by exhaustive enumeration over at most 32
+  subsets, and returns the Pareto front too. Every decision carries its
+  justification: the tree nodes covered and the cost terms.
+
+```bash
+make cps-attack CPS_OUT=output/cps/resp CPS_ATTACK_MODE=manual-hijack CPS_RESPOND=rules SEED=1
+make cps-metrics CPS_OUT=output/cps/resp                                  # adds a "Response" section
+make cps-replay  CPS_OUT=output/cps/v2b-manual-hijack CPS_RESPOND=solver  # offline, no lab
+make cps-campaign CPS_CAMPAIGN=c-solver CPS_RESPOND=solver                # one policy per campaign
+```
+
+`CPS_APPROVAL` controls countermeasures that need an operator: `auto`, `deny`
+(never proposed) or `delay:<s>` (simulated operator latency).
+
+### Tree-guided attacker
+
+By default the attack is a fixed per-mode chain. `CPS_ATTACK_DRIVER=planner`
+runs a **reactive attacker** (`cyberrange/planes/attack/planner/`) that walks the
+same attack tree and picks its next step from the current state, composing the
+*same* lab primitives the scripted chain uses — no new offensive capability,
+lab-only. It learns by outcome: if a step fails because a countermeasure closed
+its path, it tries another feasible impact or gives up, so it exercises the
+response like a real adversary. It is also the baseline adversary of the WP3
+stochastic game.
+
+```bash
+make cps-attack CPS_OUT=output/cps/plan CPS_ATTACK_DRIVER=planner \
+    CPS_PROFILE=stealthy CPS_DWELL=3 CPS_RESPOND=rules SEED=1
+```
+
+- `CPS_PROFILE`: `opportunistic` (biggest reachable impact), `targeted` (with
+  `CPS_GOAL`), `stealthy` (quietest impact, longer dwell).
+- `CPS_DWELL`: seconds between steps — the window the defender gets. It pays off
+  once IT-side telemetry makes the early steps observable.
+
+Each step is recorded as a `plan_step` in the ground truth, and `cps-metrics`
+reports the furthest **stage reached** (access / exec / pivot / impact), whether
+the attack **succeeded**, and whether it was **prevented** (no write landed).
+
+### IT-side telemetry: responding before the plant is touched
+
+The OT sensor sees only Modbus, so the attacker's first steps can only be
+*inferred* and the defence can act only once a write reaches the plant.
+`CPS_IT=1` adds an **IT-side sensor on the HMI**
+(`cyberrange/planes/defense/agents/it_sensor.py`, stdlib) that makes those steps
+*observed*:
+
+- the diagnostics app's access log → `web_injection_pattern` (it_access);
+- the process table (`/proc`) → `web_child_process` (it_exec);
+- open connections (`/proc/net/tcp`) → `unexpected_modbus_client` (pivot).
+
+What is normal — the operator's legitimate diagnostic traffic, the real Modbus
+client — is learned during the first `CPS_LEARN` seconds, like the OT model. The
+IT sensor also turns on legitimate periodic diagnostics on the HMI and the app's
+access log. Its findings carry the `ot_finding` shape (`detector="it"`), so the
+same mapping and responder consume them: the early steps become *confirmed*, and
+two IT countermeasures become available — `kill_proc_tree` (end the RCE) and
+`block_web_src` (block the attacking source). With the IT sensor, a confirmed
+early step triggers an early response (rules: `it_exec` → `kill_proc_tree` +
+`block_flow`; `it_access` → `block_web_src`).
+
+```bash
+make cps-attack CPS_OUT=output/cps/it CPS_ATTACK_DRIVER=planner CPS_DWELL=3 \
+    CPS_IT=1 CPS_RESPOND=rules SEED=1
+```
+
+With a dwell, this stops the attack *before* the plant is touched: in a seed-1
+run the same opportunistic attack reaches the plant with the OT sensor alone
+(`stage_reached=impact`) but is stopped at `it_access` with the IT sensor
+(`prevented`, no write). `cps-metrics` adds an `it` detection row and a
+`prevented before the plant was touched` line.
+
+The responder writes to the run directory `response.jsonl` — kinds
+`response_up`, `tree_state`, `decision`, `approval` and `action` (with
+per-command return codes) — plus `kg.json` and `tree.json`. `cps-metrics` then
+reports: MTM (first malicious write → plant back in band for good), decision
+latency, accuracy against the countermeasures each mode needs plus
+over-response, attacker writes that still succeeded after the block, false
+responses, explained-decision coverage, and the seconds the operator HMI was cut
+off.
+
+## 11. Scope and what is next
+
+The scenario covers phases 1–4 of the prototype: foundations, OT emulation, the
+IT/OT boundary, and detection. The response loop above sits on top of them as a
+deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
+[piano-wp2-wp3.md](piano-wp2-wp3.md)). Still to do:
+
+- automatic generation of the attack trees;
+- the stochastic game model;
+- real energy measurement of the countermeasures;
+- a SOAR node inside the lab instead of the host-side responder.
+
+## 12. Quick reference
+
+| What | Where |
 |---|---|
-| Contratto d'impianto (registri, policy, bande) | `cyberrange/planes/defense/ot_registers.py` |
-| Gemello digitale e server Modbus | `cyberrange/planes/traffic/agents/grid_sim.py`, `modbus_engine.py` |
-| PLC e HMI | `cyberrange/planes/traffic/agents/plc_controller.py`, `hmi_client.py` |
-| Catena d'attacco | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
-| Sensore e modello | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
-| Lab e orchestrazione | `cyberrange/scenarios/cps/` (topologia, episodio) sul core `cyberrange/core/`; CLI `cps_experiment.py`, `cps_campaign.py` |
-| Metriche e dashboard | `cyberrange/scenarios/cps/metrics.py`, `cyberrange/core/dashboard.py` (dashboard comune a tutti gli scenari) |
-| Comandi | `make cps-selftest`, `cps-image`, `cps-lab`, `cps-attack`, `cps-campaign`, `cps-dashboard`, `cps-metrics` (dettagli nel README) |
+| Plant contract (registers, policy, bands) | `cyberrange/planes/defense/ot_registers.py` |
+| Digital twin and Modbus server | `cyberrange/planes/traffic/agents/grid_sim.py`, `modbus_engine.py` |
+| PLC and HMI | `cyberrange/planes/traffic/agents/plc_controller.py`, `hmi_client.py` |
+| Attack chain | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
+| Sensor and model | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
+| SOAR: graph, tree, mapping, policies | `cyberrange/planes/defense/soar/`, bound to this lab in `cyberrange/scenarios/cps/kg.py` |
+| Lab and orchestration | `cyberrange/scenarios/cps/` (topology, episode) on `cyberrange/core/`; CLI `cli.py`, campaigns `campaign.py` |
+| Metrics and dashboard panel | `cyberrange/scenarios/cps/metrics.py`, `panel.js`; the dashboard itself is `cyberrange/core/dashboard.py` |
+| The platform underneath | [platform.md](platform.md), [structure.md](structure.md) |

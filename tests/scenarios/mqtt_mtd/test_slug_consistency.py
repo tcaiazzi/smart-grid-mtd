@@ -6,7 +6,7 @@ without touching the Makefile (out of scope for this refactor — see the
 project's refactor plan, item (e)):
 
   1. cyberrange.scenarios.mqtt_mtd.slug.experiment_slug()   — Python, used by
-     run_experiment.py and main.py.
+     the scenario CLI and main.py.
   2. Makefile's MTD_PARAMS_SLUG / EXP_SLUG     — GNU Make string substitution
      (Makefile:82-129).
   3. scripts/run_single.sh's make_slug() — bash (same formula, split

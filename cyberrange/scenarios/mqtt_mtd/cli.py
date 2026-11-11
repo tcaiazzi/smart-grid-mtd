@@ -1,4 +1,4 @@
-"""run_experiment.py — command line of one MQTT smart-grid scenario run.
+"""cli.py — command line of one MQTT smart-grid scenario run.
 
 The scenario itself lives in cyberrange/scenarios/mqtt_mtd (topology +
 episode); the run lifecycle in cyberrange/core. The Makefile drives the

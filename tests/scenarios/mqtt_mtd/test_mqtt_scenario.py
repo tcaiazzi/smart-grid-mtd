@@ -17,7 +17,7 @@ from pathlib import Path
 
 from cyberrange.planes.attack import components as attack_components  # noqa: E402
 from cyberrange.core.progress import read_events  # noqa: E402
-from cyberrange.scenarios.mqtt_mtd import cli as run_experiment  # noqa: E402
+from cyberrange.scenarios.mqtt_mtd import cli  # noqa: E402
 from cyberrange.core.cli import default_args  # noqa: E402
 from cyberrange.core.streams import read_jsonl  # noqa: E402
 from cyberrange.core.topology import build_lab, export_lab_conf  # noqa: E402
@@ -108,7 +108,7 @@ class DatasetMode(_Run):
         )
         mgr = FakeManager()
         with fake_downloads(files):
-            rc = run_experiment.run(a, manager=mgr)
+            rc = cli.run(a, manager=mgr)
         return rc, mgr
 
     def test_mtd_capture_layout_commands_and_ledger(self):
@@ -234,7 +234,7 @@ class AttackMode(_Run):
         )
         mgr = FakeManager()
         with fake_downloads(files):
-            rc = run_experiment.run(a, manager=mgr)
+            rc = cli.run(a, manager=mgr)
         self.assertEqual(rc, 0)
         for name in (
             "attacker_capture.pcap",

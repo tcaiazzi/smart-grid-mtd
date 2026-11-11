@@ -13,7 +13,7 @@ The page polls /api/events and folds the events into its state; the same page
 opened as a file replays a downloaded telemetry.jsonl.
 
 The dashboard shows the live attack surface (active broker port/IP, SCMC source
-IP), so it must only be reachable over a management interface. run_experiment.py
+IP), so it must only be reachable over a management interface. the scenario CLI
 reaches it through a Kathará bridged interface + port forward, never over the
 broker link the attacker sniffs.
 

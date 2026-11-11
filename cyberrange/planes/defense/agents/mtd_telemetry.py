@@ -11,7 +11,7 @@ every policy decision. Each report becomes one event:
   {"i": <index>, "t": <unix time>, "kind": "<kind>", ...}
 
 Events are kept in memory (served live by mtd_dashboard.py) and appended, one
-JSON object per line, to a telemetry.jsonl file that run_experiment.py downloads
+JSON object per line, to a telemetry.jsonl file that the scenario CLI downloads
 with the other logs, so the dashboard can replay a finished run.
 
 Telemetry only records — it derives no metrics. Every aggregate the dashboard

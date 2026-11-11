@@ -1,6 +1,6 @@
 """Compact per-configuration directory-name slug.
 
-Single source of truth for run_experiment.py and main.py — both need to derive
+Single source of truth for the scenario CLI and main.py — both need to derive
 the same output/<slug>/ directory a given parameter configuration lands in.
 The Makefile computes the identical string independently as MTD_PARAMS_SLUG
 (make/mqtt.mk) and scripts/run_single.sh do the same in bash
