@@ -49,7 +49,7 @@ CONFIGS = [
      "entropy"),
 ]
 # Headline per-run metrics in the campaign summary.
-HEADLINE = ("nanogrid_detect", "availability_cost", "blocked_is_scmc", "data_gaps",
+HEADLINE = ("nanogrid_detect", "availability_cost", "blocked_is_nanogrid", "data_gaps",
             "publishes")
 
 
@@ -101,6 +101,17 @@ def slug(no_mtd: bool, mbps: int, rl_policy: str = None, rl_tag: str = "") -> st
 
 def _exists(*paths):
     return lambda: all((REPO_ROOT / p).is_file() for p in paths)
+
+
+def _once(check):
+    """``check`` evaluated on its first call only, then remembered."""
+    memo = []
+
+    def f():
+        if not memo:
+            memo.append(check())
+        return memo[0]
+    return f
 
 
 def _metrics(run_dir):
@@ -168,15 +179,21 @@ def config_unit(experiment: str, title: str, block: int, mbps: int, rl_policy: s
                           skip_if=_exists(rl_policy)))
 
     exp_dir = f"{ctx.root}/{exp}"
-    built = _exists(f"{exp_dir}/datasets/train.pcap", f"{exp_dir}/datasets/test.pcap",
-                    f"{exp_dir}/model/model.pt")
+    # The reuse guard is decided ONCE, when the unit starts (as run_single.sh
+    # does): re-checking it per step would see the model `train` just built and
+    # wrongly skip the evaluations. Each evaluation is also redone on its own
+    # when its predictions are missing (so a rerun completes an older run).
+    built = _once(_exists(f"{exp_dir}/datasets/train.pcap", f"{exp_dir}/datasets/test.pcap",
+                          f"{exp_dir}/model/model.pt"))
     steps += [
         Step("clean", cmd=["rm", "-rf", exp_dir], skip_if=built),
         Step("datasets", cmd=["make", "datasets", *v], retries=retries, skip_if=built),
         Step("train", cmd=["make", "train", *v], skip_if=built),
-        Step("evaluate", cmd=["make", "evaluate", *v], skip_if=built),
+        Step("evaluate", cmd=["make", "evaluate", *v],
+             skip_if=lambda: built() and _exists(f"{exp_dir}/eval/model-mtd/predictions.csv")()),
         Step("evaluate-baseline-model", cmd=["make", "evaluate", "MODEL_SRC=baseline", *v],
-             skip_if=built),
+             skip_if=lambda: built() and _exists(
+                 f"{exp_dir}/eval/model-baseline/predictions.csv")()),
         # Cross-model attack only (the paper's Fig. 2 attack runs the baseline-trained
         # model against the MTD-morphed traffic; the own-model attack is skipped).
         Step("attack", cmd=["make", "attack", "MODEL_SRC=baseline", *v], retries=retries,

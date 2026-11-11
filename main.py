@@ -85,6 +85,12 @@ def main() -> None:
         campaign.dry_run()
         print(say("=== Done (dry run) ==="))
         return
+    from network_scenario.core import lifecycle
+    try:
+        lifecycle.preflight()          # every unit needs a lab: fail fast, not 3 retries each
+    except lifecycle.LabUnavailable as e:
+        print(say(f"cannot start: {e}"), flush=True)
+        sys.exit(lifecycle.EXIT_NO_LAB)
     res = campaign.run()
     for ctx in contexts:
         for label, pdf in FIGURES:

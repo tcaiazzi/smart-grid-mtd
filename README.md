@@ -7,7 +7,8 @@ cyber-physical systems safely, reproducibly and observably, with two
 **scenarios** on it: the MQTT smart grid of the workshop paper (MTD vs ML
 traffic fingerprinting) and a cyber-physical OT/Modbus plant (active IT→OT
 attack, DPI/IT sensors, SOAR response). How the platform is built and how to
-add a scenario: **[docs/platform.md](docs/platform.md)**.
+add a scenario: **[docs/platform.md](docs/platform.md)**; every reusable
+component of the four planes: **[docs/components.md](docs/components.md)**.
 
 The source is organized into the platform's four functional planes plus the
 network scenario they surround (see the paper, Fig. 1). Each plane exposes its

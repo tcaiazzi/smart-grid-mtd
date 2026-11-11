@@ -63,10 +63,14 @@ def fetch(machine, guest_path: str, dst_path: str) -> None:
 
 
 def drain(exec_stream) -> None:
-    """Exhaust an exec stream so the command runs to completion."""
+    """Exhaust an exec stream so the command runs to completion. Kathará's
+    exec streams (IExecStream) define __next__ but not __iter__: no for-loop."""
     if exec_stream is None:
         return
-    for _ in exec_stream:
+    try:
+        while True:
+            next(exec_stream)
+    except StopIteration:
         pass
 
 

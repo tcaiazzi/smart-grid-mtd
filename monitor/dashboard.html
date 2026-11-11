@@ -437,7 +437,7 @@ function renderQueueMqtt() {
   const rows = S.order.map(id => {
     const r = S.runs[id], m = r.metrics;
     const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
-    const blocked = !m ? "—" : !m.blocked_ip ? "nothing" : `${m.blocked_ip}${m.blocked_is_scmc ? " (nanogrid)" : ""}`;
+    const blocked = !m ? "—" : !m.blocked_ip ? "nothing" : `${m.blocked_ip}${m.blocked_is_scmc ? " (SCMC)" : m.blocked_is_nanogrid ? " (broker side)" : " (background)"}`;
     return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
         onclick: () => { selectedRun = id; render(); },
         onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },

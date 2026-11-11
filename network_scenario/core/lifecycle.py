@@ -23,13 +23,35 @@ log = logging.getLogger("core.lifecycle")
 NETWORK_PLUGIN = "kathara/katharanp_vde"
 
 
+EXIT_NO_LAB = 4    # exit code when the container engine is not reachable
+
+
+class LabUnavailable(RuntimeError):
+    """The labs cannot run at all here (e.g. the Docker daemon is down):
+    retrying a run will not help."""
+
+
 def get_manager():
-    """The Kathará manager, with the network plugin every lab here uses."""
+    """The Kathará manager, with the network plugin every lab here uses.
+    Raises LabUnavailable when the Docker daemon cannot be reached."""
     from Kathara.manager.Kathara import Kathara
     from Kathara.setting.Setting import Setting
-    manager = Kathara.get_instance()
+    try:
+        manager = Kathara.get_instance()
+    except Exception as e:
+        if type(e).__name__ == "DockerDaemonConnectionError":
+            raise LabUnavailable(
+                "the Docker daemon is not reachable, so no lab can be deployed. Start it "
+                "(WSL: `sudo service docker start`, or open Docker Desktop) and check "
+                "`docker ps`, then run again.") from e
+        raise
     Setting.get_instance().load_from_dict({"network_plugin": NETWORK_PLUGIN})
     return manager
+
+
+def preflight():
+    """Fail fast, before a campaign starts, when no lab can run here."""
+    get_manager()
 
 
 def run(scenario, args, progress=None, manager=None):

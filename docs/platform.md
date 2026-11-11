@@ -29,6 +29,9 @@ metrics.
    └────────────────────────────────────────────────────────────┘
 ```
 
+Every component, with its options, artifacts, telemetry and ground truth, is
+documented in [components.md](components.md).
+
 `python -m network_scenario.core loc` (or `make platform-loc`) measures the
 split: how many lines are platform and how many each scenario had to write.
 

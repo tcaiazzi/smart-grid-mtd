@@ -42,5 +42,9 @@ def default_args(scenario, **overrides):
 def main(scenario, argv=None, description=None):
     logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
     args = build_parser(scenario, description).parse_args(argv)
-    rc = lifecycle.run(scenario, args)
+    try:
+        rc = lifecycle.run(scenario, args)
+    except lifecycle.LabUnavailable as e:
+        logging.getLogger("cli").error("%s", e)
+        sys.exit(lifecycle.EXIT_NO_LAB)
     sys.exit(rc or 0)

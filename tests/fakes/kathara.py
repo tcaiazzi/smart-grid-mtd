@@ -8,7 +8,7 @@ FakeManager records every call (deploy/undeploy, exec) and answers
   * ``responses``                   -> {substring: (stdout, stderr, rc)} first match
   * anything else                   -> (b"", b"", 0)
 
-Background execs (stream=True) return an empty iterator. ``fake_downloads``
+Background execs (stream=True) return a FakeExecStream (next() only, like Kathará's). ``fake_downloads``
 patches the core's container download so artifacts come from ``guest_files``
 ({(node, guest_path): bytes}) and land in the run directory like real ones.
 """
@@ -18,6 +18,19 @@ import json
 import os
 
 from network_scenario.core import context as core_context
+
+
+class FakeExecStream:
+    """Like Kathará's IExecStream: __next__ only, deliberately NOT iterable,
+    so code that drains a stream with a for-loop fails here as in a real lab."""
+
+    def __init__(self, chunks=()):
+        self._chunks = list(chunks)
+
+    def __next__(self):
+        if not self._chunks:
+            raise StopIteration
+        return self._chunks.pop(0)
 
 
 class FakeManager:
@@ -43,7 +56,7 @@ class FakeManager:
         if self.fail_exec and stream is False:
             raise RuntimeError("exec blew up")
         if stream is not False:
-            return iter(())
+            return FakeExecStream()
         for key, resp in self.responses.items():
             if key in text:
                 return resp

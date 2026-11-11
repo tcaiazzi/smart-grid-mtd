@@ -84,6 +84,28 @@ class Grammar(unittest.TestCase):
         self.assertEqual((r.respond, r.approval), ("solver", "delay:2"))
 
 
+class PlannerGrid(unittest.TestCase):
+    def test_planner_modes_set_the_driver(self):
+        g = cc.build_grid(cc.parse_modes("normal,planner:stealthy"), [2])
+        self.assertEqual([e["run_id"] for e in g], ["normal-s2", "planner-stealthy-s2"])
+        a = cc.run_args(cfg("/tmp"), g[1], "/x")
+        self.assertEqual((a.attack, a.attack_driver, a.attacker_profile), (True, "planner", "stealthy"))
+        s = cc.run_args(cfg("/tmp", attack_driver="planner"),
+                        {"run_id": "m", "mode": "manual-hijack", "seed": 1, "attack": True}, "/y")
+        self.assertEqual((s.attack_driver, s.attack_mode), ("scripted", "manual-hijack"))
+
+    def test_attack_driver_planner_replaces_scripted_modes(self):
+        c = cfg("/tmp", modes="normal,breaker-open,manual-hijack", attack_driver="planner",
+                attacker_profile="opportunistic")
+        self.assertEqual(cc.grid_modes(c), ["normal", "planner:opportunistic"])
+
+    def test_targeted_without_goal_rejected_before_running(self):
+        with self.assertRaises(SystemExit):
+            cc.run_campaign(cfg("/tmp", modes="planner:targeted"), run_fn=lambda *a, **k: None)
+        with self.assertRaises(ValueError):
+            cc.parse_modes("planner:sneaky")
+
+
 class Campaign(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="campaign-")

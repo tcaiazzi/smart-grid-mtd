@@ -11,7 +11,10 @@ is retried --retries times, then recorded as failed and the campaign moves on.
 
 Every option of the CPS scenario (python -m network_scenario.cps_experiment
 --help) is accepted and applies to every run, e.g. --respond solver,
---it-telemetry, --attack-driver planner --attacker-profile stealthy.
+--it-telemetry. Grid modes are "normal", the scripted attack modes and
+"planner:<profile>" (tree-guided attacker), so one campaign can compare them:
+--modes normal,manual-hijack,planner:stealthy,planner:opportunistic. With
+--attack-driver planner the scripted modes become one planner:<--attacker-profile>.
 
 Layout:
     <out-root>/<name>/campaign.json        grid + parameters
@@ -64,17 +67,40 @@ def parse_seeds(spec):
     return seeds
 
 
+PROFILES = ("opportunistic", "targeted", "stealthy")
+
+
 def parse_modes(spec):
+    """Grid modes: "normal", a scripted attack mode, or "planner:<profile>"
+    (the tree-guided attacker with that profile)."""
     modes = [m.strip() for m in str(spec).split(",") if m.strip()]
-    bad = [m for m in modes if m not in DEFAULT_MODES]
+    ok = set(DEFAULT_MODES) | {f"planner:{p}" for p in PROFILES}
+    bad = [m for m in modes if m not in ok]
     if bad or not modes:
-        raise ValueError(f"unknown modes {bad}; choose from {', '.join(DEFAULT_MODES)}")
+        raise ValueError(f"unknown modes {bad}; choose from {', '.join(DEFAULT_MODES)} "
+                         f"or planner:<{'|'.join(PROFILES)}>")
     return modes
+
+
+def grid_modes(cfg):
+    """The campaign's modes. With --attack-driver planner the scripted attack
+    modes make no sense (the planner chooses its own impact): they are replaced
+    by one planner entry with the campaign's --attacker-profile."""
+    modes = parse_modes(cfg.modes)
+    if getattr(cfg, "attack_driver", "scripted") != "planner":
+        return modes
+    out = []
+    for m in modes:
+        m = m if m == "normal" or m.startswith("planner:") else \
+            f"planner:{getattr(cfg, 'attacker_profile', 'opportunistic')}"
+        if m not in out:
+            out.append(m)
+    return out
 
 
 def build_grid(modes, seeds):
     """Seed-major list of runs: [{"run_id", "mode", "seed", "attack"}]."""
-    return [{"run_id": f"{mode}-s{seed}", "mode": mode, "seed": seed,
+    return [{"run_id": f"{mode.replace(':', '-')}-s{seed}", "mode": mode, "seed": seed,
              "attack": mode != "normal"}
             for seed in seeds for mode in modes]
 
@@ -92,10 +118,15 @@ def run_args(cfg, entry, out_dir):
     base = default_args(scenario)
     overrides = {k: getattr(cfg, k) for k in vars(base)
                  if hasattr(cfg, k) and k not in PER_RUN}
+    mode = entry["mode"]
     overrides.update(
         out_dir=out_dir, run_id=entry["run_id"], seed=entry["seed"],
         attack=entry["attack"], progress_file=None,
-        attack_mode=entry["mode"] if entry["attack"] else base.attack_mode)
+        attack_mode=mode if mode in ATTACK_MODES else base.attack_mode)
+    if mode.startswith("planner:"):
+        overrides.update(attack_driver="planner", attacker_profile=mode.split(":", 1)[1])
+    elif entry["attack"]:
+        overrides["attack_driver"] = "scripted"
     return default_args(scenario, **overrides)
 
 
@@ -105,8 +136,10 @@ def _default_run_fn(args, progress):
 
 
 def _validate(cfg):
-    _scenario().validate(run_args(cfg, {"run_id": "check", "mode": "manual-hijack",
-                                        "seed": None, "attack": True}, ""))
+    """Every grid entry's options, checked before anything runs."""
+    scenario = _scenario()
+    for e in build_grid(grid_modes(cfg), [None]):
+        scenario.validate(run_args(cfg, e, ""))
 
 
 def build_campaign(cfg, run_fn=None, metrics_fn=None, out=print):
@@ -116,7 +149,7 @@ def build_campaign(cfg, run_fn=None, metrics_fn=None, out=print):
     scenario = _scenario()
     root = os.path.join(cfg.out_root, cfg.name)
     units = []
-    for e in build_grid(parse_modes(cfg.modes), parse_seeds(cfg.seeds)):
+    for e in build_grid(grid_modes(cfg), parse_seeds(cfg.seeds)):
         rdir = os.path.join(root, "runs", e["run_id"])
         args = run_args(cfg, e, rdir)
         units.append(Unit(e["run_id"], group=e["mode"], steps=[Step(
@@ -137,6 +170,9 @@ def run_campaign(cfg, run_fn=None, metrics_fn=None):
     """Run (or resume) the campaign described by ``cfg``. Returns a summary dict.
     ``run_fn(args, progress)`` / ``metrics_fn(out_dir)`` are injectable for tests."""
     _validate(cfg)
+    if run_fn is None:                       # real labs: fail fast if none can run
+        from network_scenario.core import lifecycle
+        lifecycle.preflight()
     return build_campaign(cfg, run_fn, metrics_fn).run()
 
 
@@ -179,7 +215,12 @@ def main(argv=None):
     if cfg.dry_run:
         dry_run(cfg)
         return
-    res = run_campaign(cfg)
+    from network_scenario.core import lifecycle
+    try:
+        res = run_campaign(cfg)
+    except lifecycle.LabUnavailable as e:
+        log.error("%s", e)
+        sys.exit(lifecycle.EXIT_NO_LAB)
     log.info("campaign %s: %s (ok=%d failed=%d skipped=%d) -> %s/summary.md",
              cfg.name, res["status"], res["ok"], res["failed"], res["skipped"], res["root"])
     sys.exit(0 if res["status"] == "done" else 1)

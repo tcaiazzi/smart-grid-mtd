@@ -98,6 +98,11 @@ class CpsScenario(Scenario):
                 f"--normal-duration ({args.normal_duration}s) must be >= --learn-seconds "
                 f"({args.learn_seconds}s) + {LEARN_MARGIN_S}s: the sensor's model calibrates "
                 f"on the first --learn-seconds and must not see the attack")
+        if getattr(args, "attack", False) and getattr(args, "attack_driver", "scripted") == "planner" \
+                and getattr(args, "attacker_profile", None) == "targeted" \
+                and not getattr(args, "attack_goal", None):
+            raise SystemExit("--attacker-profile targeted needs --attack-goal "
+                             f"({', '.join(GOALS)})")
         from network_scenario.cps_responder import parse_approval
         try:
             parse_approval(getattr(args, "approval", "auto"))
