@@ -161,12 +161,14 @@ A campaign is a list of **units**, run in order on one ledger.
 - A **step** is either in-process (`run(emit)`: a scenario run, bound to the campaign ledger) or a command (`cmd`, e.g. a `make` target).
 - `skip_if()` reuses earlier results.
 - A **scored** step (`run_dir` + `metrics`) gets `metrics.json`, which is also what `--resume` skips on, and is folded into the aggregate after every run.
+- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the paper lists its figures; the ablation writes its manifest).
 - `core.aggregate.summarize` gives n / mean / std / 95% CI (Student t) / median / min / max of every numeric metric per group. It writes `ci.csv` and a mean [CI] table in `summary.md`.
 
 | Campaign | Units | Steps |
 |---|---|---|
 | CPS (`make cps-campaign`, `cyberrange/scenarios/cps/campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
 | Paper (`main.py`, `cyberrange/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `scripts/run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
+| MTD ablation (`make sweep`, `cyberrange/scenarios/mqtt_mtd/ablation.py`) | 15 named MTD configurations in five groups (e0–e4), no seeds | the paper's `make` steps per configuration, plus its entropy. Writes the manifest `plot_sweep` reads, even when some configurations failed. |
 
 ## 5. Following it live
 

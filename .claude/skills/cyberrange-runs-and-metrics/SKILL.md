@@ -68,6 +68,10 @@ others. `needs` expresses dependencies between units.
   why you resume instead of starting over after a crash.
 - **To force a rerun**, delete that run's `metrics.json` (or its directory), not
   the whole campaign.
+- **Exit codes are shared** by every campaign entry point (`main.py`,
+  `make cps-campaign`, `make sweep`): `0` all units finished, `1` some unit
+  failed or was blocked (named on the last line), `4` no lab could start —
+  start Docker, nothing was run.
 - **To extend** a set of repetitions, raise the count and re-run; existing runs
   are kept.
 

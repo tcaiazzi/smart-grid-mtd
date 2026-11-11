@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 from cyberrange.core.progress import ProgressLog
-from cyberrange.core import paths
+from cyberrange.core import lifecycle, paths
 
 log = logging.getLogger("core.campaign")
 
@@ -104,6 +104,26 @@ class Campaign:
     def planned(self):
         return {s.label.get("run_id", s.id): s.planned_s for s in self.scored_steps()}
 
+    def planned_total_s(self):
+        return sum(s.planned_s for s in self.scored_steps())
+
+    def dry_run_grid(self, row=None, out=None):
+        """Print the grid and the time it is expected to take, without the
+        commands: for a campaign of in-process runs there are no command lines
+        to show, only what will run and for how long.
+
+        ``row(step) -> str`` is the scenario's own column — what distinguishes
+        one entry of its grid from another. The core has no opinion on it.
+        """
+        out = out or self.out
+        steps = self.scored_steps()
+        out(f"campaign {self.name!r} -> {self.root}")
+        for s in steps:
+            extra = f"{row(s)} " if row else ""
+            out(f"  {s.id:<28} {extra}~{s.planned_s:.0f}s")
+        out(f"{len(steps)} runs, ~{self.planned_total_s() / 60:.1f} min planned")
+        return self.grid()
+
     def dry_run(self):
         """Print what would run (steps whose reuse check says "done" are left
         out, as a real run would skip them). Creates nothing."""
@@ -116,7 +136,7 @@ class Campaign:
         return self.grid()
 
     # ── execution ────────────────────────────────────────────────────────────
-    def run(self, run_fn=None):
+    def run(self):
         os.makedirs(self.root, exist_ok=True)
         with open(os.path.join(self.root, "campaign.json"), "w") as f:
             json.dump(
@@ -265,6 +285,47 @@ class Campaign:
 
 def _lbl(s):
     return {k: v for k, v in s.label.items() if k != "run_id"}
+
+
+def format_result(res):
+    """The one-line verdict of a finished campaign."""
+    line = (
+        f"=== {res['status']} (ok={res['ok']} failed={res['failed']} "
+        f"skipped={res['skipped']}) — summary: {res['root']}/summary.md ==="
+    )
+    if res.get("failed_units"):
+        line += f"\nfailed or blocked: {', '.join(res['failed_units'])}"
+    return line
+
+
+def run_cli(campaign, *, out=None, report=format_result, epilogue=None, preflight=True):
+    """Run a campaign the way a command line wants it, and return an exit code.
+
+    Around `Campaign.run()` every campaign needs the same three things: a lab
+    checked once before the first unit (otherwise each unit retries its way to
+    the same failure), a verdict, and an exit code a script can branch on —
+    0 when every unit finished, 1 when one failed, `EXIT_NO_LAB` when nothing
+    could start.
+
+    ``preflight=False`` skips the lab check, for a campaign whose steps run
+    no lab (a test's injected run function). ``epilogue(res) -> [str]`` is
+    what a scenario says before the verdict, such as the figures it wrote.
+    The dry run stays with the caller, whose message differs every time.
+    """
+    out = out or campaign.out
+    if preflight:
+        try:
+            lifecycle.preflight()
+        except lifecycle.LabUnavailable as e:
+            out(f"cannot start: {e}")
+            return lifecycle.EXIT_NO_LAB
+    res = campaign.run()
+    for line in epilogue(res) if epilogue else ():
+        out(line)
+    # One call per line, so a prefixing ``out`` (main.py's say) marks every line.
+    for line in report(res).splitlines() if report else ():
+        out(line)
+    return 0 if res["status"] == "done" else 1
 
 
 def _load_metrics(run_dir):

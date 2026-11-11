@@ -38,7 +38,7 @@ import os
 import sys
 from dataclasses import replace
 
-from cyberrange.core.campaign import Campaign, Step
+from cyberrange.core.campaign import Campaign, Step, run_cli
 from cyberrange.scenarios.mqtt_mtd.campaign import (
     DEFAULT_ROOT,
     PYTHON,
@@ -184,19 +184,15 @@ def main(argv=None):
         campaign.dry_run()
         print(say(f"=== Done (dry run): {len(configs)} configurations ==="))
         return
-
-    from cyberrange.core import lifecycle
-
-    try:
-        lifecycle.preflight()
-    except lifecycle.LabUnavailable as e:
-        print(say(f"cannot start: {e}"), flush=True)
-        sys.exit(lifecycle.EXIT_NO_LAB)
-
-    res = campaign.run()
-    write_manifest(configs, root=args.output_root)
-    print(say(f"=== {res['status']} — summary: {campaign.root}/summary.md ==="))
-    sys.exit(0 if res["status"] == "done" else 1)
+    # The manifest is written whatever the outcome: plot_sweep draws the
+    # configurations that did finish.
+    sys.exit(
+        run_cli(
+            campaign,
+            out=lambda line: print(say(line), flush=True),
+            epilogue=lambda res: write_manifest(configs, root=args.output_root) or [],
+        )
+    )
 
 
 if __name__ == "__main__":

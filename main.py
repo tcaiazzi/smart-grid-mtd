@@ -39,6 +39,7 @@ Usage:
 import argparse
 import sys
 
+from cyberrange.core.campaign import run_cli
 from cyberrange.scenarios.mqtt_mtd.campaign import FIGURES, build_campaign, compare_dir, say
 
 
@@ -123,26 +124,16 @@ def main() -> None:
         campaign.dry_run()
         print(say("=== Done (dry run) ==="))
         return
-    from cyberrange.core import lifecycle
-
-    try:
-        lifecycle.preflight()  # every unit needs a lab: fail fast, not 3 retries each
-    except lifecycle.LabUnavailable as e:
-        print(say(f"cannot start: {e}"), flush=True)
-        sys.exit(lifecycle.EXIT_NO_LAB)
-    res = campaign.run()
-    for ctx in contexts:
-        for label, pdf in FIGURES:
-            print(say(f"  {label} -> {compare_dir(args.mbps, ctx)}/{pdf}"))
-    print(
-        say(
-            f"=== {res['status']} (ok={res['ok']} failed={res['failed']} "
-            f"skipped={res['skipped']}) — summary: {campaign.root}/summary.md ==="
+    figures = [
+        f"  {label} -> {compare_dir(args.mbps, ctx)}/{pdf}"
+        for ctx in contexts
+        for label, pdf in FIGURES
+    ]
+    sys.exit(
+        run_cli(
+            campaign, out=lambda line: print(say(line), flush=True), epilogue=lambda res: figures
         )
     )
-    if res["failed_units"]:
-        print(say(f"failed or blocked: {', '.join(res['failed_units'])}"))
-    sys.exit(0 if res["status"] == "done" else 1)
 
 
 if __name__ == "__main__":

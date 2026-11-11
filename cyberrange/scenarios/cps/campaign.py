@@ -34,7 +34,7 @@ import sys
 import time
 
 from cyberrange.scenarios.cps.metrics import compute_metrics, format_report, write_aggregate
-from cyberrange.core.campaign import Campaign, Step, Unit
+from cyberrange.core.campaign import Campaign, Step, Unit, format_result, run_cli
 from cyberrange.core.cli import build_parser, default_args
 
 log = logging.getLogger("cps_campaign")
@@ -160,7 +160,11 @@ def _validate(cfg):
 
 
 def build_campaign(cfg, run_fn=None, metrics_fn=None, out=print):
-    """The core Campaign of ``cfg``: one unit (one scored run) per grid entry."""
+    """The core Campaign of ``cfg``: one unit (one scored run) per grid entry.
+
+    Every entry's options are validated first, so a bad option fails here
+    rather than one run into a campaign."""
+    _validate(cfg)
     run_fn = run_fn or _default_run_fn
     metrics_fn = metrics_fn or compute_metrics
     scenario = _scenario()
@@ -206,7 +210,6 @@ def build_campaign(cfg, run_fn=None, metrics_fn=None, out=print):
 def run_campaign(cfg, run_fn=None, metrics_fn=None):
     """Run (or resume) the campaign described by ``cfg``. Returns a summary dict.
     ``run_fn(args, progress)`` / ``metrics_fn(out_dir)`` are injectable for tests."""
-    _validate(cfg)
     if run_fn is None:  # real labs: fail fast if none can run
         from cyberrange.core import lifecycle
 
@@ -215,15 +218,9 @@ def run_campaign(cfg, run_fn=None, metrics_fn=None):
 
 
 def dry_run(cfg, out=print):
-    _validate(cfg)
     c = build_campaign(cfg, out=out)
-    out(f"campaign {cfg.name!r} -> {c.root}")
-    total = 0.0
-    for s in c.scored_steps():
-        total += s.planned_s
-        out(f"  {s.id:<28} attack={'yes' if s.info['attack'] else 'no ':<3} ~{s.planned_s:.0f}s")
-    out(f"{len(c.scored_steps())} runs, ~{total / 60:.1f} min planned")
-    return c.grid(), total
+    grid = c.dry_run_grid(row=lambda s: f"attack={'yes' if s.info['attack'] else 'no ':<3}")
+    return grid, c.planned_total_s()
 
 
 def parse_args(argv=None):
@@ -255,23 +252,13 @@ def main(argv=None):
     if cfg.dry_run:
         dry_run(cfg)
         return
-    from cyberrange.core import lifecycle
-
-    try:
-        res = run_campaign(cfg)
-    except lifecycle.LabUnavailable as e:
-        log.error("%s", e)
-        sys.exit(lifecycle.EXIT_NO_LAB)
-    log.info(
-        "campaign %s: %s (ok=%d failed=%d skipped=%d) -> %s/summary.md",
-        cfg.name,
-        res["status"],
-        res["ok"],
-        res["failed"],
-        res["skipped"],
-        res["root"],
+    sys.exit(
+        run_cli(
+            build_campaign(cfg),
+            out=log.info,
+            report=lambda res: f"campaign {cfg.name}: {format_result(res)}",
+        )
     )
-    sys.exit(0 if res["status"] == "done" else 1)
 
 
 if __name__ == "__main__":
