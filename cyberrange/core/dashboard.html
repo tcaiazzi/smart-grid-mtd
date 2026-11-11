@@ -357,7 +357,7 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 // still gets the neutral views: ledger, phases, runs, metrics, aggregate.
 const panelApi = {
   get S() { return S; },
-  $, h, num, dur, clock, now, statusBadge,
+  $, h, num, dur, clock, now, statusBadge, queueTable, stepCell,
   shownRunId: () => shownRunId(),
   select(id) { selectedRun = id; render(); },
   render: () => render(),
@@ -415,6 +415,36 @@ function renderTiles(lst) {
   }
 }
 
+// The run queue, drawn once for everybody. A scenario decides which columns to
+// add and what goes in them; selection, keyboard navigation, the retry suffix,
+// the running-run clock and the empty state live here, so a panel cannot
+// forget them and quietly break the table for its own scenario.
+function queueTable({ note, columns, cells }) {
+  const q = $("q-note");
+  if (note && note.html) q.innerHTML = note.html; else q.textContent = note || "";
+  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
+    ...columns.map(c => h("th", c.attrs || (c.num ? { class: "num" } : {}), c.label)));
+  const rows = S.order.map(id => {
+    const r = S.runs[id];
+    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
+    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
+        onclick: () => { selectedRun = id; render(); },
+        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
+      h("td", {}, id, r.attempt > 1 ? h("span", { class: "muted" }, ` (try ${r.attempt})`) : null),
+      h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
+      ...cells(r, id));
+  });
+  const width = 3 + columns.length;
+  $("queue").replaceChildren(h("thead", {}, head),
+    h("tbody", {}, rows.length ? rows
+      : h("tr", {}, h("td", { colspan: width, class: "empty" }, "No runs yet"))));
+}
+
+// The step a run is on, for the scenarios that show it.
+function stepCell(r) {
+  return h("td", {}, r.step || (r.phases.find(p => p.start_t && !p.end_t)?.name ?? "—"));
+}
+
 function renderQueueNeutral() {
   const keys = [];
   for (const id of S.order) {
@@ -422,23 +452,13 @@ function renderQueueNeutral() {
       if (typeof v === "number" && !keys.includes(k) && keys.length < 4) keys.push(k);
     }
   }
-  $("q-note").textContent = keys.length
-    ? "metrics as the scenario reported them"
-    : "no scored runs yet";
-  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
-    h("th", {}, "step"), ...keys.map(k => h("th", { class: "num" }, k)));
-  const rows = S.order.map(id => {
-    const r = S.runs[id], m = r.metrics;
-    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
-    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
-        onclick: () => { selectedRun = id; render(); },
-        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
-      h("td", {}, id), h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
-      h("td", {}, r.step || (r.phases.find(p => p.start_t && !p.end_t)?.name ?? "—")),
-      ...keys.map(k => h("td", { class: "num" }, m && m[k] != null ? String(num(m[k])) : "—")));
+  queueTable({
+    note: keys.length ? "metrics as the scenario reported them" : "no scored runs yet",
+    columns: [{ label: "step" }, ...keys.map(k => ({ label: k, num: true }))],
+    cells: r => [stepCell(r),
+      ...keys.map(k => h("td", { class: "num" },
+        r.metrics && r.metrics[k] != null ? String(num(r.metrics[k])) : "—"))],
   });
-  $("queue").replaceChildren(h("thead", {}, head),
-    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4 + keys.length, class: "empty" }, "No runs yet"))));
 }
 
 function renderQueue() {

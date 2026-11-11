@@ -33,6 +33,9 @@ const api = {
   $: () => ({ replaceChildren: noop, style: {}, textContent: "", innerHTML: "" }),
   h: () => ({}), num: noop, dur: noop, clock: noop, now: () => 0,
   statusBadge: () => ({}), shownRunId: noop, select: noop, render: noop,
+  stepCell: () => ({}),
+  // Records what a panel asks the shared table to draw, instead of drawing it.
+  queueTable: (spec) => { globalThis.__queue = spec; },
 };
 %s
 const out = {};
@@ -89,6 +92,45 @@ class PanelsLoad(unittest.TestCase):
                     f"{name} exposes {unknown}, which the page never calls. Either the "
                     f"page gained a hook and this list is stale, or the key is dead.",
                 )
+
+    def test_a_queue_panel_draws_through_the_shared_table(self):
+        """A panel must build its queue with ui.queueTable, which owns selection,
+        keyboard navigation and the empty state. One that builds its own table
+        loses them silently, for its scenario only."""
+        for name in registry.names():
+            path = registry.get(name).panel_js()
+            if path is None:
+                continue
+            script = (HARNESS % open(path).read()).replace(
+                "console.log(JSON.stringify(out));",
+                """
+for (const [name, make] of Object.entries(window.CyberRangePanels)) {
+  const panel = make(api);
+  if (!panel.queue) { out[name] = false; continue; }   // no queue hook at all
+  globalThis.__queue = null;
+  panel.queue();
+  const spec = globalThis.__queue;
+  // null means: it has a queue, but never asked the shared table to draw it.
+  out[name] = spec
+    ? { columns: (spec.columns || []).map(c => c.label), cells: typeof spec.cells }
+    : null;
+}
+console.log(JSON.stringify(out));""",
+            )
+            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr.strip())
+            spec = json.loads(result.stdout).get(name)
+            if spec is False:  # this scenario draws no queue of its own
+                continue
+            with self.subTest(scenario=name):
+                self.assertIsNotNone(
+                    spec,
+                    f"{name}.queue() did not go through ui.queueTable — it draws its "
+                    f"own table, so selection and keyboard navigation are now its "
+                    f"own problem.",
+                )
+                self.assertTrue(spec["columns"], f"{name} added no columns of its own")
+                self.assertEqual("function", spec["cells"], f"{name} passed no cell builder")
 
     def test_a_graph_panel_draws_all_three_views(self):
         """The card has three tabs; a panel that declares a graph must fill them

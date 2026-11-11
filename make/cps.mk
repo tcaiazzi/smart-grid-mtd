@@ -74,7 +74,7 @@ cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + ag
 		$(if $(DRY),--dry-run)
 
 cps-dashboard:             ## progress dashboard restricted to the CPS runs/campaigns
-	$(PYTHON) -m $(M_DASHBOARD) --root $(OUTPUT_ROOT)/cps --port $(CPS_DASH_PORT)
+	$(PYTHON) -m $(M_DASHBOARD) --root $(OUTPUT_ROOT) --scenario cps --port $(CPS_DASH_PORT)
 
 cps-metrics:               ## score a finished run (detection, impact, response)
 	$(PYTHON) -m $(M_CPS_METRICS) --out-dir $(CPS_OUT) --report $(CPS_OUT)/metrics.md

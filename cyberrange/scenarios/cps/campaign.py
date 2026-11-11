@@ -235,7 +235,7 @@ def parse_args(argv=None):
     ap.add_argument(
         "--name", default=time.strftime("%Y%m%d-%H%M%S"), help="campaign name; reuse it to resume"
     )
-    ap.add_argument("--out-root", default="output/cps/campaigns")
+    ap.add_argument("--out-root", default="output/campaigns")
     ap.add_argument("--modes", default=",".join(DEFAULT_MODES))
     ap.add_argument("--seeds", default="1-5", help='e.g. "1-5" or "1,3,7"')
     ap.add_argument("--retries", type=int, default=1)

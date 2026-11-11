@@ -182,7 +182,8 @@ make dashboard                                            # http://127.0.0.1:876
 
 `cps-campaign` (`cyberrange/scenarios/cps/campaign.py`) runs `CPS_MODES`
 (default `normal,setpoint-overvoltage,breaker-open,manual-hijack`) × `CPS_SEEDS`,
-seed-major, one lab at a time, under `output/cps/campaigns/<name>/`. Each run in
+seed-major, one lab at a time, under `output/campaigns/<name>/` — where every
+scenario's campaigns live. Each run in
 `runs/<mode>-s<seed>/` is scored as it finishes (`metrics.json`, `metrics.md`)
 and the aggregate is refreshed (`summary.md`, `summary.csv` per mode × detector,
 `impact.csv` per mode, `ci.csv` with every metric's mean [95% CI] per mode).
@@ -195,7 +196,9 @@ Everything goes onto a progress ledger, `progress.jsonl` (a standalone
 `make cps-lab`/`cps-attack` writes one into its `CPS_OUT` too): phases, the live
 plant state and the sensor's findings pulled from the containers every ~2 s, the
 attacker's writes, each run's metrics and the aggregate. `make dashboard` reads
-every ledger under `output/`; `make cps-dashboard` only `output/cps`. It can be
+every ledger under `output/`; `make cps-dashboard` is the same dashboard with
+`--scenario cps`, which filters on what each run recorded rather than on where
+it was written. It can be
 started before, during or after a campaign.
 
 For the selected run, a **Topology · knowledge graph · attack tree** card draws

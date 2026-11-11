@@ -20,7 +20,8 @@ import urllib.parse
 import urllib.request
 
 
-from cyberrange.core.dashboard import ProgressDashboard, summarize  # noqa: E402
+from cyberrange.core.dashboard import ProgressDashboard  # noqa: E402
+from cyberrange.core.ledgers import summarize  # noqa: E402
 from cyberrange.core.progress import ProgressLog  # noqa: E402
 
 GRID = [
@@ -213,6 +214,30 @@ class OtherScenarios(_Fixture):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self.get(f"/api/structure?id={lid}&run=train")
         self.assertEqual(cm.exception.code, 404)
+
+
+class ScenarioFilter(OtherScenarios):
+    """A campaign records which scenario it ran, so showing one scenario is a
+    question the dashboard answers — not something the output directory layout
+    has to encode by keeping each scenario in its own tree."""
+
+    def test_filtering_keeps_only_that_scenario(self):
+        every = {led["scenario"] for led in self.ledgers().values()}
+        self.assertEqual({"cps", "mqtt-mtd"}, every, "the fixture should hold both scenarios")
+
+        dash = ProgressDashboard(self.root, port=0, scenario="mqtt-mtd").start()
+        try:
+            url = f"http://127.0.0.1:{dash.port}/api/ledgers"
+            with urllib.request.urlopen(url, timeout=5) as r:
+                shown = json.load(r)["ledgers"]
+        finally:
+            dash.shutdown()
+        self.assertTrue(shown, "filtering to a scenario that exists returned nothing")
+        self.assertEqual(
+            {"mqtt-mtd"},
+            {led["scenario"] for led in shown},
+            "the filter let another scenario's ledgers through",
+        )
 
 
 class Summary(unittest.TestCase):

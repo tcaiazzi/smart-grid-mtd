@@ -10,24 +10,29 @@
 // code can use them (h, $, num, dur, now, statusBadge, S) directly.
 "use strict";
 (function () {
-function renderQueueMqtt() {
-  $("q-note").textContent = "attacker confidence: its nanogrid_frac over the nanogrid's own IPs (lower = the MTD hides it better); MTD cost: availability cost of the knob changes.";
-  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
-    h("th", {}, "step"), h("th", { class: "num" }, "attacker confidence"), h("th", {}, "blocked"),
-    h("th", { class: "num" }, "MTD cost"));
-  const rows = S.order.map(id => {
-    const r = S.runs[id], m = r.metrics;
-    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
-    const blocked = !m ? "—" : !m.blocked_ip ? "nothing" : `${m.blocked_ip}${m.blocked_is_scmc ? " (SCMC)" : m.blocked_is_nanogrid ? " (broker side)" : " (background)"}`;
-    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
-        onclick: () => { selectedRun = id; render(); },
-        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
-      h("td", {}, id), h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
-      h("td", {}, r.step || (r.phases.find(p => p.start_t && !p.end_t)?.name ?? "—")),
-      h("td", { class: "num" }, m ? String(num(m.nanogrid_detect)) : "—"), h("td", {}, blocked),
-      h("td", { class: "num" }, m ? String(num(m.availability_cost, 2)) : "—"));
+function renderQueueMqtt(ui) {
+  ui.queueTable({
+    note: "attacker confidence: its nanogrid_frac over the nanogrid's own IPs "
+        + "(lower = the MTD hides it better); MTD cost: availability cost of the knob changes.",
+    columns: [
+      { label: "step" },
+      { label: "attacker confidence", num: true },
+      { label: "blocked" },
+      { label: "MTD cost", num: true },
+    ],
+    cells: r => {
+      const m = r.metrics;
+      const blocked = !m ? "—" : !m.blocked_ip ? "nothing"
+        : `${m.blocked_ip}${m.blocked_is_scmc ? " (SCMC)"
+            : m.blocked_is_nanogrid ? " (broker side)" : " (background)"}`;
+      return [
+        ui.stepCell(r),
+        h("td", { class: "num" }, m ? String(num(m.nanogrid_detect)) : "—"),
+        h("td", {}, blocked),
+        h("td", { class: "num" }, m ? String(num(m.availability_cost, 2)) : "—"),
+      ];
+    },
   });
-  $("queue").replaceChildren(h("thead", {}, head), h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 7, class: "empty" }, "No runs yet"))));
 }
 
 function renderDetailMqtt(r) {
@@ -102,8 +107,8 @@ function drawMtd(r) {
   box.insertBefore(svg, $("tip"));
 }
 
-  (window.CyberRangePanels ||= {})["mqtt-mtd"] = () => ({
-    queue: renderQueueMqtt,
+  (window.CyberRangePanels ||= {})["mqtt-mtd"] = ui => ({
+    queue: () => renderQueueMqtt(ui),
     detail: renderDetailMqtt,
     // This scenario's aggregate is the 95%-CI table, which the page shows from
     // the data itself; it adds no tab of its own.

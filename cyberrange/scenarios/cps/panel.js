@@ -393,27 +393,28 @@ function detCell(m, d) {
 // The queue every scenario gets: what a run is, not what it measured. Numeric
 // metrics are shown in the order the scenario reported them, with no opinion
 // about which matter — a scenario that wants an opinion ships a panel.
-  function queue() {
-  $("q-note").innerHTML = "rules / model: detection latency from the first malicious write; <b>*</b> = fired only after the physical impact.";
-  const tb = $("queue");
-  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
-    h("th", { class: "num", title: "latency from the first malicious write; * = after the physical impact" }, "rules"),
-    h("th", { class: "num", title: "latency from the first malicious write; * = after the physical impact" }, "model"),
-    h("th", {}, "impact"), h("th", { class: "num" }, "false alarms"));
-  const rows = S.order.map(id => {
-    const r = S.runs[id], m = r.metrics;
-    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
-    const impact = !m ? "—" : !m.abnormal_frames ? "none" : m.impact_persists_after_attack ? "persists" : m.recovered ? `recovered ${num(m.recovery_s, 1)} s` : "yes";
-    const fa = m ? (m.detectors?.combined?.false_alarms ?? m.false_alarms) : null;
-    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
-        onclick: () => { selectedRun = id; render(); },
-        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
-      h("td", {}, id, r.attempt > 1 ? h("span", { class: "muted" }, ` (try ${r.attempt})`) : null),
-      h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
-      detCell(m, "rules"), detCell(m, "model"), h("td", {}, impact),
-      h("td", { class: "num" }, fa == null ? "—" : String(fa)));
-  });
-  tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 7, class: "empty" }, "No runs yet"))));
+  const LATENCY_HINT = "latency from the first malicious write; * = after the physical impact";
+
+  function queue(ui) {
+    ui.queueTable({
+      note: { html: "rules / model: detection latency from the first malicious write; "
+                  + "<b>*</b> = fired only after the physical impact." },
+      columns: [
+        { label: "rules", attrs: { class: "num", title: LATENCY_HINT } },
+        { label: "model", attrs: { class: "num", title: LATENCY_HINT } },
+        { label: "impact" },
+        { label: "false alarms", num: true },
+      ],
+      cells: r => {
+        const m = r.metrics;
+        const impact = !m ? "—" : !m.abnormal_frames ? "none"
+          : m.impact_persists_after_attack ? "persists"
+          : m.recovered ? `recovered ${num(m.recovery_s, 1)} s` : "yes";
+        const fa = m ? (m.detectors?.combined?.false_alarms ?? m.false_alarms) : null;
+        return [detCell(m, "rules"), detCell(m, "model"), h("td", {}, impact),
+          h("td", { class: "num" }, fa == null ? "—" : String(fa))];
+      },
+    });
   }
 
 // ── voltage chart ───────────────────────────────────────────────────────────
@@ -531,8 +532,8 @@ function drawChart(r) {
 }
 
   // The page invokes this once, with its own handles.
-  (window.CyberRangePanels ||= {})["cps"] = () => ({
-    queue,
+  (window.CyberRangePanels ||= {})["cps"] = ui => ({
+    queue: () => queue(ui),
     chart: drawChart,
     graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree },
     // The results tabs this scenario fills, shown before any run is scored.
