@@ -251,6 +251,9 @@ A first end-to-end data → detection → response loop on top of the sensor
 `cyberrange/scenarios/cps/responder.py`). It is off by default
 (`CPS_RESPOND=off`), which leaves the scenario unchanged.
 
+How the knowledge graph and the attack tree are built, turned into a belief
+and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
+
 - **Knowledge graph** (`soar/kg.py`, networkx), built from the Kathará Lab
   model: hosts, zones and the `addresses` meta that `core.topology.build_lab`
   sets on every machine, plus services, the plant's registers, role permissions
