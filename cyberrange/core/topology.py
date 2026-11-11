@@ -30,8 +30,8 @@ copied under is a contract other agents depend on**: mtd_rl_coordinator.py does
 "/rl_policy.py" no matter where it lives on the host. Host paths may be
 reorganised freely; guest paths may not.
 
-``tests/test_deploy_contract.py`` freezes the guest side of every manifest, and
-``tests/test_guest_imports.py`` replays each machine's files into a scratch
+``tests/core/test_deploy_contract.py`` freezes the guest side of every manifest, and
+``tests/core/test_guest_imports.py`` replays each machine's files into a scratch
 directory and imports them, so a missing shared module is caught without
 deploying anything.
 """

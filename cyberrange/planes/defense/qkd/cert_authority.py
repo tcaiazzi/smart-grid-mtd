@@ -38,6 +38,8 @@ import ipaddress
 from mtd_crypto import encrypt_payload, decrypt_payload
 from mtd_wire import send_bytes as send_msg, recv_bytes as recv_msg
 
+CLIENT_TIMEOUT_S = 15.0  # s a connected client may stay silent (cert_client waits as long)
+
 
 # ---------------------------------------------------------------------------
 # Key + certificate generation helpers
@@ -286,6 +288,9 @@ def main():
     try:
         while True:
             conn, addr = srv.accept()
+            # One client at a time: a peer that connects and says nothing must
+            # not hold the CA, or every other node fails its bootstrap.
+            conn.settimeout(CLIENT_TIMEOUT_S)
             handle_client(conn, addr, ca_key, ca_cert, ca_cert_pem, shared_key, client_ips)
     except KeyboardInterrupt:
         print("\n[CA] Shutting down.")

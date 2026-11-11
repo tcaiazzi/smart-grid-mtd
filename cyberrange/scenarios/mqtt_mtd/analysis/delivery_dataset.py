@@ -256,10 +256,13 @@ def build_run(run_dir: str) -> pd.DataFrame:
 
 
 def find_runs(root: str) -> list:
+    """Run directories under ``root``. A run that failed is moved aside to
+    ``<dir>.failed`` in the same tree; its partial telemetry must not be learnt from."""
     return sorted(
         os.path.dirname(p)
         for p in glob.glob(os.path.join(root, "**", "ground_truth.jsonl"), recursive=True)
         if os.path.exists(os.path.join(os.path.dirname(p), "telemetry.jsonl"))
+        and not any(part.endswith(".failed") for part in os.path.dirname(p).split(os.sep))
     )
 
 

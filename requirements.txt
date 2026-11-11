@@ -12,6 +12,13 @@ seaborn==0.13.2
 watchdog==4.0.1
 tqdm==4.66.4
 
+# Traffic classifier of the MQTT scenario (train, evaluate, attack, figures).
+torch==2.3.1
+scapy==2.5.0
+# Offline training of the RL coordinator (make train-rl, make plot-tradeoff).
+gymnasium==0.29.1
+stable-baselines3==2.3.2
+
 # Cyber-physical (OT/Modbus) scenario — physical engine + Modbus stack.
 # Host-side for local verification of the engine/PLC (Phases 1-2, no Kathara);
 # also baked into the kathara/cps node image (docker/cps/Dockerfile).
@@ -21,7 +28,7 @@ pymodbus==3.6.9      # pinned to the stable classic datastore API (3.16.x churne
 networkx==3.6.1
 
 # Test runner (make selftest). Dev-only: never imported by the platform or the
-# guest agents, which stay stdlib+numpy.
+# guest agents, which only have what their node image installs.
 pytest==9.2.0
 
 # Formatter and linter (make fmt / make lint, tests/core/test_formatting.py).

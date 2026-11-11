@@ -18,7 +18,7 @@ user-invocable: true
 Never invent a command. Every stage has a `make` target, and the campaign runner
 shells out to those same targets — so a target renamed or bypassed breaks a
 campaign hours in. `make help` prints the full catalogue with what each writes
-where; `README.md` has the variables.
+where; `docs/scenario-mqtt.md` and `docs/scenario-cps.md` have the variables.
 
 ## Which of the three do I want?
 
@@ -76,7 +76,7 @@ others. `needs` expresses dependencies between units.
   are kept.
 
 Follow one live with `make dashboard` (every scenario) or `make cps-dashboard`
-(only `output/cps`). The dashboard reads the ledger files under `--root`; it
+(only the CPS runs and campaigns). The dashboard reads the ledger files under `--root`; it
 needs no cooperation from the run.
 
 ## Diagnosing a run that produced nothing

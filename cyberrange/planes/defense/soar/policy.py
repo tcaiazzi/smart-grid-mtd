@@ -7,8 +7,8 @@ RulesPolicy   the static playbook (the MTM baseline of WP3): a fixed table from
 SolverPolicy  a first solver: picks the subset of countermeasures that
               minimises expected loss + weighted operational / time / energy
               cost, by exhaustive enumeration (5 countermeasures -> <= 32
-              subsets). Also returns the Pareto front (risk vs disruption vs
-              energy) for inspection.
+              subsets; 7 and 128 with the IT ones). Also returns the Pareto
+              front (risk vs disruption vs energy) for inspection.
 
 Every Decision carries its justification — the tree nodes each action covers
 and the cost terms — which is what "explainable decision coverage" counts.

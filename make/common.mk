@@ -5,7 +5,7 @@
 # paths are an internal API — the campaign runner shells out to these same
 # targets — and spelling them inline across forty rules means a module that
 # moves leaves forty stale strings, which `make -n` prints without complaint.
-# Naming them here makes a move a one-line edit, and tests/test_entry_points.py
+# Naming them here makes a move a one-line edit, and tests/core/test_entry_points.py
 # resolves every one of them for real.
 
 PYTHON ?= .venv/bin/python
@@ -62,5 +62,5 @@ platform-loc:              ## lines of code: platform core vs per-plane componen
 	$(PYTHON) -m $(M_CORE) loc --markdown $(OUTPUT_ROOT)/platform-loc.md
 
 clean:
-	rm -rf output
+	rm -rf $(OUTPUT_ROOT)
 

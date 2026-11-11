@@ -22,8 +22,11 @@ make/ scripts/ tools/ tests/ docs/
    containers are flat modules importing each other bare, so `/ot_registers.py`
    must keep that name forever — while the file it comes from may live anywhere.
    Manifests: `cyberrange/scenarios/<name>/guest_files.py`.
-3. **Guest agents are stdlib + numpy only** and never import `cyberrange.*`.
-   They run where this repo does not exist.
+3. **Guest agents import only the stdlib and what their node image installs**
+   (`docker/<scenario>/Dockerfile`), and never `cyberrange.*`. They run where
+   this repo and its virtualenv do not exist. Enforced by
+   `tests/core/test_guest_imports.py`, which also keeps the images pinned to
+   `requirements.txt`.
 4. **`SOURCES` categories stay disjoint** (one directory each). `make platform-loc`
    sums each category, so a file matched twice is counted twice and the paper's
    table silently lies.
@@ -63,7 +66,8 @@ repo drifts. Run `make fmt` before committing. What the formatter cannot decide:
 
 - Module docstring opens with `name.py — what it is`, then *why it exists*.
 - Guest agents additionally open with `#!/usr/bin/env python3` and state the
-  deploy fact ("Copied flat onto the sensor machine…, stdlib + numpy only").
+  deploy fact ("Copied flat onto the sensor machine…, stdlib + numpy only" — or
+  whichever of the image's packages it needs).
 - Type annotations at boundaries, not everywhere.
 - **Comments describe the present.** What the code does now and why it is this
   way — never what it used to be, which release changed it, or which refactor

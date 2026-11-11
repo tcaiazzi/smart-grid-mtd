@@ -15,11 +15,15 @@ per core/topology.py's deployment-contract docstring). It catches a missing shar
 module or a stray package-relative import in ~1s, without needing Docker or a
 live Kathara deploy — see the "V4" gate in the project's refactor plan.
 
-Uses only the standard library (unittest) — this project has no test-runner
-dependency today, and this file doesn't need one: run it directly with
-`.venv/bin/python tests/test_guest_imports.py` or via `python -m unittest`.
+It also holds the other half of the guest contract: an agent may import only
+what its node image installs, and the images install the versions the host
+tests run against.
+
+Run: `.venv/bin/python -m pytest tests/core/test_guest_imports.py`.
 """
 
+import ast
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,6 +60,69 @@ MACHINES = {
     "hmi": HMI_FILES,
     "attacker_cps": ATTACKER_CPS_FILES,
 }
+
+
+# The image each machine runs, as the Dockerfile that builds it.
+MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
+IMAGE_OF = {
+    "semp": MQTT_IMAGE,
+    "scmc": MQTT_IMAGE,
+    "router": MQTT_IMAGE,
+    "engine": CPS_IMAGE,
+    "plc": CPS_IMAGE,
+    "sensor": CPS_IMAGE,
+    "hmi": CPS_IMAGE,
+    "attacker_cps": CPS_IMAGE,
+}
+# Distributions whose import name is not their own.
+IMPORT_NAME = {"paho-mqtt": "paho"}
+# The guest scapy captures packets, the host scapy only reads pcaps for the
+# classifier: the two are not the same code path and are pinned apart.
+PINNED_APART = {"scapy"}
+
+
+def pip_installs(dockerfile: str) -> dict:
+    """{distribution: pinned version or None} for every `pip3 install` of a Dockerfile."""
+    out, inside = {}, False
+    for line in (REPO_ROOT / dockerfile).read_text().splitlines():
+        inside = inside or "pip3 install" in line
+        if not inside:
+            continue
+        for token in line.replace("\\", " ").split():
+            m = re.fullmatch(r"([A-Za-z0-9_.-]+?)(?:==([\w.]+))?", token)
+            if m and token not in ("RUN", "pip3", "install") and not token.startswith("-"):
+                out[m.group(1)] = m.group(2)
+        inside = line.rstrip().endswith("\\")
+    return out
+
+
+def requirements() -> dict:
+    out = {}
+    for line in (REPO_ROOT / "requirements.txt").read_text().splitlines():
+        m = re.match(r"([A-Za-z0-9_.-]+)==([\w.]+)", line.strip())
+        if m:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def module_level_imports(path: Path) -> set:
+    """Top-level names a module imports when it is loaded. Imports inside a
+    function are left out: that is how an agent carries a dependency only one
+    of its uses needs, and it fails where it is used, not at start-up."""
+    names = set()
+
+    def visit(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Import):
+                names.update(a.name.split(".")[0] for a in child.names)
+            elif isinstance(child, ast.ImportFrom) and child.module and child.level == 0:
+                names.add(child.module.split(".")[0])
+            visit(child)
+
+    visit(ast.parse(path.read_text()))
+    return names
 
 
 def _project_packages() -> tuple[str, ...]:
@@ -183,6 +250,60 @@ class NoStrayProjectImportsInGuestAgents(unittest.TestCase):
             "no top-level packages discovered, so the host-import check above asserts "
             "nothing. Check _project_packages() against the repo layout.",
         )
+
+
+class GuestImportsAreInTheImage(unittest.TestCase):
+    """An agent runs where this repository and its virtualenv do not exist: the
+    only third-party code it can load is what its node image installed."""
+
+    def test_all_machines(self) -> None:
+        for machine, manifest in sorted(MACHINES.items()):
+            installed = {
+                IMPORT_NAME.get(d, d.replace("-", "_")) for d in pip_installs(IMAGE_OF[machine])
+            }
+            staged = {g.lstrip("/")[: -len(".py")] for _h, g in manifest if g.endswith(".py")}
+            for host_rel, _guest_path in manifest:
+                if not host_rel.endswith(".py"):
+                    continue
+                third_party = (
+                    module_level_imports(REPO_ROOT / host_rel)
+                    - staged
+                    - set(sys.stdlib_module_names)
+                )
+                with self.subTest(machine=machine, host_rel=host_rel):
+                    self.assertFalse(
+                        third_party - installed,
+                        f"{host_rel} imports {sorted(third_party - installed)} when it loads, "
+                        f"which {IMAGE_OF[machine]} does not install: the agent dies at start-up "
+                        f"on {machine!r}. Add it to the image, or import it inside the function "
+                        "that needs it.",
+                    )
+
+    def test_every_machine_has_an_image(self) -> None:
+        self.assertEqual(
+            set(MACHINES), set(IMAGE_OF), "a machine with no image is skipped by the check above"
+        )
+
+
+class ImagesPinWhatTheHostTests(unittest.TestCase):
+    """The suite exercises the agents against the host's packages. An image
+    that installs "whatever is latest" runs them against something else."""
+
+    def test_every_install_is_pinned_to_the_host_version(self) -> None:
+        host = requirements()
+        for dockerfile in sorted(set(IMAGE_OF.values())):
+            for dist, version in pip_installs(dockerfile).items():
+                with self.subTest(dockerfile=dockerfile, package=dist):
+                    self.assertIsNotNone(
+                        version, f"{dist} is unpinned: a rebuilt image may behave differently"
+                    )
+                    if dist in host and dist not in PINNED_APART:
+                        self.assertEqual(
+                            host[dist],
+                            version,
+                            f"{dist} differs between requirements.txt and {dockerfile}: "
+                            "the tests pass on one version and the lab runs another",
+                        )
 
 
 if __name__ == "__main__":

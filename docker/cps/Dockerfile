@@ -20,7 +20,7 @@ RUN apt-get update && \
 # pandapower pulls pandas/scipy/networkx; pymodbus pinned to the stable classic
 # datastore API. numpy is used by the DPI sensor's (stdlib-only) featurizer.
 RUN pip3 install --no-cache-dir --break-system-packages \
-        numpy \
+        numpy==1.26.4 \
         pandapower==3.5.6 \
         pymodbus==3.6.9
 

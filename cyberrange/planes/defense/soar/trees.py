@@ -390,7 +390,12 @@ def cps_countermeasures(g, it=False):
             "Terminate the processes the web app spawned (the RCE)",
             "Process Termination",
             c["hmi"],
-            apply=["for p in $(pgrep -f vuln_app.py); do pkill -P $p 2>/dev/null; done; true"],
+            # Depth-first over the descendants: the injected command is usually a
+            # shell whose own child is the payload, which `pkill -P` alone misses.
+            apply=[
+                "kt() { for c in $(pgrep -P $1); do kt $c; kill -9 $c 2>/dev/null; done; }; "
+                "for p in $(pgrep -f vuln_app.py); do kt $p; done; true"
+            ],
             revert=[],  # killing the foothold changes no persistent state
             prevents=["it_exec", "pivot"] + ot_leaves,
             time_to_effect_s=0.3,

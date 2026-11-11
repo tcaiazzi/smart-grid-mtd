@@ -21,13 +21,15 @@ RUN apt-get update && \
         wireshark-common && \
     rm -rf /var/lib/apt/lists/*
 
-# Python deps (system-wide; --break-system-packages for Debian 12 PEP 668)
+# Python deps (system-wide; --break-system-packages for Debian 12 PEP 668).
+# Pinned to requirements.txt (tests/core/test_guest_imports.py checks it): the
+# agents are tested on the host against those versions.
 RUN pip3 install --no-cache-dir --break-system-packages \
         paho-mqtt==1.6.1 \
-        numpy \
+        numpy==1.26.4 \
         scapy==2.7.0 \
-        pymgrid \
-        cryptography
+        pymgrid==1.2.2 \
+        cryptography==48.0.1
 
 # Disable the mosquitto systemd service auto-start; the lab startup script
 # launches the broker explicitly with our config.

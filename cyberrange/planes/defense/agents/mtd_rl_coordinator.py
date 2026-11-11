@@ -115,7 +115,9 @@ class RLSEMPCoordinator(SEMPCoordinator):
             self._hop_new_port[seq] = new_port
             self._hop_succeeded[seq] = set()
             self._hop_endpoints[seq] = (self.current_ip, self.current_port, new_ip, new_port)
-            self._hop_deadline[seq] = time.monotonic() + self.hop_timeout + in_messages
+            self._hop_deadline[seq] = (
+                time.monotonic() + self.hop_timeout + self._countdown_s(in_messages)
+            )
             self._track_hop(seq, ip_changed, port_changed, in_messages, new_ip, new_port)
             self.current_ip, self.current_port = new_ip, new_port
 

@@ -223,10 +223,13 @@ class SCMCExecutor:
                 # Brief backoff, but never past the deadline.
                 time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
 
-        try:
-            c.loop_stop()
-        except Exception:
-            pass
+        # Close the trial socket too: it carries the live session's client id,
+        # and a CONNACK arriving late on it would make the broker drop that session.
+        for close in (c.loop_stop, c.disconnect):
+            try:
+                close()
+            except Exception:
+                pass
         return None
 
     def _pad_payload(self, obj: dict) -> bytes:

@@ -46,7 +46,7 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
 console.log(JSON.stringify(out));
 """
 
-KNOWN_KEYS = {"queue", "detail", "chart", "graph", "tabs"}
+KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results"}
 GRAPH_KEYS = {"index", "overlayAt", "marks", "drawTopology", "drawKG", "drawTree"}
 
 
@@ -151,6 +151,47 @@ console.log(JSON.stringify(out));""",
                 self.assertEqual(
                     GRAPH_KEYS, keys, f"{name}'s graph does not match what the page calls on it"
                 )
+
+    def test_a_results_panel_names_its_tabs_and_draws_them(self):
+        """The page builds one button per declared tab and calls render() with
+        its id: a tab without a label, or no render, is a button onto nothing."""
+        for name in registry.names():
+            path = registry.get(name).panel_js()
+            if path is None:
+                continue
+            script = (HARNESS % open(path).read()).replace(
+                "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
+                "panel.results ? { tabs: panel.results.tabs, render: typeof panel.results.render }"
+                " : null",
+            )
+            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr.strip())
+            results = json.loads(result.stdout).get(name)
+            if results is None:
+                continue
+            with self.subTest(scenario=name):
+                self.assertEqual("function", results["render"])
+                self.assertTrue(results["tabs"], f"{name} declares results but no tab")
+                for tab in results["tabs"]:
+                    self.assertTrue(tab.get("id") and tab.get("label"), f"unusable tab {tab}")
+                self.assertNotIn(
+                    "ci", [t["id"] for t in results["tabs"]], "'ci' is the page's own tab"
+                )
+
+    def test_the_page_script_parses(self):
+        """A syntax error in the page is a blank dashboard and nothing else says so."""
+        import re
+        import tempfile
+
+        from cyberrange.core import paths
+
+        html = (paths.REPO_ROOT / "cyberrange" / "core" / "dashboard.html").read_text()
+        scripts = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
+        self.assertTrue(scripts, "no inline script found in dashboard.html")
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+            f.write("\n".join(scripts))
+        result = subprocess.run([NODE, "--check", f.name], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stderr.strip())
 
 
 if __name__ == "__main__":

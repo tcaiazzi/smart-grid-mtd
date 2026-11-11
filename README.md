@@ -53,13 +53,12 @@ invoked with `-m` rather than by path.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install kathara
 ```
 
 Node images, one per scenario:
 
 ```bash
-docker build -t smartgrid/node:latest docker/mqtt/   # MQTT scenario
+docker build -t kathara/mqtt docker/mqtt/            # MQTT scenario
 make cps-image                                       # CPS scenario (pandapower + pymodbus)
 ```
 

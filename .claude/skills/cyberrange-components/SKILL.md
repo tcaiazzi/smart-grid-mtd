@@ -14,7 +14,7 @@ Two kinds of code meet here, and the whole difficulty is keeping them apart:
 | Where | `cyberrange/planes/<plane>/components.py` and the plane's own modules | `cyberrange/planes/<plane>/agents/*.py` |
 | Runs | in this repo, with the venv | inside a container, where this repo does not exist |
 | Imports | normal packages (`from cyberrange.core...`) | **flat and bare** (`from ot_registers import ...`) |
-| May use | anything in `requirements.txt` | **stdlib + numpy only** |
+| May use | anything in `requirements.txt` | **the stdlib + what its node image installs** (`docker/<scenario>/Dockerfile`) |
 | Named by | its path, freely | its **guest path**, which is a contract |
 
 ## Scope / Not this skill
@@ -118,9 +118,12 @@ These are failure modes, not style notes. Most of them are silent.
   in the container, where the package does not exist.
   `tests/core/test_guest_imports.py` imports every staged module in a subprocess
   with only that machine's files on `sys.path`, which is exactly the container's.
-- **A dependency the image lacks.** Guest agents are stdlib + numpy. Anything
-  heavier (pandas, torch, sklearn, matplotlib) belongs host-side, in the plane or
-  in a scenario's `training/`.
+- **A dependency the image lacks.** A guest agent has the stdlib and what its
+  node image installs, nothing else; `tests/core/test_guest_imports.py` fails on
+  any other import made when the module loads. Add the package to the
+  Dockerfile, pinned to `requirements.txt`, only if the agent really needs it
+  in the container. Anything heavier (pandas, torch, sklearn, matplotlib)
+  belongs host-side, in the plane or in a scenario's `training/`.
 - **Renaming a guest path "to be consistent".** Every other agent that imports it
   breaks, and only in a real lab. Rename the host file instead; it is free.
 - **Leaving a stale twin.** Moving a module but leaving a copy behind: the

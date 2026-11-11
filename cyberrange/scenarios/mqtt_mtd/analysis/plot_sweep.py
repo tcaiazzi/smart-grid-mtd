@@ -129,9 +129,9 @@ def plot_e1(df: pd.DataFrame, out_path: str) -> None:
     configs = [
         ("No hop\n(1×1×1=1)", "E1-no-hop"),
         ("Port only\n(1×5×1=5)", "E1-port-only"),
-        ("IP only\n(3×1×1=3)", "E1-ip-only"),
-        ("Src-IP only\n(1×1×3=3)", "E1-src-only"),
-        ("All\n(3×5×3=45)", "E0-default"),
+        ("IP only\n(4×1×1=4)", "E1-ip-only"),
+        ("Src-IP only\n(1×1×4=4)", "E1-src-only"),
+        ("All\n(4×5×4=80)", "E0-default"),
     ]
     labels = [c[0] for c in configs]
     mtd_scores = [score(df, LABEL_MTD_MODEL, experiment=c[1]) for c in configs]

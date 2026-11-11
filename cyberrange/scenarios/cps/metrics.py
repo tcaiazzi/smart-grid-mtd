@@ -170,10 +170,12 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
         e["t"] for e in findings if attack_start is not None and e["t"] >= attack_start - SLACK_S
     ]
     real = [a for a in applied if a["id"] != "notify"]
-    first_action = min((a["done_t"] for a in real), default=None)
     block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
     ok_writes = [e for e in gt if e.get("kind") == "modbus_write" and e.get("ok")]
     pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
+    # Latency is measured to the first response to the attack: a false response
+    # before it would give a negative value and drag the campaign median down.
+    first_action = min((a["done_t"] for a in real if a not in pre), default=None)
     # The attack reached the plant iff a write landed; otherwise, with an attack
     # present, a response that applied is what prevented it (not over-response).
     prevented = attack_start is not None and not ok_writes
@@ -484,7 +486,9 @@ def aggregate(rows):
         runs = [r["metrics"] for r in rows if r["mode"] == mode]
         n = len(runs)
         attack = any(m.get("attack") for m in runs)
-        for det in (*DETECTORS, "combined"):
+        # The IT sensor is optional: its row exists when a run of this mode had it.
+        has_it = any("it" in (m.get("detectors") or {}) for m in runs)
+        for det in (*DETECTORS, *(["it"] if has_it else []), "combined"):
             ds = [m["detectors"][det] for m in runs if det in (m.get("detectors") or {})]
             hit = [d for d in ds if d["detected"]]
             lat = [d.get("latency_from_write_s") for d in hit]

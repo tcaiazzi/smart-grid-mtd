@@ -641,7 +641,9 @@ class SEMPCoordinator:
                 self._hop_endpoints[seq] = (self.current_ip, self.current_port, new_ip, new_port)
                 # Deadline must allow the executor's HOP_CONNECT_TIMEOUT + a margin
                 # for the worst-case "in N messages" countdown before it even starts.
-                self._hop_deadline[seq] = time.monotonic() + self.hop_timeout + in_messages
+                self._hop_deadline[seq] = (
+                    time.monotonic() + self.hop_timeout + self._countdown_s(in_messages)
+                )
                 self._track_hop(seq, ip_changed, port_changed, in_messages, new_ip, new_port)
 
                 self.current_ip = new_ip
@@ -679,6 +681,13 @@ class SEMPCoordinator:
             pending,
             time.monotonic() + self.hop_timeout + in_messages * interval,
         )
+
+    def _countdown_s(self, in_messages: int) -> float:
+        """Worst-case time before the executor starts a broker hop scheduled
+        "in ``in_messages`` messages": each at most max(freq_pool) apart, and
+        never counted as less than 1 s. A deadline shorter than the countdown
+        rolls the hop back before it begins."""
+        return in_messages * max([1.0, *(self.freq_pool or [])])
 
     def _action_watchdog_loop(self) -> None:
         """Fail-safe for actions that never complete.

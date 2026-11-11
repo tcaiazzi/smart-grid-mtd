@@ -131,7 +131,9 @@ def decode_request(adu):
     if fc == reg.FC_WRITE_MULTIPLE_REGISTERS and len(pdu) >= 6:
         address, qty = struct.unpack("!HH", pdu[1:5])
         byte_count = pdu[5]
-        if len(pdu) >= 6 + byte_count and byte_count == 2 * qty:
+        # A quantity of zero is not a write: accepting it would hand the rules
+        # an empty value list.
+        if qty >= 1 and len(pdu) >= 6 + byte_count and byte_count == 2 * qty:
             vals = [struct.unpack("!H", pdu[6 + 2 * i : 8 + 2 * i])[0] for i in range(qty)]
             return {"address": address, "values": vals}
     return None
@@ -207,6 +209,9 @@ def _finding(klass, reasons, confidence, src, dst, unit, address, evidence, dete
 
 def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str, policy=None):
     """Write-time rules. Return a finding dict for a suspicious write, or None.
+
+    ``write`` names one register: the caller splits a multi-register write, so
+    that every value is judged against the register it actually lands on.
 
     `policy` maps client IP -> role (see ot_registers.ROLE_POLICY). Without it,
     `authorized_writer` (the PLC) is the only known client — the original,
@@ -526,16 +531,20 @@ class OTSensor:
                     self._emit(f, t)
             return
         if fc in reg.WRITE_FUNCTION_CODES and req is not None:
-            w = {"unit": unit, "fc": fc, "address": req["address"], "values": req["values"]}
-            value = reg.actuator_value(w["address"], w["values"][0])
-            self.rules.note_write(t, src, dst, unit, w["address"], value)
-            if self.featurizer:
-                self._model_windows(self.featurizer.observe_write(t, src, w["address"], value))
-                self._model_early(t)
-            if "rules" in self.detectors:
-                f = classify_write(src, dst, w, self.authorized_writer, policy=self.policy)
-                if f:
-                    self._emit(f, t)
+            # One register at a time: a multi-register write judged by its start
+            # address alone would carry a breaker command past the setpoint rules.
+            for offset, raw in enumerate(req["values"]):
+                address = req["address"] + offset
+                w = {"unit": unit, "fc": fc, "address": address, "values": [raw]}
+                value = reg.actuator_value(address, raw)
+                self.rules.note_write(t, src, dst, unit, address, value)
+                if self.featurizer:
+                    self._model_windows(self.featurizer.observe_write(t, src, address, value))
+                    self._model_early(t)
+                if "rules" in self.detectors:
+                    f = classify_write(src, dst, w, self.authorized_writer, policy=self.policy)
+                    if f:
+                        self._emit(f, t)
             return
         if "rules" in self.detectors and self.policy:
             # Any other function code (diagnostics, device id, coils, ...)

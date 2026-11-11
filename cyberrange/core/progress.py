@@ -1,6 +1,6 @@
 """progress.py — the experiment progress ledger: an append-only JSONL file of
-events that the CPS runners write while they work and the progress dashboard
-(monitor/cps_dashboard.py) reads. It is the single source of truth for what is
+events that the runners write while they work and the progress dashboard
+(core/dashboard.py) reads. It is the single source of truth for what is
 queued, running, done or failed, which phase a run is in, the live plant state
 pulled from the containers, and the results as they come in.
 
@@ -9,13 +9,21 @@ Every line is one event:
     {"seq": <n>, "t": <unix time>, "kind": "<kind>", ["run_id": ...], ...}
 
 `seq` keeps counting across re-opens of the same file, so a resumed campaign
-appends to its ledger without renumbering. Host-side, stdlib only.
+appends to its ledger without renumbering. `seq`, `t` and `kind` belong to the
+ledger: a caller's field of the same name is dropped.
+
+While a ledger is open its writer refreshes the file's modification time every
+HEARTBEAT_S, so a reader can tell a writer that is busy (a training step that
+emits nothing for twenty minutes) from one that died. Host-side, stdlib only.
 """
 
 import json
 import os
 import threading
 import time
+
+
+HEARTBEAT_S = 10.0  # well under the reader's staleness threshold (ledgers.STALE_S)
 
 
 class ProgressLog:
@@ -32,10 +40,23 @@ class ProgressLog:
             with open(path, errors="replace") as f:
                 self._seq = sum(1 for line in f if line.strip())
         self._file = open(path, "a", buffering=1)
+        self._closed = threading.Event()
+        threading.Thread(target=self._heartbeat, daemon=True).start()
+
+    def _heartbeat(self):
+        """Keep the file's mtime fresh while the writer lives. No event is
+        written: a liveness line every few seconds would bury the real ones."""
+        while not self._closed.wait(HEARTBEAT_S):
+            try:
+                os.utime(self.path)
+            except OSError:
+                pass  # the ledger was moved or removed under us; nothing to keep alive
 
     def emit(self, kind, **fields):
         with self._lock:
-            ev = {"seq": self._seq, "t": round(time.time(), 3), "kind": kind, **fields}
+            # The ledger's keys win: readers page on `seq`, so a mirrored guest
+            # event carrying its own would be skipped or re-sent forever.
+            ev = {**fields, "seq": self._seq, "t": round(time.time(), 3), "kind": kind}
             self._file.write(json.dumps(ev, default=str) + "\n")
             self._seq += 1
         return ev
@@ -47,6 +68,7 @@ class ProgressLog:
         return BoundProgress(self, fixed)
 
     def close(self):
+        self._closed.set()
         with self._lock:
             if not self._file.closed:
                 self._file.close()

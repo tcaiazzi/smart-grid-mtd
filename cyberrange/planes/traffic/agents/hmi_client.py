@@ -115,7 +115,7 @@ def main():
                 args.diag_url,
                 args.diag_every,
                 2.0,
-                random.Random((args.seed or 0) ^ 0x1D1A6),
+                random.Random(None if args.seed is None else args.seed ^ 0x1D1A6),
                 diag_stop,
             ),
             daemon=True,
@@ -147,12 +147,16 @@ def main():
                         log.info("operator: control already MANUAL (foreign), skip dispatch")
                     else:
                         _write(client, reg.HR_CTRL_MODE, reg.CTRL_MANUAL, args.unit_id)
+                        # MANUAL is ours from here: recorded before the dispatch,
+                        # or a failed setpoint write would leave the plant in
+                        # MANUAL with nobody due to hand it back.
+                        manual_until, my_raw = t_rel, None
                         _write(client, reg.HR_DG_SETPOINT, reg.encode(sp, DG_SCALE), args.unit_id)
-                        manual_until, my_raw = t_rel, reg.encode(sp, DG_SCALE)
+                        my_raw = reg.encode(sp, DG_SCALE)
                         log.info("operator: MANUAL, dispatch DG=%.1fkW", sp)
                 elif manual_until is not None and now >= manual_until:
                     hr = _read_holding(client, args.unit_id)
-                    if hr["raw_setpoint"] == my_raw:
+                    if my_raw is None or hr["raw_setpoint"] == my_raw:
                         _write(client, reg.HR_CTRL_MODE, reg.CTRL_AUTO, args.unit_id)
                         log.info("operator: back to AUTO")
                     else:

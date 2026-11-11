@@ -1,7 +1,8 @@
 """lifecycle.py — one run of any scenario, the same way every time.
 
     run_start → build lab → structure → deploy → episode → stop components
-              → download artifacts → undeploy (always) → check_run → run_end
+              → download artifacts (also of a failed episode) → undeploy (always)
+              → check_run → run_end
 
 The ledger (progress.jsonl) is the run's own at <out_dir>/progress.jsonl
 unless a campaign hands in a bound emitter. ``run`` returns the scenario's
@@ -94,19 +95,31 @@ def run(scenario, args, progress=None, manager=None):
             scenario.write_structure(ctx)
         except Exception as e:  # dashboard extras never fail a run
             log.warning("could not write the run structure: %s", e)
-        with ctx.phase("deploy"):
-            log.info("Undeploying any existing lab named %r", topo.name)
-            manager.undeploy_lab(lab=lab)
-            log.info("Deploying lab %r", topo.name)
-            manager.deploy_lab(lab=lab)
+        # The deploy is inside the undeploy guard: a deploy that dies halfway
+        # would otherwise leave its containers and networks up.
         try:
+            with ctx.phase("deploy"):
+                log.info("Undeploying any existing lab named %r", topo.name)
+                manager.undeploy_lab(lab=lab)
+                log.info("Deploying lab %r", topo.name)
+                manager.deploy_lab(lab=lab)
+            episode_ok = False
             try:
                 scenario.episode(ctx)
+                episode_ok = True
             finally:
                 ctx.stop_all()
                 ctx.close_ground_truth()
-            with ctx.phase("download"):
-                ctx.download_artifacts()
+                # A failed episode is when the console logs matter most, so the
+                # artifacts come down either way; a download that fails on top
+                # of a failed episode must not hide the episode's own error.
+                try:
+                    with ctx.phase("download"):
+                        ctx.download_artifacts()
+                except Exception as e:
+                    if episode_ok:
+                        raise
+                    log.warning("could not download the artifacts of the failed run: %s", e)
         finally:
             with ctx.phase("undeploy"):
                 log.info("Undeploying lab %r", topo.name)

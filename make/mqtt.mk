@@ -40,7 +40,7 @@ SEED             ?=
 OUTPUT_ROOT      ?= output
 SEED_FLAG        := $(if $(SEED),--seed $(SEED))
 # Host port of the live MTD dashboard served by semp during MTD runs (empty =
-# run_experiment's default 8080, 0 = no dashboard).
+# the scenario CLI's default 8080, 0 = no dashboard).
 DASHBOARD_PORT   ?=
 DASHBOARD_FLAG   := $(if $(DASHBOARD_PORT),--dashboard-port $(DASHBOARD_PORT))
 # Delivery-attack detector (.npz from `make detector-train`) to run live on semp
@@ -87,7 +87,7 @@ MTD_PARAMS_SLUG := hop$(MTD_HOP_INTERVAL)-padint$(MTD_PAD_INTERVAL)-ips$(MTD_N_I
 # ── RL coordinator ───────────────────────────────────────────────────────────
 # Set RL=1 to drive the MTD schedule with a trained RL policy (mtd_rl_coordinator)
 # instead of the fixed timers. The run uses the distinct "mtdrl-" slug prefix (set
-# by run_experiment.py) so RL artifacts sit beside the fixed-timer run's. Ignored
+# by the scenario's slug.py) so RL artifacts sit beside the fixed-timer run's. Ignored
 # for the baseline (NO_MTD=1) variant.
 RL_DIR        ?= output/rl
 RL_POLICY     ?= $(RL_DIR)/policy.npz
@@ -252,13 +252,13 @@ plots:
 	$(MAKE) entropy NO_MTD=1
 	$(MAKE) entropy
 	$(PYTHON) -m $(M_PLOT_RESULTS) --mtd-params-slug $(MTD_PARAMS_SLUG) --mtd-prefix $(MTD_PREFIX) \
-		--bg-replay-mbps $(BG_REPLAY_MBPS) --plots-dir $(EXP_DIR)
+		--bg-replay-mbps $(BG_REPLAY_MBPS) --output-root $(OUTPUT_ROOT) --plots-dir $(EXP_DIR)
 
 # Standalone figures for the no-MTD baseline run -> output/baseline-mbps<M>/
 plots-baseline:
 	$(MAKE) entropy NO_MTD=1
 	$(PYTHON) -m $(M_PLOT_RESULTS) --baseline-only --bg-replay-mbps $(BG_REPLAY_MBPS) \
-		--plots-dir $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
+		--output-root $(OUTPUT_ROOT) --plots-dir $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
 # Regenerate figures + summary.csv for every experiment dir under output/.
 # Add NO_DETECTION=1 to skip the (slow) pcap re-scoring and refresh availability only.
@@ -344,6 +344,7 @@ compare-rl:
 # usual. Idempotent — re-reads the existing artifacts for every config it finds.
 compare-rl-all:
 	@set -e; for d in $(OUTPUT_ROOT)/mtd-*/; do \
+		[ -d "$$d" ] || { echo "no mtd-* experiment dirs under $(OUTPUT_ROOT)"; break; }; \
 		slug=$$(basename "$$d" | sed 's/^mtd-//'); \
 		mbps=$$(echo "$$slug" | sed -E 's/.*-mbps([0-9]+).*/\1/'); \
 		echo "######## $$slug (mbps$$mbps) ########"; \
@@ -352,12 +353,13 @@ compare-rl-all:
 			--out-dir "$(OUTPUT_ROOT)/compare-$$slug" --rl-tags "$(RL_TAGS)"; \
 	done
 
+sweep:                     ## MTD parameter ablation (E0-E4) as a resumable campaign -> output/sweep/
+	$(PYTHON) -m $(M_ABLATION) --output-root $(OUTPUT_ROOT) \
+		$(if $(GROUPS),--groups $(GROUPS)) $(if $(DRY),--dry-run)
+
 # Security vs hop-cost tradeoff (simulation): the RL policy vs the fixed-timer
 # frontier -> $(RL_DIR)/tradeoff.{pdf,csv}. This is where "lower hop cost at equal
 # security" is measurable (the lab entropy comparison has no cost axis). No lab run.
-sweep:                     ## MTD parameter ablation (E0-E4) as a resumable campaign -> output/sweep/
-	$(PYTHON) -m $(M_ABLATION) $(if $(GROUPS),--groups $(GROUPS)) $(if $(DRY),--dry-run)
-
 plot-tradeoff:
 	$(PYTHON) -m $(M_TRADEOFF) --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
 
@@ -369,6 +371,8 @@ plot-tradeoff:
 # The ground truth stays on the host (ground_truth.jsonl). Runs that already have
 # their telemetry are skipped; a failed run is moved aside to <dir>.failed.
 DET_ROOT           ?= $(OUTPUT_ROOT)/detector
+# The default covers a quick look only: detector-final needs runs for every seed
+# in DET_TEST_SEEDS, so a full pass sets DET_SEEDS="1 2 3 4 5 6 7 8 9 10".
 DET_SEEDS          ?= 1 2
 DET_VARIANTS       ?= fixed rl
 DET_ATTACKS        ?= cnn oracle

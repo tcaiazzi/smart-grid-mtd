@@ -188,8 +188,11 @@ def _label(ctx, experiment, exp):
     }
 
 
-def baseline_unit(mbps: int, ctx: RunCtx, retries: int, banner: str = None) -> Unit:
-    """Mirrors scripts/run_single.sh's run_baseline() (NO_MTD=1)."""
+def baseline_unit(
+    mbps: int, ctx: RunCtx, retries: int, banner: str = None, lab_timeout: float = None
+) -> Unit:
+    """Mirrors scripts/run_single.sh's run_baseline() (NO_MTD=1). ``lab_timeout``
+    bounds each lab step (see config_unit)."""
     exp = f"baseline-mbps{mbps}"
     v = ["NO_MTD=1", f"BG_REPLAY_MBPS={mbps}", *ctx.make_vars]
     attack_dir = f"{ctx.root}/{exp}/attack/model-baseline"
@@ -207,18 +210,21 @@ def baseline_unit(mbps: int, ctx: RunCtx, retries: int, banner: str = None) -> U
         group="baseline",
         header=header,
         steps=[
-            Step("datasets", cmd=["make", "datasets", *v], retries=retries),
+            Step("datasets", cmd=["make", "datasets", *v], retries=retries, timeout=lab_timeout),
             Step("train", cmd=["make", "train", *v]),
             Step("evaluate", cmd=["make", "evaluate", *v]),
             Step(
                 "attack",
                 cmd=["make", "attack", *v],
                 retries=retries,
+                timeout=lab_timeout,
                 run_dir=attack_dir,
                 metrics=_metrics,
                 report=_report,
                 label=_label(ctx, "baseline", exp),
             ),
+            # The comparison figures need the baseline's entropy.csv too.
+            Step("entropy", cmd=["make", "entropy", *v]),
             Step(
                 "plot",
                 cmd=[
@@ -249,13 +255,18 @@ def config_unit(
     retries: int = 0,
     params: MtdParams = None,
     own_model_attack: bool = False,
+    blocks: int = 5,
+    lab_timeout: float = None,
 ) -> Unit:
     """One MTD configuration: capture, train, evaluate both ways, attack, plot.
 
     ``params`` is the point in the parameter space (default: the paper's).
     ``own_model_attack`` also runs the MTD-trained model against MTD traffic —
     the paper's figures do not need it, the ablation figures plot it as their
-    second series."""
+    second series. ``blocks`` is the total the header counts ``block`` against.
+    ``lab_timeout`` (seconds, None = no limit) bounds each step that deploys a
+    lab — dataset capture and the attacks — so a lab that hangs is stopped and
+    retried instead of holding the campaign."""
     prefix = "mtd"
     if rl_policy:
         prefix = f"mtdrl-{rl_tag}" if rl_tag else "mtdrl"
@@ -295,7 +306,13 @@ def config_unit(
     )
     steps += [
         Step("clean", cmd=["rm", "-rf", exp_dir], skip_if=built),
-        Step("datasets", cmd=["make", "datasets", *v], retries=retries, skip_if=built),
+        Step(
+            "datasets",
+            cmd=["make", "datasets", *v],
+            retries=retries,
+            timeout=lab_timeout,
+            skip_if=built,
+        ),
         Step("train", cmd=["make", "train", *v], skip_if=built),
         Step(
             "evaluate",
@@ -310,7 +327,14 @@ def config_unit(
         # The MTD-trained model against MTD traffic: a second series for the
         # ablation figures, not needed by the paper's.
         *(
-            [Step("attack-own-model", cmd=["make", "attack", *v], retries=retries)]
+            [
+                Step(
+                    "attack-own-model",
+                    cmd=["make", "attack", *v],
+                    retries=retries,
+                    timeout=lab_timeout,
+                )
+            ]
             if own_model_attack
             else []
         ),
@@ -320,6 +344,7 @@ def config_unit(
             "attack",
             cmd=["make", "attack", "MODEL_SRC=baseline", *v],
             retries=retries,
+            timeout=lab_timeout,
             run_dir=f"{exp_dir}/attack/model-baseline",
             metrics=_metrics,
             report=_report,
@@ -343,11 +368,14 @@ def config_unit(
                 exp_dir,
             ],
         ),
-        Step("manifest", run=lambda _emit: append_manifest(experiment, mbps, exp, ctx.root)),
+        Step(
+            "manifest",
+            run=lambda _emit: append_manifest(experiment, mbps, exp, ctx.root, params=params),
+        ),
     ]
 
     def header():
-        lines = [say(f"=== Block {block}/5: {title} ==="), say(f"[{experiment}] {exp}")]
+        lines = [say(f"=== Block {block}/{blocks}: {title} ==="), say(f"[{experiment}] {exp}")]
         if rl_policy and not (REPO_ROOT / rl_policy).is_file():
             lines.append(say(f"  RL policy {rl_policy} missing — training it first"))
         lines.append(
@@ -391,29 +419,28 @@ def append_manifest(
         "n_freqs",
         "slug",
     ]
-    if manifest_path.exists() and exp in manifest_path.read_text():
-        return
-    write_header = not manifest_path.exists()
-    with manifest_path.open("a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(header)
-        c = params.counts()
-        writer.writerow(
-            [
-                experiment,
-                params.hop,
-                c["n_ips"],
-                c["n_ports"],
-                c["n_pads"],
-                c["n_src"],
-                params.pad_interval,
-                mbps,
-                params.freq_interval,
-                c["n_freqs"],
-                exp,
-            ]
-        )
+    c = params.counts()
+    row = [
+        experiment,
+        params.hop,
+        c["n_ips"],
+        c["n_ports"],
+        c["n_pads"],
+        c["n_src"],
+        params.pad_interval,
+        mbps,
+        params.freq_interval,
+        c["n_freqs"],
+        exp,
+    ]
+    # One row per slug, and the latest wins: a row left by an earlier writer
+    # with other parameters would put this configuration at the wrong x.
+    rows = []
+    if manifest_path.exists():
+        with manifest_path.open(newline="") as f:
+            rows = [r for r in list(csv.reader(f))[1:] if r and r[-1] != exp]
+    with manifest_path.open("w", newline="") as f:
+        csv.writer(f).writerows([header, *rows, [str(x) for x in row]])
 
 
 def compare_dir(mbps: int, ctx: RunCtx) -> str:
@@ -477,7 +504,15 @@ def write_aggregate(root, rows):
 
 
 def build_campaign(
-    mbps=2, runs=1, seed_base=None, first_run=0, retries=2, name=None, resume=False, out=print
+    mbps=2,
+    runs=1,
+    seed_base=None,
+    first_run=0,
+    retries=2,
+    name=None,
+    resume=False,
+    out=print,
+    lab_timeout=None,
 ):
     """The whole paper evaluation as one campaign (ledger under output/campaigns/)."""
     contexts = run_contexts(runs, seed_base, first_run)
@@ -488,7 +523,7 @@ def build_campaign(
             if len(contexts) > 1 or ctx.root != DEFAULT_ROOT
             else None
         )
-        units.append(baseline_unit(mbps, ctx, retries, banner))
+        units.append(baseline_unit(mbps, ctx, retries, banner, lab_timeout))
         for block, (experiment, title, policy, tag) in enumerate(CONFIGS, start=2):
             units.append(
                 config_unit(
@@ -500,6 +535,7 @@ def build_campaign(
                     rl_tag=tag,
                     ctx=ctx,
                     retries=retries,
+                    lab_timeout=lab_timeout,
                 )
             )
         units.append(compare_unit(mbps, ctx))
@@ -510,6 +546,7 @@ def build_campaign(
         "seed_base": seed_base,
         "first_run": first_run,
         "retries": retries,
+        "lab_timeout": lab_timeout,
         **asdict(PAPER),
     }
     return Campaign(

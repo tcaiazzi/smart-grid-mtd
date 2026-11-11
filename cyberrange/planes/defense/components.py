@@ -124,9 +124,9 @@ class ItSensor(GuestAgent):
 
 
 class SoarResponder(Component):
-    """The response loop (cyberrange/cps_responder.Responder) as a host
-    thread reading every started sensor's telemetry. The knowledge graph is
-    built from the deployed lab, so the policy reasons on what really runs."""
+    """The scenario's response loop (``responder=``) as a host thread reading
+    every started sensor's telemetry. The knowledge graph is built from the
+    deployed lab, so the policy reasons on what really runs."""
 
     plane, name = PLANE, "soar_responder"
 

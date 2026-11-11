@@ -38,7 +38,7 @@ import os
 import sys
 from dataclasses import replace
 
-from cyberrange.core.campaign import Campaign, Step, run_cli
+from cyberrange.core.campaign import Campaign, Step, Unit, run_cli
 from cyberrange.scenarios.mqtt_mtd.campaign import (
     DEFAULT_ROOT,
     PYTHON,
@@ -49,11 +49,12 @@ from cyberrange.scenarios.mqtt_mtd.campaign import (
     config_unit,
     say,
     slug,
+    write_aggregate,
 )
 
-# The ablation's reference point is the Makefile's own defaults, not the paper's
-# tuned configuration: every group is read as a departure from "what the lab
-# does out of the box".
+# The ablation's reference point: every mechanism on, with pools wide enough to
+# collapse one at a time (E1). It is neither the paper's tuned configuration nor
+# the Makefile's defaults, whose IP and frequency pools hold a single value.
 DEFAULTS = MtdParams(
     hop=2,
     ip_pool="10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6",
@@ -87,7 +88,9 @@ def groups():
     }
 
 
-def build_campaign(selected, name=None, retries=0, resume=True, root=DEFAULT_ROOT, out=print):
+def build_campaign(
+    selected, name=None, retries=0, resume=True, root=DEFAULT_ROOT, out=print, lab_timeout=None
+):
     """The campaign for ``selected`` groups, plus the baselines they need."""
     grid = groups()
     unknown = [g for g in selected if g not in grid]
@@ -95,24 +98,30 @@ def build_campaign(selected, name=None, retries=0, resume=True, root=DEFAULT_ROO
         raise SystemExit(f"unknown group(s) {unknown}; known: {sorted(grid)}")
 
     configs = [(exp, p) for g in selected for exp, p in grid[g]]
+    ctx = RunCtx(root)
     units, seen_baseline = [], set()
     for block, (experiment, params) in enumerate(configs, start=1):
         # Every noise level needs its own no-MTD reference, and E3 is the only
         # group that changes it — hence one baseline per distinct rate.
         if params.mbps not in seen_baseline:
             seen_baseline.add(params.mbps)
-            units.append(baseline_unit(params.mbps, RunCtx(), retries))
+            units.append(baseline_unit(params.mbps, ctx, retries, lab_timeout=lab_timeout))
         units.append(
             config_unit(
                 experiment,
                 f"{experiment} (hop {params.hop}s, {params.mbps} Mbit/s)",
                 block,
                 params.mbps,
+                ctx=ctx,
                 retries=retries,
                 params=params,
                 own_model_attack=True,
+                blocks=len(configs),
+                lab_timeout=lab_timeout,
             )
         )
+    # No ``needs``: the figures are drawn from the configurations that finished.
+    units.append(Unit("figures", group="figures", steps=[figures_step(root)]))
 
     name = name or "ablation"
     campaign = Campaign(
@@ -121,7 +130,9 @@ def build_campaign(selected, name=None, retries=0, resume=True, root=DEFAULT_ROO
         units,
         params={"groups": list(selected), **{"defaults": DEFAULTS.hop}},
         resume=resume,
+        aggregate=write_aggregate,
         out=out,
+        scenario="mqtt-mtd",
     )
     return campaign, configs
 
@@ -144,6 +155,8 @@ def figures_step(root=DEFAULT_ROOT):
             os.path.join(root, "sweep_manifest.csv"),
             "--plots-root",
             root,
+            "--out-dir",
+            os.path.join(root, "sweep"),
         ],
     )
 
@@ -159,6 +172,14 @@ def parse_args(argv=None):
     )
     p.add_argument("--name", default=None, help="campaign name (default: ablation)")
     p.add_argument("--retries", type=int, default=1, help="retries for a failed lab step")
+    p.add_argument(
+        "--lab-timeout",
+        type=float,
+        default=None,
+        metavar="S",
+        help="stop a lab step (dataset capture, attack) running longer than S seconds, "
+        "then retry it (default: no limit)",
+    )
     p.add_argument(
         "--no-resume",
         action="store_true",
@@ -176,6 +197,7 @@ def main(argv=None):
         selected,
         name=args.name,
         retries=args.retries,
+        lab_timeout=args.lab_timeout,
         resume=not args.no_resume,
         root=args.output_root,
         out=lambda line: print(line, flush=True),
@@ -184,15 +206,7 @@ def main(argv=None):
         campaign.dry_run()
         print(say(f"=== Done (dry run): {len(configs)} configurations ==="))
         return
-    # The manifest is written whatever the outcome: plot_sweep draws the
-    # configurations that did finish.
-    sys.exit(
-        run_cli(
-            campaign,
-            out=lambda line: print(say(line), flush=True),
-            epilogue=lambda res: write_manifest(configs, root=args.output_root) or [],
-        )
-    )
+    sys.exit(run_cli(campaign, out=lambda line: print(say(line), flush=True)))
 
 
 if __name__ == "__main__":

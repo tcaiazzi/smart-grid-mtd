@@ -3,8 +3,8 @@
 Each plane (cyberrange.planes.{traffic,attack,defense,monitor}) exposes its
 building blocks as Components in ``cyberrange/planes/<plane>/components.py``. A scenario
 picks the ones it needs, configures them and starts them from its episode;
-the core then stops them, collects their artifacts and mirrors their
-telemetry onto the progress ledger.
+the core then stops them and collects their artifacts; the monitor plane's
+TelemetryMirror puts their telemetry on the progress ledger.
 
     start(ctx)      launch the component (guest processes via ctx.exec, or a
                     host thread); ctx.start(c) calls it and registers c

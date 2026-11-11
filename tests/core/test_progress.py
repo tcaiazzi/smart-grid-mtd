@@ -46,6 +46,52 @@ class Ledger(unittest.TestCase):
         self.assertEqual(evs[2]["k"], 1)
         self.assertEqual([e["seq"] for e in read_events(self.path, since=2)], [2])
 
+    def test_an_open_ledger_stays_fresh_without_events(self):
+        """A step that emits nothing for minutes (training) must not look dead:
+        the reader decides "interrupted" from the file's modification time."""
+        from cyberrange.core import progress
+
+        saved, progress.HEARTBEAT_S = progress.HEARTBEAT_S, 0.05
+        try:
+            log = ProgressLog(self.path)
+        finally:
+            progress.HEARTBEAT_S = saved
+        log.emit("campaign_start")
+        old = time.time() - 3600
+        os.utime(self.path, (old, old))
+        deadline = time.time() + 5
+        while os.path.getmtime(self.path) < old + 1 and time.time() < deadline:
+            time.sleep(0.02)
+        self.assertGreater(
+            os.path.getmtime(self.path),
+            old + 1,
+            "a silent but live writer left its ledger stale: the dashboard would "
+            "show a healthy campaign as interrupted",
+        )
+        log.close()
+        os.utime(self.path, (old, old))
+        time.sleep(0.3)
+        self.assertLess(
+            os.path.getmtime(self.path), old + 1, "a closed ledger is still being kept alive"
+        )
+        self.assertEqual(1, len(read_events(self.path)), "the heartbeat wrote an event")
+
+    def test_a_caller_cannot_overwrite_the_ledger_keys(self):
+        log = ProgressLog(self.path)
+        log.emit("a")
+        log.emit("mtd_action", seq=0, t=1.0, action="hop")  # a mirrored guest event
+        log.emit("b")
+        log.close()
+        evs = read_events(self.path)
+        self.assertEqual(
+            [e["seq"] for e in evs],
+            [0, 1, 2],
+            "a mirrored event kept its own seq: readers page on seq, so the dashboard "
+            "would drop it or fetch the whole ledger again on every poll",
+        )
+        self.assertGreater(evs[1]["t"], 1.0, "the ledger's clock was replaced by the guest's")
+        self.assertEqual(evs[1]["action"], "hop")
+
     def test_threads_do_not_interleave(self):
         log = ProgressLog(self.path)
         ts = [
@@ -282,6 +328,33 @@ class RunLifecycle(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self._run(mgr, progress=Collector())
         self.assertEqual(mgr.undeployed, ["cps", "cps"])
+
+    def test_artifacts_are_downloaded_when_the_episode_fails(self):
+        def boom(*a, **k):
+            raise RuntimeError("attack exploded")
+
+        active_attack.drive_attack = boom
+        col = Collector()
+        with self.assertRaises(RuntimeError):
+            self._run(FakeManager(), progress=col)
+        started = [e["name"] for e in col.events if e["kind"] == "phase" and e["state"] == "start"]
+        self.assertIn(
+            "download",
+            started,
+            "a failed episode was torn down without its artifacts: the console logs "
+            "holding the crash traceback are gone",
+        )
+        self.assertLess(started.index("download"), started.index("undeploy"))
+
+    def test_lab_is_undeployed_when_the_deploy_fails(self):
+        mgr = FakeManager(fail_deploy=True)
+        with self.assertRaises(RuntimeError):
+            self._run(mgr, progress=Collector())
+        self.assertEqual(
+            mgr.undeployed,
+            ["cps", "cps"],
+            "a deploy that died halfway left its containers and networks running",
+        )
 
 
 if __name__ == "__main__":

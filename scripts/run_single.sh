@@ -4,8 +4,8 @@
 # Unlike `make sweep` (which walks the fixed E0-E4 ablation grid), this script
 # exposes every MTD parameter as an editable variable below. Set them, then:
 #
-#   ./run_single.sh              # run with the parameters set below
-#   ./run_single.sh --dry-run    # print commands without running
+#   scripts/run_single.sh              # from the repo root, with the parameters below
+#   scripts/run_single.sh --dry-run    # print commands without running
 #
 # Outputs land in the same layout as the sweep:
 #   output/baseline-mbps<M>/     when NO_MTD=1
@@ -92,6 +92,7 @@ run_baseline() {
     run "make train    NO_MTD=1 BG_REPLAY_MBPS=$mbps"
     run "make evaluate NO_MTD=1 BG_REPLAY_MBPS=$mbps"
     run "make attack   NO_MTD=1 BG_REPLAY_MBPS=$mbps"
+    run "make entropy  NO_MTD=1 BG_REPLAY_MBPS=$mbps"
 
     run "$PYTHON -m cyberrange.scenarios.mqtt_mtd.analysis.plot_results --baseline-only \
         --bg-replay-mbps $mbps \

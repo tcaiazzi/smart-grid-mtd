@@ -24,7 +24,8 @@ document describes something that is checked rather than hoped for.
 Ask what its lifecycle is:
 
 - **Does it run inside a container?** → `planes/<plane>/agents/`, and add it to
-  the scenario's `guest_files.py`. It must be a flat module (stdlib + numpy),
+  the scenario's `guest_files.py`. It must be a flat module that imports only the
+  stdlib and what its node image installs (`docker/<scenario>/Dockerfile`),
   because on the guest side there are no packages — see the deployment
   contract in `cyberrange/core/topology.py`.
 - **Does it orchestrate a lab, for any scenario?** → `core/`.

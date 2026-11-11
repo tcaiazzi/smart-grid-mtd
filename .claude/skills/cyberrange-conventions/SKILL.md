@@ -59,7 +59,8 @@ caught once the physics moves.
 ```
 
 A guest agent's docstring must additionally state the **deploy fact** — which
-machine it is copied onto, and that it is stdlib (+ numpy) only. That line is
+machine it is copied onto, and what it may import: the stdlib plus whichever
+packages of its node image it needs (for most agents, numpy only). That line is
 what stops the next person adding pandas to a file that runs in a container.
 
 ## Comments
@@ -142,7 +143,7 @@ everything. Do not add annotations to existing untyped code as a side errand.
 
 0. `make fmt` then `make lint`: clean, before reading anything else.
 1. Does every new module open with `name.py — …` and say why it exists?
-2. If it runs in a container: shebang, deploy fact, stdlib + numpy only?
+2. If it runs in a container: shebang, deploy fact, only stdlib + what its image installs?
 3. Does any comment narrate the past instead of describing the present?
 4. Standalone comments: sentences. Trailing comments: lowercase fragments.
 5. Does each new comment say something the code does not, and do new assertions

@@ -159,22 +159,23 @@ A campaign is a list of **units**, run in order on one ledger.
 
 - A **unit** is one configuration × one repetition. Its **steps** run in order, and a failed step stops the rest of the unit. `needs` names units that must have succeeded first.
 - A **step** is either in-process (`run(emit)`: a scenario run, bound to the campaign ledger) or a command (`cmd`, e.g. a `make` target).
+- A command step may carry a `timeout` in seconds. When it expires the command and everything it started are stopped (interrupted first, so a lab run undeploys itself) and the step fails like any other, which is what lets `retries` take over. The MQTT campaigns set it on their lab steps from `--lab-timeout`; without it a step has no limit.
 - `skip_if()` reuses earlier results.
 - A **scored** step (`run_dir` + `metrics`) gets `metrics.json`, which is also what `--resume` skips on, and is folded into the aggregate after every run.
-- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the paper lists its figures; the ablation writes its manifest).
+- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the paper lists its figures).
 - `core.aggregate.summarize` gives n / mean / std / 95% CI (Student t) / median / min / max of every numeric metric per group. It writes `ci.csv` and a mean [CI] table in `summary.md`.
 
 | Campaign | Units | Steps |
 |---|---|---|
 | CPS (`make cps-campaign`, `cyberrange/scenarios/cps/campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
 | Paper (`main.py`, `cyberrange/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `scripts/run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
-| MTD ablation (`make sweep`, `cyberrange/scenarios/mqtt_mtd/ablation.py`) | 15 named MTD configurations in five groups (e0–e4), no seeds | the paper's `make` steps per configuration, plus its entropy. Writes the manifest `plot_sweep` reads, even when some configurations failed. |
+| MTD ablation (`make sweep`, `cyberrange/scenarios/mqtt_mtd/ablation.py`) | 15 named MTD configurations in five groups (e0–e4), no seeds | the paper's `make` steps per configuration, plus its entropy and its row of the manifest; a last unit draws the figures with `plot_sweep` from the configurations that finished. |
 
 ## 5. Following it live
 
 ```bash
 make dashboard            # every scenario's runs and campaigns under output/ (127.0.0.1:8765)
-make cps-dashboard        # only output/cps
+make cps-dashboard        # only the CPS runs
 ```
 
 `cyberrange/core/dashboard.py` only reads. It shows two kinds of content.
@@ -187,7 +188,15 @@ make cps-dashboard        # only output/cps
 - the current run's phases;
 - results, with a mean [95% CI] tab.
 
-**Per scenario:**
+A ledger that is open keeps its file's modification time fresh
+(`progress.HEARTBEAT_S`), so a campaign busy in a step that emits nothing is
+still shown as running; one whose writer died turns "interrupted" after
+`ledgers.STALE_S`.
+
+**Per scenario**, drawn by the scenario's `panel.js` and not by the page — the
+hooks are `queue` (its columns of the run table), `detail` (the selected run),
+`results` (`{tabs: [{id, label}], render(tab, aggregate, table)}`, its tabs
+next to the mean [95% CI] one) and `graph` (its structure views):
 
 - **CPS:** the plant voltage chart, findings, and the topology, knowledge graph and attack tree with the response decisions over time.
 - **MQTT:** MTD actions per knob coloured by outcome, delivery gaps, and the coordinator's actions table.
@@ -195,7 +204,7 @@ make cps-dashboard        # only output/cps
 ## 6. Adding a scenario: checklist
 
 1. **Image.** Reuse `kathara/mqtt` or `kathara/cps`, or add `docker/<name>/Dockerfile`.
-2. **Guest agents.** Add them under `cyberrange/planes/<plane>/agents/`. They are flat modules with bare imports. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
+2. **Guest agents.** Add them under `cyberrange/planes/<plane>/agents/`. They are flat modules with bare imports, and may import only the stdlib and what the node image installs. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
 3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `SoarResponder` takes its response loop and knowledge-graph builder). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
 4. **Scenario package.** Create `cyberrange/scenarios/<name>/` with:
    - `topology.py`: a `Topology`;

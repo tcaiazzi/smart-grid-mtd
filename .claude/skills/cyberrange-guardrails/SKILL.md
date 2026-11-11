@@ -21,7 +21,7 @@ never "make it green".
 | `tests/core/test_entry_points.py` | every `-m <module>` that `make -n` prints, plus the ones in scripts and campaigns, and every `make` target they call | a module path or target name went stale |
 | `tests/core/test_layering.py` | `core` imports no plane and no scenario; a plane imports no scenario | an import points backwards |
 | `tests/core/test_loc_coverage.py` | `tests/snapshots/loc-totals.json` + every `SOURCES`/`CORE` pattern matching ≥1 file, no file counted twice, no tracked source counted by nobody | the paper's code-size table moved |
-| `MIN_TESTS` in `tests/conftest.py` (now 278) | how many tests a full run collects | tests went missing instead of failing |
+| `MIN_TESTS` in `tests/conftest.py` (now 319) | how many tests a full run collects | tests went missing instead of failing |
 
 ## Diagnosing each
 

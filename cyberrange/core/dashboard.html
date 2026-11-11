@@ -145,8 +145,8 @@ td.wrap { white-space: normal; min-width: 280px; }
       <div class="legend" id="d-legend"></div>
       <div class="chart" id="d-chart"><div class="tip" id="tip"></div></div>
       <div class="err" id="d-err"></div>
-      <h2 style="margin-top:14px" id="f-title">Findings</h2>
-      <p class="sub" id="f-sub">Sensor findings so far, by detector and class (live during the run).</p>
+      <h2 style="margin-top:14px" id="f-title"></h2>
+      <p class="sub" id="f-sub"></p>
       <div class="scroll"><table id="d-findings"></table></div>
     </section>
   </div>
@@ -176,11 +176,7 @@ td.wrap { white-space: normal; min-width: 280px; }
   <section class="card" style="margin-top:16px">
     <h2>Results</h2>
     <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
-    <div class="tabs" id="r-tabs" role="group" aria-label="Results table">
-      <button type="button" data-tab="detection" aria-pressed="true">Detection</button>
-      <button type="button" data-tab="impact" aria-pressed="false">Physical impact</button>
-      <button type="button" data-tab="ci" aria-pressed="false">Mean [95% CI]</button>
-    </div>
+    <div class="tabs" id="r-tabs" role="group" aria-label="Results table"></div>
     <div class="scroll"><table id="results"></table></div>
   </section>
 </main>
@@ -189,9 +185,7 @@ td.wrap { white-space: normal; min-width: 280px; }
 <script>
 "use strict";
 // ── state & reducer ─────────────────────────────────────────────────────────
-// Fixed-length observation phases (older ledgers do not flag them with "timed").
-const TIMED = new Set(["normal", "post_attack", "capture", "sniff"]);
-let S, cur = { id: null, since: 0 }, selectedRun = null, resultsTab = "detection";
+let S, cur = { id: null, since: 0 }, selectedRun = null, resultsTab = null;
 let ledgers = [], clockSkew = 0;
 
 function fresh() {
@@ -245,7 +239,7 @@ function apply(ev) {
     case "step_end": if (!ev.ok && S.runs[ev.unit]) S.runs[ev.unit].error = ev.error; break;
     case "step_failed": if (S.runs[ev.unit]) S.runs[ev.unit].status = "failed"; break;
     case "unit_blocked": if (S.runs[ev.unit]) S.runs[ev.unit].status = "blocked"; break;
-    // MQTT: the MTD coordinator's telemetry, mirrored live
+    // the MTD coordinator's telemetry, mirrored live
     case "mtd_action": r.mtd.push({ t: ev.guest_t || ev.t, action: ev.action, status: ev.status, cost: ev.cost }); break;
     case "data_gap": r.gaps.push({ t: ev.guest_t || ev.t, gap: ev.gap_s }); break;
     case "detector_alert": case "detection": r.alerts2.push({ t: ev.guest_t || ev.t, kind: ev.kind, ev }); break;
@@ -290,7 +284,9 @@ function observedPhase() {
   for (const [k, v] of Object.entries(acc)) out[k] = v.reduce((a, b) => a + b, 0) / v.length;
   return out;
 }
-function isTimed(p) { return p.timed ?? TIMED.has(p.name); }
+// A fixed-length phase is flagged by the run itself (run_start.phases[].timed):
+// the page knows no phase by name.
+function isTimed(p) { return !!p.timed; }
 function phaseEst(p, obs) { return isTimed(p) ? (p.planned_s || 0) : (obs[p.name] ?? p.planned_s ?? 0); }
 function runRemaining(r, obs, t) {
   let rem = 0;
@@ -366,7 +362,9 @@ const panels = Object.fromEntries(
   Object.entries(window.CyberRangePanels || {}).map(([name, make]) => {
     try { return [name, make(panelApi)]; } catch (e) { console.error(name, e); return [name, null]; }
   }).filter(([, p]) => p));
-const panel = () => panels[S.scenario] || null;
+// A ledger written before run_start carried `scenario` is named by the listing.
+const ledgerScenario = () => (ledgers.find(l => l.id === cur.id) || {}).scenario;
+const panel = () => panels[S.scenario || ledgerScenario()] || null;
 
 function render() {
   const lst = ledgerStatus();
@@ -478,7 +476,7 @@ function renderDetail() {
   $("d-title").textContent = r ? `Run ${id}` : "Run";
   if (!r) { $("d-sub").textContent = "Select a run."; ["d-phases", "d-chips", "d-legend", "d-findings"].forEach(x => $(x).replaceChildren()); panel()?.chart?.(null); return; }
   $("d-sub").textContent = r.start_t
-    ? `${r.mode || "?"} · seed ${r.seed ?? "—"} · started ${clock(r.start_t)}${r.threshold != null ? ` · model threshold ${r.threshold}` : ""}`
+    ? `${r.mode || "?"} · seed ${r.seed ?? "—"} · started ${clock(r.start_t)}`
     : (r.status === "skipped" ? `${r.mode} · seed ${r.seed} · result reused from an earlier attempt (no live trace in this attempt)` : `${r.mode || "?"} · seed ${r.seed ?? "—"} · waiting in the queue`);
   // phases
   const t = now(), obs = observedPhase();
@@ -494,49 +492,32 @@ function renderDetail() {
       h("div", { class: "nm" }, p.name.replace("_", " ")),
       h("div", { class: "tm" }, p.start_t ? `${dur(el)} / ${dur(est)}` : dur(est)));
   }));
+  $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
   const scenarioDetail = panel()?.detail;
   if (scenarioDetail) return scenarioDetail(r);
-  $("f-title").textContent = "Findings";
-  $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
-  // chips
-  const last = r.plant[r.plant.length - 1];
-  const chip = (k, v, dot) => h("div", { class: "chip" }, h("div", { class: "k" }, k),
-    h("div", { class: "v" }, dot ? h("span", { class: "dot", style: `background:${dot}` }) : null, v));
-  const byDet = d => r.findings.filter(f => f.detector === d);
-  const firstAfter = d => { const w0 = r.writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
-  $("d-chips").replaceChildren(
-    chip("control", last ? (last.ctrl_mode === 1 ? "MANUAL" : "auto") : "—", last?.ctrl_mode === 1 ? "var(--warning)" : null),
-    chip("DG setpoint", last?.dg_setpoint != null ? `${num(last.dg_setpoint, 1)} kW` : "—"),
-    chip("breaker", last ? (last.switch_cmd ? "OPEN" : "closed") : "—", last?.switch_cmd ? "var(--critical)" : null),
-    chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
-    chip("rules fired", r.writes.length ? firstAfter("rules") : String(byDet("rules").length)),
-    chip("model fired", r.writes.length ? firstAfter("model") : String(byDet("model").length)),
-  );
-  $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
-  panel()?.chart?.(r);
-  // findings table
-  const agg = {};
-  for (const f of r.findings) { const k = `${f.detector}|${f.klass}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, n: 0, first: f.t }).n++; }
-  const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
-    h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), h("td", { class: "num" }, String(a.n)),
-      h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
-  $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
-    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
+  // No panel: the phases above are all the page can say about a run.
+  $("f-title").textContent = ""; $("f-sub").textContent = "";
+  ["d-chips", "d-legend", "d-findings"].forEach(x => $(x).replaceChildren());
+  $("d-chart").querySelector("svg")?.remove();
 }
 
 // ── results ─────────────────────────────────────────────────────────────────
+// The aggregate a campaign reports is the scenario's. The page draws the one
+// table every scenario has (mean [95% CI], from core/aggregate.py); a panel adds
+// its own tabs with `results: { tabs: [{id, label}], render(tab, aggregate, table) }`.
+let tabsSig = "";
 function renderResults() {
-  const tb = $("results"), a = S.aggregate;
-  const hasCps = !!(a && a.detection), hasCi = !!(a && a.ci);
-  if (hasCps && !["detection", "impact", "ci"].includes(resultsTab)) resultsTab = "detection";
-  if (!hasCps && hasCi) resultsTab = "ci";
-  document.querySelectorAll("#r-tabs button").forEach(b => {
-    const scenarioTabs = panel()?.tabs || [];
-    b.style.display = (b.dataset.tab === "ci" ? hasCi
-      : (hasCps || (!a && scenarioTabs.includes(b.dataset.tab)))) ? "" : "none";
-    b.setAttribute("aria-pressed", String(b.dataset.tab === resultsTab));
-  });
-  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run" ? "Results are aggregated for campaigns; a single run is scored by its scenario's metrics (make cps-metrics, python -m cyberrange.scenarios.mqtt_mtd.metrics)." : "No scored runs yet")))); return; }
+  const tb = $("results"), a = S.aggregate, res = panel()?.results;
+  const hasCi = !!(a && a.ci);
+  const tabs = [...(res?.tabs || []), ...(hasCi ? [{ id: "ci", label: "Mean [95% CI]" }] : [])];
+  if (!tabs.some(t => t.id === resultsTab)) resultsTab = tabs[0]?.id ?? null;
+  const sig = tabs.map(t => t.id).join("|") + "#" + resultsTab;
+  if (sig !== tabsSig) {  // rebuilt only on change: a button replaced mid-click loses the click
+    tabsSig = sig;
+    $("r-tabs").replaceChildren(...tabs.map(t => h("button", { type: "button", "aria-pressed": String(t.id === resultsTab),
+      onclick: () => { resultsTab = t.id; renderResults(); } }, t.label)));
+  }
+  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run" ? "Results are aggregated for campaigns; a single run is scored by its scenario's metrics command." : "No scored runs yet")))); return; }
   const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
   if (resultsTab === "ci" && hasCi) {
     const gk = a.ci.length && "group" in a.ci[0] ? "group" : "mode";
@@ -546,18 +527,10 @@ function renderResults() {
       h("td", { class: "num" }, r.n > 1 ? `${num(r.ci95_low)} – ${num(r.ci95_high)}` : "—"), n(r.median),
       h("td", { class: "num" }, r.min == null ? "—" : `${num(r.min)}–${num(r.max)}`)));
     tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
-  } else if (resultsTab === "detection") {
-    const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
-      ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
-    const rows = a.detection.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
-      n(r.detection_rate), n(r.latency_median_s), h("td", { class: "num" }, r.latency_min_s == null ? "—" : `${num(r.latency_min_s)}–${num(r.latency_max_s)}`),
-      n(r.before_impact_rate), h("td", { class: "num" }, `${r.false_alarms} (${r.runs_with_false_alarms})`), n(r.false_alarms_in_operator_windows)));
-    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  } else if (res && resultsTab) {
+    res.render(resultsTab, a, tb);
   } else {
-    const head = h("tr", {}, h("th", {}, "mode"), ...["runs", "impacted", "persists", "recovered", "time-to-impact (s)", "impact duration (s)", "max ΔV (pu)", "MANUAL (s)"].map(x => h("th", { class: "num" }, x)));
-    const rows = a.impact.map(r => h("tr", {}, h("td", {}, r.mode), n(r.runs), n(r.impact_rate), n(r.persists_rate), n(r.recovered_rate),
-      n(r.time_to_impact_median_s), n(r.impact_duration_median_s), n(r.max_dev_median_pu), n(r.manual_mode_median_s)));
-    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+    tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "This campaign reported no aggregate the page can tabulate."))));
   }
   const scored = Object.values(S.runs).filter(r => r.metrics).length;
   $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. Rates are shares of runs (0–1).`;
@@ -679,7 +652,6 @@ async function pollEvents() {
 }
 
 $("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
-document.querySelectorAll("#r-tabs button").forEach(b => b.addEventListener("click", () => { resultsTab = b.dataset.tab; renderResults(); }));
 document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
 $("g-inputs").addEventListener("change", e => { gHideInputs = e.target.checked; renderGraph(); });
 $("g-time").addEventListener("input", e => { const v = +e.target.value; gTimeIdx = v >= +e.target.max ? null : v; renderGraph(); });

@@ -28,7 +28,7 @@ the scenario):
 
   progress   run_start{scenario, mode, seed, phases[{name, planned_s, timed}],
                        planned_s, ...}   phase{name, state=start|end, ok, duration_s}
-             run_end{status=ok|failed|interrupted, duration_s, error, rc}
+             run_end{status=ok|invalid|failed|interrupted, duration_s, error, rc}
              campaign_start / unit_start / step_start / step_end / step_skipped /
              step_retry / step_failed / run_metrics / aggregate / campaign_end
   ground     run_meta{scenario, seed, ...}   run_end

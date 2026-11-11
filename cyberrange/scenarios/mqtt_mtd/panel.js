@@ -49,7 +49,6 @@ function renderDetailMqtt(r) {
     chip("detector alerts", String(r.alerts2.filter(a => a.kind === "detector_alert").length)),
   );
   if (r.step) $("d-sub").textContent += ` · step: ${r.step}`;
-  $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
   drawMtd(r);
   $("f-title").textContent = "MTD actions";
   $("f-sub").textContent = "Moving-target actions of the coordinator by knob and outcome, and the delivery gaps the SEMP observed (live during the run).";
@@ -111,7 +110,6 @@ function drawMtd(r) {
     queue: () => renderQueueMqtt(ui),
     detail: renderDetailMqtt,
     // This scenario's aggregate is the 95%-CI table, which the page shows from
-    // the data itself; it adds no tab of its own.
-    tabs: [],
+    // the data itself; it adds no results tab of its own.
   });
 })();

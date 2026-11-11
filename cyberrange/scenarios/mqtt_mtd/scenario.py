@@ -130,7 +130,7 @@ class MqttMtdScenario(Scenario):
         )
         g.add_argument(
             "--trace",
-            default="assets/pcap/traccia_2b.pcap",
+            default="assets/pcap/traccia.pcap",
             help="background PCAP trace replayed by the router",
         )
         g.add_argument("--bg-replay-mbps", type=int, default=2, metavar="MBPS")

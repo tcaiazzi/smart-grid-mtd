@@ -341,6 +341,33 @@ class WireProcess(unittest.TestCase):
         self.write(1.0, HMI_IP, reg.HR_SWITCH_CMD, 1)
         self.assertEqual([f["klass"] for f in self.findings()], ["policy_violation"])
 
+    def test_zero_register_write_does_not_stop_the_sensor(self):
+        adu = modbus_write_multiple(reg.HR_DG_SETPOINT, [])
+        self.assertIsNone(
+            s.decode_request(s.parse_modbus_adus(adu)[0]),
+            "a write of zero registers was decoded as a write with no values",
+        )
+        self._req(1.0, OTHER_IP, adu, 40002)  # must not raise
+        self.write(2.0, HMI_IP, reg.HR_SWITCH_CMD, 1)
+        self.assertIn(
+            "policy_violation",
+            [f["klass"] for f in self.findings()],
+            "the sensor stopped detecting after a malformed write",
+        )
+
+    def test_every_register_of_a_multiple_write_is_judged(self):
+        """The HMI may write the setpoint (register 0) but not the breaker
+        (register 1): a write spanning both must not pass on its start address."""
+        self.txn += 1
+        adu = modbus_write_multiple(reg.HR_DG_SETPOINT, [reg.encode(30.0, 10.0), 1], txn=self.txn)
+        self._req(1.0, HMI_IP, adu, 40002)
+        found = self.findings("policy_violation")
+        self.assertEqual(
+            [f["entities"]["register"] for f in found],
+            [reg.HR_SWITCH_CMD],
+            "a breaker command hidden behind a legal setpoint write went unnoticed",
+        )
+
     def test_write_alert_clears_after_quiet(self):
         self.write(1.0, OTHER_IP, reg.HR_DG_SETPOINT, reg.encode(200.0, 10.0))
         self.poll(1.0 + s.ALERT_QUIET_S + 1, PLC_IP, 0.99, 1.01, 0, 20.0)

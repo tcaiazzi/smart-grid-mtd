@@ -166,7 +166,7 @@ host.
 | `CPS_LEARN` | 45 s | model calibration; **must end ≥ 5 s before the attack** |
 | `CPS_POST` | 30 s | post-attack observation |
 | `CPS_DETECTORS` | `rules,model` | which detectors run |
-| `DASHBOARD_PORT` | 8090 | live findings dashboard off the sensor's mgmt NIC |
+| `DASHBOARD_PORT` | unset (off) | host port of the live findings dashboard off the sensor's mgmt NIC, e.g. 8090 |
 
 Every option of the run (`python -m cyberrange.scenarios.cps.cli --help`) is also
 accepted by a campaign and applies to all of its runs.
@@ -288,7 +288,7 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   baseline — confirmed leaf → fixed countermeasures, each fired once. `solver`
   picks the countermeasure subset minimising expected loss plus weighted
   operational, time and energy cost, by exhaustive enumeration over at most 32
-  subsets, and returns the Pareto front too. Every decision carries its
+  subsets (128 with the IT countermeasures), and returns the Pareto front too. Every decision carries its
   justification: the tree nodes covered and the cost terms.
 
 ```bash

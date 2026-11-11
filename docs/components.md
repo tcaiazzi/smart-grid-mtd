@@ -98,7 +98,7 @@ the run's `--seed` (unseeded when the run is).
 
 **Runs** says where the component's work happens:
 
-- **guest:** a process inside a container. The guest code must be staged on that node by its deploy manifest in `cyberrange/guest_files.py`.
+- **guest:** a process inside a container. The guest code must be staged on that node by its deploy manifest in `cyberrange/scenarios/<name>/guest_files.py`.
 - **host:** a thread on the host.
 - **host → guest:** the host drives commands inside a container.
 
@@ -259,7 +259,7 @@ nanogrid-like their traffic is, and picks the one to blackhole.
 ### `DeliveryAttack(router, scmc, port_pool, relaunch, oracle=None, block_duration=None, block_episodes=1, impair=False)`
 
 The attacker's active phase, plus benign faults, during post-attack
-observation. It wraps `cyberrange/detection_scenario.FaultInjector`.
+observation. It wraps the scenario's fault injector (`cyberrange/scenarios/mqtt_mtd/attacks.py`), passed in as `injector=`.
 
 | | |
 |---|---|
@@ -316,9 +316,11 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 | **Artifacts** | `<node>.it_sensor.log`, `<node>.it_telemetry.jsonl` |
 | **Needs** | `VulnApp(access_log=…)` on the same node. Give `HmiClient` a `diag_url` too, so normal use is learned. |
 
-### `SoarResponder(policy, approval="auto", interval=0.5, it=False)`
+### `SoarResponder(policy, approval="auto", interval=0.5, it=False, responder=None, kg=None)`
 
-The response loop as a host thread (`cyberrange/cps_responder.Responder`).
+The response loop as a host thread. The loop itself (`responder=`, the CPS
+scenario passes `cyberrange/scenarios/cps/responder.py`'s `Responder`) and the
+knowledge-graph builder (`kg=`) come from the scenario; both are required.
 Every `interval` it reads the telemetry of every started `ot`/`it` sensor and
 folds each finding into the attack tree's campaign state
 (`cyberrange/planes/defense/soar/mapping.py`). It asks the policy for a decision and runs

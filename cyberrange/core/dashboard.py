@@ -1,10 +1,9 @@
 """dashboard.py — host-side progress dashboard of the platform, for every
 scenario. It serves dashboard.html and the progress ledgers (cyberrange/core/progress.py)
-found under --root: campaigns (cyberrange/core/campaign.py: `make
-cps-campaign`, `main.py`) and standalone runs (`make cps-attack`, the MQTT
-dataset/attack runs). The page shows what is common (queue, phases, ETA,
-results) for any scenario, plus each scenario's own panel (CPS: plant,
-findings, knowledge graph / attack tree; MQTT: MTD actions and delivery gaps).
+found under --root: campaigns (cyberrange/core/campaign.py) and standalone
+runs (cyberrange/core/lifecycle.py). The page shows what is common (queue,
+phases, ETA, mean [95% CI]) for any scenario, plus each scenario's own panel
+(its panel.js: the run detail, its results tables, its structure views).
 
 It only READS files: it never touches the lab, can be started before, during
 or after a campaign, and shows finished or interrupted campaigns as well as the
@@ -17,9 +16,9 @@ Endpoints:
   GET /api/ledgers              [{id, kind, name, status, …}] newest first
   GET /api/events?id=&since=    {"next": seq, "events": [...]} (seq >= since)
   GET /api/structure?id=&run=   {"source": "recorded"|"rebuilt", "kg", "tree"}
-                                — a CPS run's kg.json / tree.json (SOAR); rebuilt
-                                from the current lab model when the run predates
-                                them (CPS runs only)
+                                — a run's kg.json / tree.json, when its scenario
+                                records a structure; rebuilt from the current
+                                lab model when the run predates them
 
 Only ledgers discovered under --root are served (the id is looked up, never
 joined into a path); a run is served only if the ledger names it, and its

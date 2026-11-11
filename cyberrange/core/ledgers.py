@@ -16,7 +16,7 @@ import re
 import threading
 import time
 
-from cyberrange.core import registry
+from cyberrange.core import paths, registry
 
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # Ledgers written before run_start carried a `scenario` field; every one of them
@@ -26,7 +26,9 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 LEGACY_SCENARIO = "cps"
 STRUCTURE_FILES = ("kg.json", "tree.json")
 LEDGER_NAME = "progress.jsonl"
-STALE_S = 30.0  # an unfinished ledger idle this long is "interrupted"
+# An unfinished ledger whose file has not been touched this long is "interrupted".
+# The writer touches it every progress.HEARTBEAT_S even when it has nothing to say.
+STALE_S = 30.0
 
 
 class _Ledger:
@@ -115,7 +117,7 @@ class LedgerStore:
         self._lock = threading.Lock()
         self._ledgers = {}  # id (relative path) -> _Ledger
         self._structures = {}  # (run dir, mtimes) -> loaded structure
-        self._rebuilt = None
+        self._rebuilt = {}  # scenario name -> structure
 
     def discover(self):
         found = {}
@@ -174,9 +176,11 @@ class LedgerStore:
     # ── run structure (kg.json / tree.json) ─────────────────────────────────
     def run_dir(self, lid, run_id):
         """Directory of run ``run_id`` of ledger ``lid``, or None. The run must
-        be named by the ledger's own events; a campaign keeps its runs under
-        runs/<run_id>/, a standalone run lives next to its ledger."""
-        if not run_id or not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+        be named by the ledger's own events. Its directory is the ``out_dir``
+        its run_start recorded; a ledger without one is read by convention — a
+        campaign keeps its runs under runs/<run_id>/, a standalone run lives
+        next to its ledger."""
+        if not run_id:
             return None
         led = self.get(lid)
         if led is None:
@@ -188,7 +192,22 @@ class LedgerStore:
             events = list(led.events)
         known = {e.get("run_id") for e in events if e.get("run_id")}
         base = os.path.dirname(led.path)
-        if events and events[0].get("kind") == "campaign_start":
+        recorded = next(
+            (
+                e["out_dir"]
+                for e in reversed(events)
+                if e.get("kind") == "run_start" and e.get("run_id") == run_id and e.get("out_dir")
+            ),
+            None,
+        )
+        # Relative to where the run was launched: the repository root. A tree
+        # moved since then is no longer there, and is found by convention.
+        recorded = recorded and os.path.join(paths.REPO_ROOT, recorded)
+        if recorded and run_id in known and os.path.isdir(recorded):
+            d = recorded
+        elif not RUN_ID_RE.match(run_id) or run_id in (".", ".."):
+            return None  # only a plain name may be joined into a path
+        elif events and events[0].get("kind") == "campaign_start":
             if run_id not in known:
                 return None
             d = os.path.join(base, "runs", run_id)
@@ -247,12 +266,12 @@ class LedgerStore:
         """The current lab's structure, for runs recorded before kg.json existed.
         The scenario rebuilds it from its own topology (Scenario.structure);
         the dashboard only asks. Lazy: it pulls in networkx and the lab model."""
-        if self._rebuilt is None:
+        if scenario not in self._rebuilt:
             try:
                 built = registry.get(scenario).structure()
                 if built is None:
                     return {"error": f"scenario {scenario!r} has no structure to rebuild"}
-                self._rebuilt = {"source": "rebuilt", **built}
+                self._rebuilt[scenario] = {"source": "rebuilt", **built}
             except Exception as e:  # no networkx / Kathará on this host
                 return {"error": f"no recorded structure and it cannot be rebuilt: {e}"}
-        return self._rebuilt
+        return self._rebuilt[scenario]

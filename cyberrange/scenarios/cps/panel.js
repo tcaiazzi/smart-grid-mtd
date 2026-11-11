@@ -417,6 +417,57 @@ function detCell(m, d) {
     });
   }
 
+// The selected run: live plant state as chips, the voltage chart, and the
+// sensor findings by detector and class. The page has drawn the phases above.
+function detail(r) {
+  if (r.threshold != null) $("d-sub").textContent += ` · model threshold ${r.threshold}`;
+  $("f-title").textContent = "Findings";
+  $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
+  const last = r.plant[r.plant.length - 1];
+  const chip = (k, v, dot) => h("div", { class: "chip" }, h("div", { class: "k" }, k),
+    h("div", { class: "v" }, dot ? h("span", { class: "dot", style: `background:${dot}` }) : null, v));
+  const byDet = d => r.findings.filter(f => f.detector === d);
+  const firstAfter = d => { const w0 = r.writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
+  $("d-chips").replaceChildren(
+    chip("control", last ? (last.ctrl_mode === 1 ? "MANUAL" : "auto") : "—", last?.ctrl_mode === 1 ? "var(--warning)" : null),
+    chip("DG setpoint", last?.dg_setpoint != null ? `${num(last.dg_setpoint, 1)} kW` : "—"),
+    chip("breaker", last ? (last.switch_cmd ? "OPEN" : "closed") : "—", last?.switch_cmd ? "var(--critical)" : null),
+    chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
+    chip("rules fired", r.writes.length ? firstAfter("rules") : String(byDet("rules").length)),
+    chip("model fired", r.writes.length ? firstAfter("model") : String(byDet("model").length)),
+  );
+  drawChart(r);
+  const agg = {};
+  for (const f of r.findings) { const k = `${f.detector}|${f.klass}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, n: 0, first: f.t }).n++; }
+  const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
+    h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), h("td", { class: "num" }, String(a.n)),
+      h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
+  $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
+}
+
+// The campaign aggregate (metrics.write_aggregate): detection per mode and
+// detector, physical impact per mode.
+const RESULT_TABS = [{ id: "detection", label: "Detection" }, { id: "impact", label: "Physical impact" }];
+function results(tab, a, tb) {
+  const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
+  const data = a[tab];
+  if (!data) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "No scored runs yet")))); return; }
+  if (tab === "detection") {
+    const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
+      ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
+    const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
+      n(r.detection_rate), n(r.latency_median_s), h("td", { class: "num" }, r.latency_min_s == null ? "—" : `${num(r.latency_min_s)}–${num(r.latency_max_s)}`),
+      n(r.before_impact_rate), h("td", { class: "num" }, `${r.false_alarms} (${r.runs_with_false_alarms})`), n(r.false_alarms_in_operator_windows)));
+    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  } else {
+    const head = h("tr", {}, h("th", {}, "mode"), ...["runs", "impacted", "persists", "recovered", "time-to-impact (s)", "impact duration (s)", "max ΔV (pu)", "MANUAL (s)"].map(x => h("th", { class: "num" }, x)));
+    const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), n(r.runs), n(r.impact_rate), n(r.persists_rate), n(r.recovered_rate),
+      n(r.time_to_impact_median_s), n(r.impact_duration_median_s), n(r.max_dev_median_pu), n(r.manual_mode_median_s)));
+    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  }
+}
+
 // ── voltage chart ───────────────────────────────────────────────────────────
 const SVGNS = "http://www.w3.org/2000/svg";
 function s(tag, attrs, text) {
@@ -534,9 +585,10 @@ function drawChart(r) {
   // The page invokes this once, with its own handles.
   (window.CyberRangePanels ||= {})["cps"] = ui => ({
     queue: () => queue(ui),
+    detail,
     chart: drawChart,
     graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree },
     // The results tabs this scenario fills, shown before any run is scored.
-    tabs: ["detection", "impact"],
+    results: { tabs: RESULT_TABS, render: results },
   });
 })();

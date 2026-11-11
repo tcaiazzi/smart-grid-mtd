@@ -8,6 +8,7 @@ loc [--markdown FILE]        platform vs scenario code size
 
 import argparse
 import json
+import os
 import sys
 
 from cyberrange.core import registry
@@ -52,6 +53,7 @@ def main(argv=None):
         else:
             print(md)
         if args.markdown:
+            os.makedirs(os.path.dirname(args.markdown) or ".", exist_ok=True)
             with open(args.markdown, "w") as f:
                 f.write(md)
 

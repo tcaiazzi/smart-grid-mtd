@@ -92,6 +92,14 @@ def parse_args() -> argparse.Namespace:
         help="Retries for a failed lab step (dataset generation, attack); default: 2.",
     )
     p.add_argument(
+        "--lab-timeout",
+        type=float,
+        default=None,
+        metavar="S",
+        help="Stop a lab step (dataset generation, attack) running longer than S "
+        "seconds, then retry it (default: no limit).",
+    )
+    p.add_argument(
         "--resume",
         action="store_true",
         help="Skip attacks that already have metrics.json (default: rerun them).",
@@ -105,6 +113,8 @@ def parse_args() -> argparse.Namespace:
     args = p.parse_args()
     if args.runs < 1:
         p.error("--runs must be >= 1")
+    if args.lab_timeout is not None and args.lab_timeout <= 0:
+        p.error("--lab-timeout must be > 0")
     return args
 
 
@@ -116,6 +126,7 @@ def main() -> None:
         seed_base=args.seed_base,
         first_run=args.first_run,
         retries=args.retries,
+        lab_timeout=args.lab_timeout,
         name=args.name,
         resume=args.resume,
         out=lambda line: print(line, flush=True),

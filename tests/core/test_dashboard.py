@@ -162,6 +162,30 @@ class Structure(_Fixture):
         self.assertEqual(res["kg"]["nodes"][0]["id"], "host:hmi")
         self.assertEqual(res["tree"]["attack_tree"]["id"], "impact")
 
+    def test_a_run_is_found_where_its_ledger_says_it_was_written(self):
+        """A campaign need not keep its runs under runs/<run_id>/, and a run id
+        need not be a directory name: the run's own out_dir is authoritative."""
+        out_dir = os.path.join(self.root, "elsewhere", "attack")
+        self.put(out_dir)
+        lid = os.path.join(self.root, "campaigns", "other", "progress.jsonl")
+        log = ProgressLog(lid)
+        log.emit("campaign_start", name="other", grid=[], planned_run_s={})
+        log.bind(run_id="fixed@output/run-0").emit("run_start", out_dir=out_dir, phases=[])
+        log.close()
+        res = self.structure("campaigns/other/progress.jsonl", "fixed@output/run-0")
+        self.assertEqual(res["source"], "recorded")
+
+    def test_a_recorded_directory_outside_the_root_is_refused(self):
+        outside = tempfile.mkdtemp(prefix="outside-")
+        self.put(outside)
+        log = ProgressLog(os.path.join(self.root, "campaigns", "evil", "progress.jsonl"))
+        log.emit("campaign_start", name="evil", grid=[], planned_run_s={})
+        log.bind(run_id="r").emit("run_start", out_dir=outside, phases=[])
+        log.close()
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.structure("campaigns/evil/progress.jsonl", "r")
+        self.assertEqual(cm.exception.code, 404, "a ledger pointed the server outside --root")
+
     def test_recorded_standalone_run(self):
         self.put(os.path.join(self.root, "manual-run"))
         res = self.structure("manual-run/progress.jsonl", "manual-run")
@@ -251,6 +275,37 @@ class Summary(unittest.TestCase):
         ]
         s = summarize(evs, mtime=time.time())
         self.assertEqual((s["done"], s["failed"], s["status"]), (1, 0, "running"))
+
+
+class CoreKnowsNoScenario(unittest.TestCase):
+    """The page and its server draw what every scenario has; what only one
+    scenario can read lives in that scenario's panel.js."""
+
+    # The single exception: ledgers written before run_start carried `scenario`.
+    ALLOWED = {"ledgers.py": {"LEGACY_SCENARIO"}}
+
+    def test_dashboard_sources_name_no_scenario(self):
+        import re
+
+        from cyberrange.core import paths, registry
+
+        names = set()
+        for name in registry.names():
+            names |= {name, name.replace("-", "_"), name.split("-")[0]}
+        core = paths.REPO_ROOT / "cyberrange" / "core"
+        for fname in ("dashboard.html", "dashboard.py", "ledgers.py"):
+            for lineno, line in enumerate((core / fname).read_text().splitlines(), 1):
+                if any(tag in line for tag in self.ALLOWED.get(fname, ())):
+                    continue
+                if line.lstrip().startswith(("#", "//")) or "older ledgers" in line:
+                    continue
+                for name in names:
+                    with self.subTest(file=fname, line=lineno, scenario=name):
+                        self.assertIsNone(
+                            re.search(rf"\b{re.escape(name)}\b", line, re.IGNORECASE),
+                            f"core/{fname}:{lineno} names the scenario {name!r}: a view that "
+                            "only one scenario can fill belongs in its panel.js",
+                        )
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ from cyberrange.core import paths, registry
 REPO_ROOT = str(paths.REPO_ROOT)
 
 # Categories must stay disjoint: each is summed on its own, so a file matched
-# by two of them is counted twice (tests/test_loc_coverage.py enforces this).
+# by two of them is counted twice (tests/core/test_loc_coverage.py enforces this).
 # The ledger and the dashboard sit in core with everything else, so they are
 # covered by its glob rather than listed a second time.
 CORE = {

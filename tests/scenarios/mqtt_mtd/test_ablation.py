@@ -90,6 +90,54 @@ class Manifest(unittest.TestCase):
         self.assertEqual(len(rows), len(axes), "two configurations share the same axes")
 
 
+class CampaignShape(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="ablation-")
+        self.campaign, self.configs = ablation.build_campaign(["e2"], root=self.root)
+
+    def test_the_figures_are_a_step_of_the_campaign(self):
+        last = self.campaign.units[-1]
+        self.assertEqual(
+            ["figures"],
+            [s.id for s in last.steps],
+            "the ablation ends without drawing its figures: `make sweep` leaves no sweep/*.pdf",
+        )
+        self.assertIn("cyberrange.scenarios.mqtt_mtd.analysis.plot_sweep", last.steps[0].cmd)
+        self.assertEqual([], last.needs, "one failed configuration must not cancel the figures")
+
+    def test_it_is_listed_under_its_own_scenario_and_summarised(self):
+        self.assertEqual("mqtt-mtd", self.campaign.scenario)
+        self.assertIsNotNone(self.campaign.aggregate_fn, "summary.md and ci.csv are never written")
+
+    def test_the_manifest_step_records_the_configuration_that_ran(self):
+        for unit in self.campaign.units:
+            for step in unit.steps:
+                if step.id == "manifest":
+                    step.run(None)
+        rows = list(csv.DictReader(open(Path(self.root, "sweep_manifest.csv"))))
+        self.assertEqual(
+            sorted(str(p.hop) for _exp, p in self.configs),
+            sorted(r["hop"] for r in rows),
+            "the manifest step wrote the paper's hop interval for every configuration, "
+            "so the E2 figure plots four points at one x",
+        )
+
+    def test_a_stale_row_is_replaced_not_kept(self):
+        experiment, params = self.configs[0]
+        exp = slug(no_mtd=False, mbps=params.mbps, params=params)
+        ablation.append_manifest(experiment, params.mbps, exp, root=self.root)  # paper params
+        ablation.append_manifest(experiment, params.mbps, exp, root=self.root, params=params)
+        rows = list(csv.DictReader(open(Path(self.root, "sweep_manifest.csv"))))
+        self.assertEqual([str(params.hop)], [r["hop"] for r in rows])
+
+    def test_every_unit_writes_under_the_chosen_root(self):
+        for unit in self.campaign.units:
+            self.assertTrue(
+                unit.id == "figures" or unit.id.endswith(f"@{self.root}"),
+                f"unit {unit.id} ignores --output-root: its results land under output/",
+            )
+
+
 class PaperDefaultsUnchanged(unittest.TestCase):
     def test_parameterising_did_not_move_the_paper_configuration(self):
         p = MtdParams()

@@ -72,7 +72,13 @@ def step_microgrid(mg: Microgrid, scmc_id: str, rng=None) -> dict:
         "genset": [np.array([1.0, 0.6])],  # on, 60 % of max (normalised)
         "battery": [np.array([0.0])],  # hold
     }
-    _, _, _, info = mg.run(action, normalized=True)
+    try:
+        _, _, _, info = mg.run(action, normalized=True)
+    except IndexError:
+        # The time series is finite and pymgrid reads past its end without a
+        # check: start it over, or a long run loses its publisher.
+        mg.reset()
+        _, _, _, info = mg.run(action, normalized=True)
 
     def _kw(key, kind) -> float:
         return float(dict(info.get(key, [])).get(kind, 0.0))

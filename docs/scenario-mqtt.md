@@ -100,7 +100,8 @@ already trained.
 It runs the four configurations (baseline, fixed-timer, RL-cost, RL-entropy),
 training the RL policies first if their `.npz` files are missing, and finishes
 with the figures. `--runs N` repeats the evaluation under `output/run-<i>/` with
-a seed per run; `--resume` skips attacks that already have metrics.
+a seed per run; `--resume` skips attacks that already have metrics;
+`--lab-timeout S` stops and retries a lab step that runs longer than S seconds.
 
 ### Key variables
 
@@ -114,7 +115,7 @@ a seed per run; `--resume` skips attacks that already have metrics.
 | `ATTACK_DURATION` | `40` | Attacker sniff duration, seconds |
 | `POST_ATTACK` | `40` | Observation after the block, seconds |
 | `BG_REPLAY_MBPS` | `2` | Background replay rate |
-| `MTD_HOP_INTERVAL` | `2` | Seconds between address hops (broker and source share the timer) |
+| `MTD_HOP_INTERVAL` | `2` | Seconds between broker address hops (`MTD_SRC_HOP_INTERVAL`, default `2`, times the source hops) |
 | `MTD_PORT_POOL` | `8883–8887` | Broker port pool |
 | `MTD_PAD_BUCKETS` | `128,256,…,1024` | Padding bucket sizes, bytes |
 | `MTD_PAD_INTERVAL` | `3` | Seconds between padding rotations |
@@ -181,7 +182,8 @@ make sweep                       # all five groups, resumable
 ```
 
 It is a campaign like any other: one ledger that `make dashboard` follows,
-`--resume` skipping configurations already scored, retries on failed lab steps.
+configurations already scored are skipped (`--no-resume` reruns them), failed
+lab steps are retried, and `--lab-timeout S` stops one that hangs.
 Each configuration writes a row into `output/sweep_manifest.csv`, and the final
 step draws `output/sweep/e1..e4_*.pdf` from those rows plus each
 configuration's `summary.csv`.

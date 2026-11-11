@@ -7,7 +7,8 @@
     Step   one thing to do, either
              - in-process: ``run(emit)`` (a scenario run gets the ledger emitter
                bound to its run id), or
-             - a command: ``cmd`` run from the repository root (e.g. a make target);
+             - a command: ``cmd`` run from the repository root (e.g. a make target),
+               killed with everything it spawned after ``timeout`` seconds;
            ``skip_if()`` -> True reuses earlier results (nothing to do);
            a *scored* step (``run_dir`` + ``metrics``) is a lab run whose metrics
            are computed when it ends, kept in <run_dir>/metrics.json (also what
@@ -19,7 +20,7 @@ Ledger events (on <root>/progress.jsonl; the dashboard follows it live):
     unit_start{unit, group} / unit_blocked{unit, needs}
     scored steps   run_skipped{metrics} | run_start..run_end (from the run) ->
                    run_retry{attempt, error} -> run_failed | run_metrics{metrics}
-                   -> aggregate{...}
+                   -> aggregate{...} | aggregate_failed{error}
     other steps    step_start / step_end{ok, duration_s} / step_skipped /
                    step_retry / step_failed
     campaign_end{status=done|done_with_failures|interrupted, ok, failed, skipped}
@@ -28,6 +29,7 @@ Ledger events (on <root>/progress.jsonl; the dashboard follows it live):
 import json
 import logging
 import os
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -39,6 +41,8 @@ from cyberrange.core import lifecycle, paths
 log = logging.getLogger("core.campaign")
 
 REPO_ROOT = paths.REPO_ROOT
+# How a timed-out command is stopped: each signal, then the seconds it is given.
+STOP_SIGNALS = ((signal.SIGINT, 60.0), (signal.SIGTERM, 10.0), (signal.SIGKILL, 10.0))
 
 
 class StepFailed(RuntimeError):
@@ -52,6 +56,7 @@ class Step:
     cmd: Optional[List[str]] = None  # or a command, from the repo root
     skip_if: Optional[Callable[[], bool]] = None
     retries: int = 0
+    timeout: Optional[float] = None  # s a command may take (None = no limit)
     run_dir: Optional[str] = None  # scored step: metrics land here
     metrics: Optional[Callable[[str], dict]] = None
     report: Optional[Callable[[dict], str]] = None  # metrics.md
@@ -132,6 +137,8 @@ class Campaign:
             for s in u.steps:
                 if s.cmd is None or not s.dry or (s.skip_if and s.skip_if()):
                     continue
+                if s.scored and self.resume and _load_metrics(s.run_dir) is not None:
+                    continue
                 self.out("  DRY: " + s.describe())
         return self.grid()
 
@@ -173,6 +180,7 @@ class Campaign:
         rows, done_units, failed_units = [], set(), set()
         counts = {"ok": 0, "failed": 0, "skipped": 0}
         status = "interrupted"
+        self._aggregate_stale = False
         try:
             for u in self.units:
                 missing = [n for n in u.needs if n not in done_units]
@@ -186,8 +194,9 @@ class Campaign:
                 (done_units if ok else failed_units).add(u.id)
             status = "done" if not failed_units else "done_with_failures"
         finally:
-            if rows and counts["skipped"] and not counts["ok"] and self.aggregate_fn:
-                ledger.emit("aggregate", **self.aggregate_fn(self.root, rows))
+            # Rows reused from an earlier campaign have not been folded in yet.
+            if self._aggregate_stale:
+                self._aggregate(ledger, rows)
             ledger.emit("campaign_end", status=status, **counts)
             ledger.close()
         return {"root": self.root, "status": status, **counts, "failed_units": sorted(failed_units)}
@@ -199,6 +208,7 @@ class Campaign:
             m = _load_metrics(s.run_dir)
             if m is not None:
                 rows.append({**s.label, "run_id": rid, "metrics": m})
+                self._aggregate_stale = True
                 counts["skipped"] += 1
                 ledger.emit("run_skipped", run_id=rid, metrics=m, **_lbl(s))
                 return True
@@ -209,7 +219,8 @@ class Campaign:
         kind = "run" if s.scored else "step"
         # A command is always a visible step (a scored one runs its own ledger).
         visible = s.cmd is not None or not s.scored
-        for attempt in range(1, s.retries + 2):
+        retries = max(0, s.retries)  # a negative count must not skip the step itself
+        for attempt in range(1, retries + 2):
             t0 = time.time()
             if visible:
                 ledger.emit(
@@ -228,7 +239,9 @@ class Campaign:
                 break
             except KeyboardInterrupt:
                 raise
-            except Exception as e:  # noqa: BLE001 — recorded, retried, then moved on
+            # SystemExit too: a scenario's validate() raises it, and one bad grid
+            # entry must fail its own unit, not end the campaign.
+            except (Exception, SystemExit) as e:  # noqa: BLE001 — recorded, retried, moved on
                 log.warning("%s %s attempt %d failed: %s", kind, rid, attempt, e)
                 if visible:
                     ledger.emit(
@@ -239,7 +252,7 @@ class Campaign:
                         duration_s=round(time.time() - t0, 3),
                         error=str(e)[:300],
                     )
-                if attempt <= s.retries:
+                if attempt <= retries:
                     ledger.emit(
                         f"{kind}_retry",
                         **({"run_id": rid} if s.scored else {"step": s.id}),
@@ -253,21 +266,40 @@ class Campaign:
                 else:
                     ledger.emit("step_failed", step=s.id, unit=unit.id, error=str(e)[:300])
                 return False
-        counts["ok"] += 1
         if s.scored:
-            m = s.metrics(s.run_dir)
-            m["run"] = {"run_id": rid, **_lbl(s)}
-            os.makedirs(s.run_dir, exist_ok=True)
-            with open(os.path.join(s.run_dir, "metrics.json"), "w") as f:
-                json.dump(m, f, indent=2, default=str)
-            if s.report:
-                with open(os.path.join(s.run_dir, "metrics.md"), "w") as f:
-                    f.write(s.report(m))
+            # Scoring reads what the run left behind; one unreadable run
+            # directory fails that run, not every unit after it.
+            try:
+                m = s.metrics(s.run_dir)
+                m["run"] = {"run_id": rid, **_lbl(s)}
+                os.makedirs(s.run_dir, exist_ok=True)
+                with open(os.path.join(s.run_dir, "metrics.json"), "w") as f:
+                    json.dump(m, f, indent=2, default=str)
+                if s.report:
+                    with open(os.path.join(s.run_dir, "metrics.md"), "w") as f:
+                        f.write(s.report(m))
+            except Exception as e:  # noqa: BLE001 — recorded as a failed run
+                log.warning("run %s could not be scored: %s", rid, e)
+                counts["failed"] += 1
+                ledger.emit("run_failed", run_id=rid, error=str(e)[:300], **_lbl(s))
+                return False
             rows.append({**s.label, "run_id": rid, "metrics": m})
             ledger.emit("run_metrics", run_id=rid, metrics=m, **_lbl(s))
-            if self.aggregate_fn:
-                ledger.emit("aggregate", **self.aggregate_fn(self.root, rows))
+            self._aggregate(ledger, rows)
+        counts["ok"] += 1
         return True
+
+    def _aggregate(self, ledger, rows):
+        """Refresh the summary files. A summary that cannot be written is
+        reported, never raised: the runs behind it are already on disk."""
+        self._aggregate_stale = False
+        if not (rows and self.aggregate_fn):
+            return
+        try:
+            ledger.emit("aggregate", **self.aggregate_fn(self.root, rows))
+        except Exception as e:  # noqa: BLE001
+            log.warning("could not refresh the campaign summary: %s", e)
+            ledger.emit("aggregate_failed", error=str(e)[:300])
 
     def _execute(self, ledger, s, rid, attempt):
         if s.run is not None:
@@ -276,11 +308,56 @@ class Campaign:
                 if s.scored
                 else ledger.bind(step=s.id, attempt=attempt)
             )
-            s.run(emit)
+            rc = s.run(emit)
+            # A run function returns the scenario's exit code; other steps None.
+            if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
+                raise StepFailed(f"exit {rc}: {s.describe()}")
             return
-        r = subprocess.run(s.cmd, cwd=REPO_ROOT)
-        if r.returncode != 0:
-            raise StepFailed(f"exit {r.returncode}: {s.describe()}")
+        rc = _run_command(s.cmd, s.timeout)
+        if rc is None:
+            raise StepFailed(f"timed out after {s.timeout:g}s: {s.describe()}")
+        if rc != 0:
+            raise StepFailed(f"exit {rc}: {s.describe()}")
+
+
+def _run_command(cmd, timeout=None):
+    """Run ``cmd`` from the repository root; its exit code, or None on timeout.
+
+    A command with a timeout leads its own process group, so that the whole
+    group can be stopped: a make target killed alone would leave the Python it
+    started running, still holding the lab the retry is about to deploy. One
+    without a timeout stays in ours, where Ctrl-C reaches it as it always did."""
+    if timeout is None:
+        return subprocess.run(cmd, cwd=REPO_ROOT).returncode
+    proc = subprocess.Popen(cmd, cwd=REPO_ROOT, start_new_session=True)
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _stop_group(proc)
+        return None
+    except BaseException:  # Ctrl-C does not reach another session by itself
+        _stop_group(proc)
+        raise
+
+
+def _stop_group(proc):
+    """Interrupt first: a run that gets SIGINT undeploys its lab on the way out,
+    one that is killed outright leaves it up. The group is done when it is
+    empty, not when its leader exits — what the leader started may ignore the
+    signal the leader obeyed."""
+    for sig, grace in STOP_SIGNALS:
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            proc.poll()  # reap the leader, or its zombie keeps the group alive
+            try:
+                os.killpg(proc.pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
 
 
 def _lbl(s):

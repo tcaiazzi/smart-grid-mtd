@@ -11,13 +11,14 @@ modbus_engine.py does ``from grid_sim import build_grid, step_grid, GridState``.
 
 Topology (radial 0.4 kV feeder)::
 
-    ext_grid --line0-- bus_load --line1--(switch)-- bus_dg
-    (slack)   bus0      bus1      load      bus2     sgen (DG)
+    ext_grid --(switch)--line0-- bus_load --line1-- bus_dg
+    (slack)   bus0                bus1      load     bus2     sgen (DG)
 
 Normal control keeps every bus voltage inside [V_BAND_LOW, V_BAND_HIGH] pu.
 A DG setpoint forced out of range drives an OVERvoltage at the DG bus; opening
-the feeder breaker (isolating the DG) drives an UNDERvoltage at the load bus.
-Both are real power-flow results, not scripted numbers.
+the feeder breaker cuts line0 at the slack bus, which de-energises the load and
+the DG together (their voltages read 0). Both are real power-flow results, not
+scripted numbers.
 """
 
 import time
@@ -123,7 +124,7 @@ def step_grid(st: GridState, actuators: dict, dt_s: float = STEP_DT_S) -> dict:
     # out-of-range write must actually reach the physics.
     if "dg_setpoint" in actuators and actuators["dg_setpoint"] is not None:
         net.sgen.at[0, "p_mw"] = float(actuators["dg_setpoint"]) / 1000.0
-    # Apply breaker actuator (1 = open isolates the DG tie line).
+    # Apply the breaker actuator (1 = open: the feeder is cut at the slack bus).
     if "switch_cmd" in actuators and actuators["switch_cmd"] is not None:
         net.switch.at[0, "closed"] = int(round(actuators["switch_cmd"])) == 0
 
