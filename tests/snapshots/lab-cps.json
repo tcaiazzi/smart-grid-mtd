@@ -1,0 +1,99 @@
+{
+ "attacker": {
+  "guest_files": [
+   "/exploit_client.py",
+   "/ot_registers.py"
+  ],
+  "settings": {
+   "0": "IT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.10/24 dev eth0",
+   "ip route add default via 10.10.0.1 dev eth0"
+  ]
+ },
+ "engine": {
+  "guest_files": [
+   "/modbus_engine.py",
+   "/grid_sim.py",
+   "/ot_registers.py",
+   "/ot_write.py"
+  ],
+  "settings": {
+   "0": "OT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.20.0.20/24 dev eth0",
+   "ip route add default via 10.20.0.1 dev eth0"
+  ]
+ },
+ "firewall": {
+  "settings": {
+   "0": "IT",
+   "1": "OT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.1/24 dev eth0",
+   "ip address add 10.20.0.1/24 dev eth1",
+   "sysctl -w net.ipv4.ip_forward=1",
+   "iptables -P FORWARD DROP",
+   "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
+   "iptables -A FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j ACCEPT"
+  ]
+ },
+ "hmi": {
+  "guest_files": [
+   "/hmi_client.py",
+   "/vuln_app.py",
+   "/ot_write.py",
+   "/ot_registers.py",
+   "/it_sensor.py",
+   "/mtd_telemetry.py"
+  ],
+  "settings": {
+   "0": "IT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.20/24 dev eth0",
+   "ip route add default via 10.10.0.1 dev eth0"
+  ]
+ },
+ "plc": {
+  "guest_files": [
+   "/plc_controller.py",
+   "/ot_registers.py"
+  ],
+  "settings": {
+   "0": "OT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.20.0.10/24 dev eth0",
+   "ip route add default via 10.20.0.1 dev eth0"
+  ]
+ },
+ "sensor": {
+  "guest_files": [
+   "/ot_sensor.py",
+   "/ot_model.py",
+   "/ot_registers.py",
+   "/mtd_telemetry.py",
+   "/mtd_dashboard.py",
+   "/mtd_dashboard.html"
+  ],
+  "settings": {
+   "0": "OT",
+   "1": "DEF",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip link set eth0 promisc on",
+   "ip link set eth0 up",
+   "ip address add 10.30.0.10/24 dev eth1"
+  ]
+ }
+}

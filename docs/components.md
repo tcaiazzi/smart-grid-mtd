@@ -1,7 +1,7 @@
 # Components reference
 
 Components are the building blocks a scenario is composed of. Each plane
-exposes its components in `<plane>/components.py`. A scenario's episode
+exposes its components in `cyberrange/planes/<plane>/components.py`. A scenario's episode
 configures them and starts them; the platform core then stops them, downloads
 their files and mirrors their telemetry onto the progress ledger.
 
@@ -10,9 +10,9 @@ scenario, see [platform.md](platform.md).
 
 - [1. How a component works](#1-how-a-component-works)
 - [2. Catalogue](#2-catalogue)
-- [3. Traffic plane](#3-traffic-plane-traffic_generatorcomponentspy)
-- [4. Attack plane](#4-attack-plane-attack_planecomponentspy)
-- [5. Defense plane](#5-defense-plane-defense_planecomponentspy)
+- [3. Traffic plane](#3-traffic-plane-cyberrangeplanestrafficcomponentspy)
+- [4. Attack plane](#4-attack-plane-cyberrangeplanesattackcomponentspy)
+- [5. Defense plane](#5-defense-plane-cyberrangeplanesdefensecomponentspy)
 - [6. Monitor plane](#6-monitor-plane-monitorcomponentspy)
 - [7. Composition recipes](#7-composition-recipes)
 - [8. Writing a new component](#8-writing-a-new-component)
@@ -21,7 +21,7 @@ scenario, see [platform.md](platform.md).
 
 ## 1. How a component works
 
-A component subclasses `network_scenario.core.component.Component` and may
+A component subclasses `cyberrange.core.component.Component` and may
 override any of these hooks:
 
 | Hook | When it is called | What it does |
@@ -98,7 +98,7 @@ the run's `--seed` (unseeded when the run is).
 
 **Runs** says where the component's work happens:
 
-- **guest:** a process inside a container. The guest code must be staged on that node by its deploy manifest in `network_scenario/guest_files.py`.
+- **guest:** a process inside a container. The guest code must be staged on that node by its deploy manifest in `cyberrange/guest_files.py`.
 - **host:** a thread on the host.
 - **host → guest:** the host drives commands inside a container.
 
@@ -106,27 +106,27 @@ Shared helpers:
 
 | Helper | Module | Purpose |
 |---|---|---|
-| `emit_attack_writes(ctx)` | `attack_plane.components` | Copies the attack's Modbus writes from the ground truth onto the ledger. |
-| `detect_nanogrid_ip(...)`, `BLOCK_POLICIES` | `attack_plane.components` | The CNN fingerprinting step. |
-| `generate_shared_key()` | `defense_plane.components` | The key that stands in for the QKD device's output. |
+| `emit_attack_writes(ctx)` | `cyberrange.planes.attack.components` | Copies the attack's Modbus writes from the ground truth onto the ledger. |
+| `detect_nanogrid_ip(...)`, `BLOCK_POLICIES` | `cyberrange.planes.attack.components` | The CNN fingerprinting step. |
+| `generate_shared_key()` | `cyberrange.planes.defense.components` | The key that stands in for the QKD device's output. |
 
 ---
 
-## 3. Traffic plane (`traffic_generator/components.py`)
+## 3. Traffic plane (`cyberrange/planes/traffic/components.py`)
 
 The legitimate activity of the system, which attacks and defenses play
 against.
 
 ### `PhysicalProcess(node, port, step_interval, seed=None, frame_log="engine_frames.jsonl")`
 
-The plant: a pandapower low-voltage feeder (`traffic_generator/agents/grid_sim.py`)
+The plant: a pandapower low-voltage feeder (`cyberrange/planes/traffic/agents/grid_sim.py`)
 stepped every `step_interval` seconds behind a Modbus/TCP server
 (`modbus_engine.py`).
 
 | | |
 |---|---|
 | **Starts** | `python3 modbus_engine.py --host 0.0.0.0 --port P --interval S --frame-log F [--seed N]` |
-| **Register map** | Defined in `defense_plane/ot_registers.py`. Input registers (fc04) carry the sensors; holding registers (fc03/06/10) carry the actuators: DG setpoint (HR 0), feeder breaker (HR 1), control mode (HR 2). |
+| **Register map** | Defined in `cyberrange/planes/defense/ot_registers.py`. Input registers (fc04) carry the sensors; holding registers (fc03/06/10) carry the actuators: DG setpoint (HR 0), feeder breaker (HR 1), control mode (HR 2). |
 | **Artifacts** | `<node>.engine.log`; `<node>.<frame_log>` with one physical frame per step (voltages, line loading, power, energy, actuators, `abnormal`) |
 | **Read live by** | `PlantMirror` (reads `frame_log`) |
 
@@ -185,7 +185,7 @@ The nanogrid's SCMC, publishing microgrid snapshots over MQTT with mutual TLS.
 
 ---
 
-## 4. Attack plane (`attack_plane/components.py`)
+## 4. Attack plane (`cyberrange/planes/attack/components.py`)
 
 Every attack records what it really did in the run's ground truth
 (`ground_truth.jsonl`, host-only). Defenders never see this file; scorers do.
@@ -223,7 +223,7 @@ runs on the attacker node.
 
 ### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5)`
 
-A reactive attacker (`attack_plane/planner`). It walks the attack tree of the
+A reactive attacker (`cyberrange/planes/attack/planner`). It walks the attack tree of the
 **deployed** lab's knowledge graph and runs one step at a time
 (`it_access`, `it_exec`, `pivot`, then an impact). When a countermeasure
 closes its path, it tries another branch, or stops.
@@ -246,20 +246,20 @@ closes its path, it tries another branch, or stops.
 ### `PassiveFingerprinter(node, iface, model, scaler, block_policy="top1", threshold=None)`
 
 The passive attacker on the broker-side link. It sniffs, scores the capture
-with its 1D-CNN (`attack_plane/classify.py`), ranks source IPs by how
+with its 1D-CNN (`cyberrange/planes/attack/classify.py`), ranks source IPs by how
 nanogrid-like their traffic is, and picks the one to blackhole.
 
 | | |
 |---|---|
 | **`sniff(ctx, seconds)`** | `timeout S tcpdump -i IFACE -w attacker_capture.pcap` on the attacker, then downloads it. Returns the local path. |
 | **`score(ctx, capture)`** | Runs `detect_nanogrid_ip` and writes `nanogrid_ranking.csv`. It logs `Blocking nanogrid IP: <ip>`, a line `plot_results` reads back from `run.log`. Returns the IP, or `""`. |
-| **`block_policy`** | `top1` always blocks the top-ranked IP (the workshop paper). `threshold` blocks only if its `nanogrid_frac` ≥ `threshold` (default `attack_plane.thresholds.DETECT_THRESHOLD`). |
+| **`block_policy`** | `top1` always blocks the top-ranked IP (the workshop paper). `threshold` blocks only if its `nanogrid_frac` ≥ `threshold` (default `cyberrange.planes.attack.thresholds.DETECT_THRESHOLD`). |
 | **Needs** | a model trained on this scenario's datasets (`make train`) |
 
 ### `DeliveryAttack(router, scmc, port_pool, relaunch, oracle=None, block_duration=None, block_episodes=1, impair=False)`
 
 The attacker's active phase, plus benign faults, during post-attack
-observation. It wraps `network_scenario/detection_scenario.FaultInjector`.
+observation. It wraps `cyberrange/detection_scenario.FaultInjector`.
 
 | | |
 |---|---|
@@ -268,15 +268,15 @@ observation. It wraps `network_scenario/detection_scenario.FaultInjector`.
 | **`block_duration` / `block_episodes`** | Lift each blackhole after N s; repeat it, 20–40 s apart. |
 | **`impair=True`** | Seeded benign faults on the router: netem loss, delay or burst loss, and executor restarts (through `relaunch(state, n)`, normally `ScmcPublisher.command_for`). |
 | **`stop(ctx)`** | Ends the episodes, removes the faults, keeps the blackholes. Call it explicitly at the end of the post-attack window. The core also calls it. |
-| **Ground truth** | `block`, `unblock`, `impair_start`, `impair_stop`, `executor_restart` (kill / relaunch). `monitor/delivery_dataset.py` turns these into detector labels. |
+| **Ground truth** | `block`, `unblock`, `impair_start`, `impair_stop`, `executor_restart` (kill / relaunch). `cyberrange/scenarios/mqtt_mtd/analysis/delivery_dataset.py` turns these into detector labels. |
 | **`restarts`** | how many executor restarts happened, so the scenario can download their console logs |
 
 ---
 
-## 5. Defense plane (`defense_plane/components.py`)
+## 5. Defense plane (`cyberrange/planes/defense/components.py`)
 
 Detection and response, both proactive (MTD) and reactive (sensors, SOAR).
-Guest sensors write telemetry with `defense_plane/agents/mtd_telemetry.py`,
+Guest sensors write telemetry with `cyberrange/planes/defense/agents/mtd_telemetry.py`,
 declare it as a `TelemetrySource`, and map it onto the ledger with `mirror`.
 
 ### `OtSensor(node, iface, engine_ip, engine_port, plc_ip, hmi_ip, detectors, learn_seconds, dashboard_port=None)`
@@ -318,10 +318,10 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 
 ### `SoarResponder(policy, approval="auto", interval=0.5, it=False)`
 
-The response loop as a host thread (`network_scenario/cps_responder.Responder`).
+The response loop as a host thread (`cyberrange/cps_responder.Responder`).
 Every `interval` it reads the telemetry of every started `ot`/`it` sensor and
 folds each finding into the attack tree's campaign state
-(`defense_plane/soar/mapping.py`). It asks the policy for a decision and runs
+(`cyberrange/planes/defense/soar/mapping.py`). It asks the policy for a decision and runs
 the chosen countermeasures in the lab. The knowledge graph is built from the
 deployed lab.
 
@@ -335,7 +335,7 @@ deployed lab.
 | **Ledger** | `tree_state`, `decision` (with justification), `action` |
 
 Start it after the sensors: it reads their telemetry sources when it starts.
-`python -m network_scenario.cps_responder --replay <run>` shows what a policy
+`python -m cyberrange.scenarios.cps.responder --replay <run>` shows what a policy
 *would* have done on a finished run.
 
 ### `QkdCertBootstrap(ca_node, client_node, shared_key, server_ips, client_ips, ca_ip="10.1.0.2", ca_port=9999, server_cn="semp", client_cn="scmc1")`
@@ -378,12 +378,12 @@ Who decides when to move:
 | **`kind`** | `fixed` or `rl` |
 
 Knob costs are the RL reward's per-knob weights
-(`defense_plane/rl_policy.KNOB_COST`); `monitor/mqtt_metrics.py` uses the same
+(`cyberrange/planes/defense/rl_policy.KNOB_COST`); `cyberrange/scenarios/mqtt_mtd/metrics.py` uses the same
 weights.
 
 ---
 
-## 6. Monitor plane (`monitor/components.py`)
+## 6. Monitor plane (`cyberrange/planes/monitor/components.py`)
 
 These components only read: they never write into the containers, and a
 failed pull never breaks a run.
@@ -415,7 +415,7 @@ voltage chart draws.
 
 ## 7. Composition recipes
 
-### CPS run (`network_scenario/scenarios/cps/scenario.py`)
+### CPS run (`cyberrange/scenarios/cps/scenario.py`)
 
 ```
 services     OtSensor → PhysicalProcess → (2 s) → PlcController → HmiClient → VulnApp [→ ItSensor]
@@ -433,7 +433,7 @@ post_attack  ctx.observe(post_attack_duration)
 - `ItSensor(access_log=…)` is started
 - `SoarResponder(it=True)`
 
-### MQTT run (`network_scenario/scenarios/mqtt_mtd/scenario.py`)
+### MQTT run (`cyberrange/scenarios/mqtt_mtd/scenario.py`)
 
 ```
 services     QkdCertBootstrap → mosquitto → [MtdCoordinator + TelemetryMirror]
@@ -451,9 +451,9 @@ publisher.
 ## 8. Writing a new component
 
 1. **Choose the plane.** Ask what it *is*: legitimate activity (traffic), an adversary (attack), detection or response (defense), or observation (monitor). Add it to that plane's `components.py`.
-2. **Guest process?** Subclass `GuestAgent` and build the command in `__init__`. Put the guest code in `<plane>/agents/` as a flat module with bare imports, and add it to the node's manifest in `network_scenario/guest_files.py`. `tests/test_guest_imports.py` then checks it imports on the guest.
+2. **Guest process?** Subclass `GuestAgent` and build the command in `__init__`. Put the guest code in `cyberrange/planes/<plane>/agents/` as a flat module with bare imports, and add it to the node's manifest in the scenario's own `guest_files.py`. `tests/core/test_guest_imports.py` then checks it imports on the guest, and `tests/core/test_deploy_contract.py` freezes what the node receives.
 3. **Host work?** Subclass `Component`: start a thread in `start`, join it in `stop`.
 4. **Declare its outputs.** Files go in `artifacts()`. Telemetry goes in `telemetry()`, with a `mirror(ev)` that maps the interesting events onto ledger kinds. Anything it *does* to the lab belongs in the ground truth (`ctx.gt.record(...)`), never in telemetry.
 5. **Seeds.** Take a `seed` argument and pass it to the guest as `seed_arg(seed)`. The scenario gives it `ctx.role_seed("<role>")`.
-6. **Test it without Docker.** Use `tests/fakes/kathara.py`: `FakeManager` records every command and serves canned `tail` output, and `fake_downloads` serves artifacts. `tests/test_progress.py` and `tests/test_mqtt_scenario.py` show the pattern.
+6. **Test it without Docker.** Use `tests/helpers/kathara.py`: `FakeManager` records every command and serves canned `tail` output, and `fake_downloads` serves artifacts. `tests/core/test_progress.py` and `tests/scenarios/mqtt_mtd/test_mqtt_scenario.py` show the pattern.
 7. **Document it here,** and run `make platform-loc` to see what it adds.

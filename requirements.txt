@@ -19,3 +19,7 @@ pandapower==3.5.6
 pymodbus==3.6.9      # pinned to the stable classic datastore API (3.16.x churned it)
 # SOAR prototype (host-side knowledge graph); already pulled in by pandapower.
 networkx==3.6.1
+
+# Test runner (make selftest). Dev-only: never imported by the platform or the
+# guest agents, which stay stdlib+numpy.
+pytest==9.2.0

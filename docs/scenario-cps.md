@@ -90,7 +90,7 @@ comunque pericoloso.
 | **Sensore DPI Modbus** | Analizza passivamente richieste e risposte Modbus, ricostruisce lo stato dell'impianto e produce *finding* e *alert*. | Difesa |
 
 Tutti i nodi condividono un unico **contratto d'impianto**
-(`defense_plane/ot_registers.py`), che definisce la mappa dei registri, le
+(`cyberrange/planes/defense/ot_registers.py`), che definisce la mappa dei registri, le
 scale, gli inviluppi validi dei comandi, la policy di accesso per ruolo (chi può
 leggere e scrivere cosa) e le bande operative.
 
@@ -191,7 +191,7 @@ Lo scenario copre le fasi **1–4** del prototipo: fondamenta, emulazione OT,
 confine IT/OT e rilevamento.
 
 Sopra queste fasi c'è ora un **primo prototipo di risposta**
-(`defense_plane/soar/`, attivabile con `CPS_RESPOND=rules|solver`; dettagli nel
+(`cyberrange/planes/defense/soar/`, attivabile con `CPS_RESPOND=rules|solver`; dettagli nel
 README, sezione "Response (SOAR prototype)"). Comprende:
 
 - un knowledge graph del lab;
@@ -202,7 +202,7 @@ README, sezione "Response (SOAR prototype)"). Comprende:
   atteso;
 - un'approvazione dell'operatore simulata.
 - una **telemetria IT sull'HMI** (`CPS_IT=1`): un sensore lato host
-  (`defense_plane/agents/it_sensor.py`) che rende osservabili i primi passi
+  (`cyberrange/planes/defense/agents/it_sensor.py`) che rende osservabili i primi passi
   dell'attacco — accesso all'app web, esecuzione di comandi, pivot — che il
   sensore OT può solo inferire. Impara il normale (traffico diagnostico
   legittimo) nella fase iniziale. Con questa telemetria la difesa ferma
@@ -226,11 +226,11 @@ README, sezione "Response (SOAR prototype)"). Comprende:
 
 | Cosa | Dove |
 |---|---|
-| Contratto d'impianto (registri, policy, bande) | `defense_plane/ot_registers.py` |
-| Gemello digitale e server Modbus | `traffic_generator/agents/grid_sim.py`, `modbus_engine.py` |
-| PLC e HMI | `traffic_generator/agents/plc_controller.py`, `hmi_client.py` |
-| Catena d'attacco | `attack_plane/agents/`, `attack_plane/active_attack.py` |
-| Sensore e modello | `defense_plane/agents/ot_sensor.py`, `ot_model.py` |
-| Lab e orchestrazione | `network_scenario/scenarios/cps/` (topologia, episodio) sul core `network_scenario/core/`; CLI `cps_experiment.py`, `cps_campaign.py` |
-| Metriche e dashboard | `monitor/cps_metrics.py`, `monitor/dashboard.py` (dashboard comune a tutti gli scenari) |
+| Contratto d'impianto (registri, policy, bande) | `cyberrange/planes/defense/ot_registers.py` |
+| Gemello digitale e server Modbus | `cyberrange/planes/traffic/agents/grid_sim.py`, `modbus_engine.py` |
+| PLC e HMI | `cyberrange/planes/traffic/agents/plc_controller.py`, `hmi_client.py` |
+| Catena d'attacco | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
+| Sensore e modello | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
+| Lab e orchestrazione | `cyberrange/scenarios/cps/` (topologia, episodio) sul core `cyberrange/core/`; CLI `cps_experiment.py`, `cps_campaign.py` |
+| Metriche e dashboard | `cyberrange/scenarios/cps/metrics.py`, `cyberrange/core/dashboard.py` (dashboard comune a tutti gli scenari) |
 | Comandi | `make cps-selftest`, `cps-image`, `cps-lab`, `cps-attack`, `cps-campaign`, `cps-dashboard`, `cps-metrics` (dettagli nel README) |

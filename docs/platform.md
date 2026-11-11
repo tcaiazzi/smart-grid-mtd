@@ -13,7 +13,7 @@ metrics.
                  │  cps      (OT/Modbus, active attack, SOAR)   │
                  └───────────────┬──────────────────────────────┘
                      compose     │
-   ┌─────────── plane components (<plane>/components.py) ───────────┐
+   ┌──── plane components (cyberrange/planes/<x>/components.py) ────┐
    │ traffic  PhysicalProcess PlcController HmiClient                │
    │          BackgroundReplay ScmcPublisher                         │
    │ attack   VulnApp ScriptedChain PlannedAttacker                  │
@@ -23,16 +23,19 @@ metrics.
    │ monitor  Capture TelemetryMirror PlantMirror                    │
    └───────────────┬─────────────────────────────────────────────────┘
                    │ run on
-   ┌────────── platform core (network_scenario/core) ──────────┐
-   │ topology · lifecycle · context · streams · campaign ·      │
-   │ aggregate · registry · cli   +  ledger · dashboard         │
-   └────────────────────────────────────────────────────────────┘
+   ┌─────────────── platform core (cyberrange/core) ─────────────────┐
+   │ topology · lifecycle · context · streams · campaign ·           │
+   │ aggregate · registry · cli · paths  +  ledger · dashboard       │
+   └─────────────────────────────────────────────────────────────────┘
+
+Imports point downwards only — scenarios on planes, planes on the core — and
+tests/core/test_layering.py enforces it. See [structure.md](structure.md).
 ```
 
 Every component, with its options, artifacts, telemetry and ground truth, is
 documented in [components.md](components.md).
 
-`python -m network_scenario.core loc` (or `make platform-loc`) measures the
+`python -m cyberrange.core loc` (or `make platform-loc`) measures the
 split: how many lines are platform and how many each scenario had to write.
 
 ## 1. The three properties, and where they come from
@@ -45,8 +48,8 @@ split: how many lines are platform and how many each scenario had to write.
 
 ## 2. Writing a scenario: the contract
 
-A scenario is a subclass of `network_scenario.core.scenario.Scenario`,
-registered in `network_scenario/core/registry.py`:
+A scenario is a subclass of `cyberrange.core.scenario.Scenario`,
+registered in `cyberrange/core/registry.py`:
 
 | Member | Purpose |
 |---|---|
@@ -63,7 +66,7 @@ registered in `network_scenario/core/registry.py`:
 | `metrics(run_dir) -> dict` | The run's metrics, used by campaigns and the dashboard. |
 
 Each scenario's command-line entry point is a few lines long
-(`network_scenario/cps_experiment.py`, `network_scenario/run_experiment.py`):
+(`cyberrange/scenarios/cps/cli.py`, `cyberrange/scenarios/mqtt_mtd/cli.py`):
 
 ```python
 def main(argv=None):
@@ -139,13 +142,13 @@ The artifacts a run downloads are the union of its components' artifacts. The
 |---|---|---|---|
 | `ground_truth.jsonl` | the host only: attack drivers, fault injection, the scenario | what really happened: `run_meta`, attack steps, writes, blocks, faults, `run_end` | scorers, dataset builders. Never readable by a defender. |
 | `<node>.telemetry.jsonl` | defense components in the guests (`mtd_telemetry.py`) | what the defenders observed and did: findings, alerts, MTD actions, delivery gaps | detectors, the responder, metrics |
-| `progress.jsonl` | the host ledger (`monitor/progress.py`) | the run as it happens: lifecycle, campaign bookkeeping, a live mirror of the telemetry | the dashboard |
+| `progress.jsonl` | the host ledger (`cyberrange/core/progress.py`) | the run as it happens: lifecycle, campaign bookkeeping, a live mirror of the telemetry | the dashboard |
 
 The separation is deliberate. A detector or a response policy can only be
 scored against information it could not have had.
 
 Event kinds common to every scenario are documented in
-`network_scenario/core/streams.py`. Scenario-specific kinds are:
+`cyberrange/core/streams.py`. Scenario-specific kinds are:
 
 - **CPS:** `plant`, `finding`, `alert`, `model_fitted`, `attack_write`, `plan_step`, `tree_state`, `decision`, `action`.
 - **MQTT:** `mtd_action`, `data_gap`, `detection`, `detector_alert`.
@@ -162,8 +165,8 @@ A campaign is a list of **units**, run in order on one ledger.
 
 | Campaign | Units | Steps |
 |---|---|---|
-| CPS (`make cps-campaign`, `network_scenario/cps_campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
-| Paper (`main.py`, `network_scenario/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
+| CPS (`make cps-campaign`, `cyberrange/scenarios/cps/campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
+| Paper (`main.py`, `cyberrange/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `scripts/run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
 
 ## 5. Following it live
 
@@ -172,7 +175,7 @@ make dashboard            # every scenario's runs and campaigns under output/ (1
 make cps-dashboard        # only output/cps
 ```
 
-`monitor/dashboard.py` only reads. It shows two kinds of content.
+`cyberrange/core/dashboard.py` only reads. It shows two kinds of content.
 
 **Common to every scenario:**
 
@@ -190,14 +193,16 @@ make cps-dashboard        # only output/cps
 ## 6. Adding a scenario: checklist
 
 1. **Image.** Reuse `kathara/mqtt` or `kathara/cps`, or add `docker/<name>/Dockerfile`.
-2. **Guest agents.** Add them under `<plane>/agents/`. They are flat modules with bare imports. Add a manifest in `network_scenario/guest_files.py` and `tests/test_guest_imports.py` will check it.
-3. **Components.** Add to `<plane>/components.py` whatever the existing ones do not cover. Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
-4. **Scenario package.** Create `network_scenario/scenarios/<name>/` with:
+2. **Guest agents.** Add them under `cyberrange/planes/<plane>/agents/`. They are flat modules with bare imports. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
+3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `SoarResponder` takes its response loop and knowledge-graph builder). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
+4. **Scenario package.** Create `cyberrange/scenarios/<name>/` with:
    - `topology.py`: a `Topology`;
    - `scenario.py`: the `Scenario` subclass;
-   - optionally `campaign.py`;
-   - `SOURCES` and `GUEST_MANIFESTS` in `__init__.py`, for the code accounting.
-5. **Register it** in `core/registry.py`, and add a CLI module (`network_scenario/<name>_experiment.py`).
-6. **Metrics.** Add `monitor/<name>_metrics.py: compute_metrics(run_dir)`, returned by `Scenario.metrics`.
-7. **Tests.** Write `tests/test_<name>_scenario.py` with `tests/fakes/kathara.py`. `FakeManager` and `fake_downloads` run the whole lifecycle without Docker: commands, artifacts, ledger, ground truth, exit code.
+   - `cli.py`: three lines wrapping `cli.main`;
+   - `guest_files.py`: what each node is staged with;
+   - optionally `campaign.py`, `analysis/`, `training/`;
+   - `SOURCES` and `GUEST_MANIFESTS` in `__init__.py`, for the code accounting. Keep the `SOURCES` categories disjoint (one directory each): loc sums them independently, so a file matched twice is counted twice.
+5. **Register it** in `core/registry.py` (name -> `cyberrange.scenarios.<name>.scenario:<Class>`).
+6. **Metrics.** Add `cyberrange/scenarios/<name>/metrics.py: compute_metrics(run_dir)`, returned by `Scenario.metrics`.
+7. **Tests.** Write `tests/scenarios/<name>/test_<name>_scenario.py` with `tests/helpers/kathara.py`. `FakeManager` and `fake_downloads` run the whole lifecycle without Docker: commands, artifacts, ledger, ground truth, exit code.
 8. **Measure.** Run `make platform-loc` before and after; the difference is what the scenario cost.

@@ -8,30 +8,43 @@ cyber-physical systems safely, reproducibly and observably, with two
 traffic fingerprinting) and a cyber-physical OT/Modbus plant (active IT→OT
 attack, DPI/IT sensors, SOAR response). How the platform is built and how to
 add a scenario: **[docs/platform.md](docs/platform.md)**; every reusable
-component of the four planes: **[docs/components.md](docs/components.md)**.
+component of the four planes: **[docs/components.md](docs/components.md)**;
+where a file goes and why: **[docs/structure.md](docs/structure.md)**. The two
+scenarios in prose: **[docs/scenario-mqtt.md](docs/scenario-mqtt.md)** and
+**[docs/scenario-cps.md](docs/scenario-cps.md)**.
 
-The source is organized into the platform's four functional planes plus the
-network scenario they surround (see the paper, Fig. 1). Each plane exposes its
-reusable building blocks in `<plane>/components.py`:
+Everything lives in one package, `cyberrange/`, laid out as the three layers of
+the architecture (see the paper, Fig. 1, and [docs/structure.md](docs/structure.md)):
 
-| Package | Plane |
+```
+core  <-  planes  <-  scenarios        imports point left; nothing points back
+```
+
+| Directory | What it holds |
 |---|---|
-| `network_scenario/core/` | Platform core: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry |
-| `network_scenario/scenarios/` | The scenarios (`mqtt_mtd`, `cps`): topology + episode + campaign |
-| `network_scenario/` | Scenario entry points (`run_experiment.py`, `cps_experiment.py`, `cps_campaign.py`), the guest deploy manifest |
-| `defense_plane/` | MTD coordinators (fixed-timer + RL), the QKD-simulated cert bootstrap |
-| `attack_plane/` | The 1D-CNN fingerprinting classifier + attack actuation |
-| `traffic_generator/` | Background trace replay + the nanogrid MQTT publishers |
-| `monitor/` | Run-artifact collection, defender/attacker analysis, all figures |
+| `cyberrange/core/` | The platform: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry, progress ledger and dashboard |
+| `cyberrange/planes/traffic/` | Background trace replay, the nanogrid MQTT publishers, the plant and PLC |
+| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain and the tree-guided planner |
+| `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, SOAR, the QKD-simulated cert bootstrap |
+| `cyberrange/planes/monitor/` | Capture and the telemetry/plant mirrors |
+| `cyberrange/scenarios/mqtt_mtd/` | The paper's MQTT scenario, whole: topology, episode, CLI, campaign, deploy manifest, metrics, `analysis/` figures, `training/` |
+| `cyberrange/scenarios/cps/` | The cyber-physical OT/Modbus scenario, whole, including its SOAR knowledge graph and dashboard panel |
+| `tests/`, `make/`, `scripts/`, `tools/`, `docs/` | Tests by area, the makefiles, the sweep scripts, cross-scenario tooling, documentation |
 
-Files under a plane's `agents/` (and `defense_plane/qkd/`) are deployment data:
-they are copied flat into the Kathará containers and run there directly, so
-they cannot use package-relative imports — see the module docstring in
-`network_scenario/guest_files.py`. Everything else is a normal importable
-package, invoked as a module rather than by path — e.g.
-`.venv/bin/python -m network_scenario.run_experiment`, `-m attack_plane.classify`,
-`-m monitor.plot_results` — which is how the `Makefile` and the `run_*.sh`
-scripts below run every host-side stage.
+Each plane exposes its reusable building blocks in `components.py`; a scenario
+composes them. One directory holds one scenario — which is what makes
+`make platform-loc` a true measure of what a new scenario costs.
+
+Files under a plane's `agents/` (and `cyberrange/planes/defense/qkd/`) are
+deployment data: they are copied flat into the Kathará containers and run there
+directly, so they cannot use package-relative imports. Each scenario lists what
+it stages in its own `guest_files.py`; the contract is documented in
+`cyberrange/core/topology.py`. Everything else is a normal importable module,
+invoked with `-m` rather than by path — e.g.
+`.venv/bin/python -m cyberrange.scenarios.mqtt_mtd.cli`,
+`-m cyberrange.planes.attack.classify`,
+`-m cyberrange.scenarios.mqtt_mtd.analysis.plot_results` — which is how the
+`Makefile` and the `scripts/run_*.sh` scripts below run every host-side stage.
 
 **To reproduce the paper's evaluation (Fig. 2/3) end to end in one command:**
 
@@ -48,9 +61,9 @@ runs `compare_coordinators.py` to produce `availability_comparison.pdf` (Fig. 2a
 `detection_comparison.pdf` (Fig. 2b), `availability_cost_comparison.pdf` (Fig. 2c)
 and `entropy_comparison.pdf` (Fig. 3) under `output/compare-<slug>/`. It runs the
 evaluation as a campaign on the platform's runner, whose steps are the same `make`
-targets `run_single.sh` uses (so the two stay in lockstep — see `tests/`): lab
+targets `scripts/run_single.sh` uses (so the two stay in lockstep — see `tests/`): lab
 steps are retried, a failed configuration does not stop the others, every attack
-run is scored (`monitor/mqtt_metrics.py`) and `output/campaigns/paper-mbps<M>/summary.md`
+run is scored (`cyberrange/scenarios/mqtt_mtd/metrics.py`) and `output/campaigns/paper-mbps<M>/summary.md`
 holds the per-configuration mean [95% CI] across `--runs`. `make dashboard` follows
 it live.
 
@@ -148,7 +161,7 @@ output/
     datasets/  model/
     eval/  attack/    model-mtd/...  model-baseline/...   # cross-model results too
     summary.csv ...
-  sweep/        e1_*.pdf e2_*.pdf e3_*.pdf sweep_results.csv   # aggregate (run_sweep.sh)
+  sweep/        e1_*.pdf e2_*.pdf e3_*.pdf sweep_results.csv   # aggregate (scripts/run_sweep.sh)
   sweep_manifest.csv
 ```
 
@@ -171,7 +184,7 @@ The page is reached through a Kathará bridged interface + port forward on `semp
 never over link B, so the attacker's capture contains no dashboard traffic; the
 data-plane observer subscribes over a loopback-only mosquitto listener. Every
 event is also written to `telemetry.jsonl`, downloaded next to `coordinator.log`;
-open `defense_plane/agents/mtd_dashboard.html` directly in a browser and load
+open `cyberrange/planes/defense/agents/mtd_dashboard.html` directly in a browser and load
 that file to replay a finished run. The data-plane observer (`data` / `data_gap`
 events, which the delivery detector and its dataset need) runs on every MTD run,
 with or without the dashboard. Every run also writes a host-side progress ledger
@@ -181,7 +194,7 @@ the delivery gaps mirrored live.
 ### Delivery-attack detector (blackhole seen from the SEMP)
 
 The attacker's active phase blackholes an address on the router, so nanogrid data
-stops reaching the SEMP. `defense_plane/delivery_detector.py` scores every SCMC each
+stops reaching the SEMP. `cyberrange/planes/defense/delivery_detector.py` scores every SCMC each
 second from the SEMP's telemetry alone (data silence, MTD actions left unanswered,
 control-channel state, ACK latency) and tells a blackhole apart from MTD-induced
 gaps and benign faults. It is a small MLP, trained on the host and replayed with
@@ -231,21 +244,21 @@ IT 10.10.0.0/24           firewall            OT 10.20.0.0/24         DEF 10.30.
                           allowed)
 ```
 
-- **Physical engine** (`traffic_generator/agents/grid_sim.py` + `modbus_engine.py`):
+- **Physical engine** (`cyberrange/planes/traffic/agents/grid_sim.py` + `modbus_engine.py`):
   a pandapower LV-feeder digital twin behind a Modbus/TCP server. Sensors are input
   registers; actuators (DG setpoint, feeder breaker, **control mode** auto/manual)
   are holding registers — the register map, access policy per role and control
-  constants are the plant contract in `defense_plane/ot_registers.py`. The feeder is
+  constants are the plant contract in `cyberrange/planes/defense/ot_registers.py`. The feeder is
   sized so a full-rated 60 kW DG — an *in-range* command — overvolts the DG bus.
-- **PLC** (`traffic_generator/agents/plc_controller.py`): the Modbus master. In AUTO
+- **PLC** (`cyberrange/planes/traffic/agents/plc_controller.py`): the Modbus master. In AUTO
   it regulates the worst bus voltage, rejects out-of-envelope setpoints in force and
   relaxes back to the 20 kW nominal; in MANUAL (operator authority) it hands off.
-- **HMI** (`traffic_generator/agents/hmi_client.py`): the legitimate IT client — one
+- **HMI** (`cyberrange/planes/traffic/agents/hmi_client.py`): the legitimate IT client — one
   persistent session polling sensors/actuators, and every ~12 s a safe operator
   dispatch (MANUAL, 15–35 kW for 5 s, back to AUTO). This is the normal behaviour
   the sensor must tell the attack apart from.
-- **Active attacker** (`attack_plane/agents/vuln_app.py` on the HMI host,
-  `exploit_client.py`, `ot_write.py`; driver `attack_plane/active_attack.py`):
+- **Active attacker** (`cyberrange/planes/attack/agents/vuln_app.py` on the HMI host,
+  `exploit_client.py`, `ot_write.py`; driver `cyberrange/planes/attack/active_attack.py`):
   exploits the vulnerable diagnostics app (real OS command injection → RCE), pivots
   across the boundary from the HMI's IP, then (`CPS_ATTACK_MODE`):
   - `setpoint-overvoltage` — DG setpoint out of range (loud; the PLC rejects it and
@@ -257,7 +270,7 @@ IT 10.10.0.0/24           firewall            OT 10.20.0.0/24         DEF 10.30.
 
   Every write is recorded in `ground_truth.jsonl` with the time it was issued.
   **The app is intentionally insecure and lab-only.**
-- **DPI sensor** (`defense_plane/agents/ot_sensor.py` + `ot_model.py`, stdlib + numpy):
+- **DPI sensor** (`cyberrange/planes/defense/agents/ot_sensor.py` + `ot_model.py`, stdlib + numpy):
   passively parses Modbus requests *and* responses on the OT link, reconstructing
   the plant state from the read responses. Two detectors, each finding tagged with
   `detector`:
@@ -303,29 +316,29 @@ make cps-campaign CPS_CAMPAIGN=p1 CPS_RESPOND=solver CPS_IT=1 CPS_ATTACK_DRIVER=
 make dashboard                                        # http://127.0.0.1:8765 (CPS_DASH_PORT), every scenario
 ```
 
-`cps-campaign` (`network_scenario/cps_campaign.py`) runs `CPS_MODES` (default
+`cps-campaign` (`cyberrange/scenarios/cps/campaign.py`) runs `CPS_MODES` (default
 `normal,setpoint-overvoltage,breaker-open,manual-hijack`) x `CPS_SEEDS`, seed-major, one
 lab at a time, under `output/cps/campaigns/<name>/`: each run in `runs/<mode>-s<seed>/`
 is scored as it finishes (`metrics.json`/`metrics.md`) and the aggregate is refreshed
 (`summary.md`, `summary.csv` per mode x detector, `impact.csv` per mode). Re-running the
 same `CPS_CAMPAIGN` resumes it (scored runs are skipped); a failed run is retried once,
 then recorded and skipped; Ctrl-C undeploys the lab and marks the campaign interrupted.
-Every option of the CPS run (`python -m network_scenario.cps_experiment --help`) is
+Every option of the CPS run (`python -m cyberrange.scenarios.cps.cli --help`) is
 accepted by the campaign and applies to all its runs; `ci.csv` and the last table of
 `summary.md` give every metric's mean [95% CI] per mode.
 
-Everything is written to a progress ledger, `progress.jsonl` (`monitor/progress.py`; a
+Everything is written to a progress ledger, `progress.jsonl` (`cyberrange/core/progress.py`; a
 standalone `make cps-lab`/`cps-attack` writes one in its `CPS_OUT` too): phases, the
 live plant state and the sensor's findings pulled from the containers every ~2 s, the
 attacker's writes, each run's metrics and the aggregate. `make dashboard`
-(`monitor/dashboard.py`, stdlib, read-only, 127.0.0.1) follows every ledger under
+(`cyberrange/core/dashboard.py`, stdlib, read-only, 127.0.0.1) follows every ledger under
 `output/` — every scenario; `make cps-dashboard` only `output/cps`. For CPS runs it shows campaign progress and ETA, the queue with per-run detection latencies and
 impact, the current run's phase timeline, live bus voltages with the attack and the
 first finding of each detector marked, findings by class, and the aggregated results.
 It can be started before, during or after a campaign.
 
 For the selected run, a **Topology · knowledge graph · attack tree** card draws three
-views in SVG with no libraries (`monitor/cps_graph.js`). It reads the run's `kg.json` /
+views in SVG with no libraries (`cyberrange/scenarios/cps/panel.js`). It reads the run's `kg.json` /
 `tree.json` via `GET /api/structure?id=&run=`; every run writes both files. For runs that
 predate them, the structure is rebuilt from today's lab model and the card says so.
 - **Topology:** zones as columns, with the firewall and the sensor on their zone
@@ -349,7 +362,7 @@ justification. `?view=topology|kg|tree&run=<run_id>` opens a view directly.
 ### Response (SOAR prototype)
 
 A first end-to-end data → detection → response loop on top of the sensor
-(`defense_plane/soar/`, host-side; runtime in `network_scenario/cps_responder.py`).
+(`cyberrange/planes/defense/soar/`, host-side; runtime in `cyberrange/scenarios/cps/responder.py`).
 It is off by default (`CPS_RESPOND=off`), which leaves the scenario unchanged.
 
 - **Knowledge graph** (`soar/kg.py`, networkx). It is built from the Kathará Lab model:
@@ -401,7 +414,7 @@ proposed) or `delay:<s>` (simulated operator latency).
 #### Tree-guided attacker (validating the defence)
 
 By default the attack is a fixed per-mode chain. `CPS_ATTACK_DRIVER=planner` instead runs a
-**reactive attacker** (`attack_plane/planner/`) that walks the same attack tree and picks its
+**reactive attacker** (`cyberrange/planes/attack/planner/`) that walks the same attack tree and picks its
 next step from the current state, composing the *same* lab primitives the scripted chain uses —
 no new offensive capability, lab-only. It learns by outcome: if a step fails (a countermeasure
 closed its path) it tries another feasible impact or gives up, so it exercises the response like
@@ -424,7 +437,7 @@ it was **prevented** (no write landed).
 
 The OT sensor sees only Modbus, so the attacker's first steps are only *inferred* and the defence
 can act only once a write reaches the plant. `CPS_IT=1` adds an **IT-side sensor on the HMI**
-(`defense_plane/agents/it_sensor.py`, stdlib) that makes those steps *observed*:
+(`cyberrange/planes/defense/agents/it_sensor.py`, stdlib) that makes those steps *observed*:
 
 - the diagnostics app's access log → `web_injection_pattern` (it_access);
 - the process table (`/proc`) → `web_child_process` (it_exec);

@@ -12,8 +12,8 @@ the compare_coordinators.py step that renders the paper figures:
     Fig. 3   per-field Shannon entropy      -> entropy_comparison.pdf
 
 The evaluation is a campaign on the platform's campaign runner
-(network_scenario/scenarios/mqtt_mtd/campaign.py): each configuration is a unit
-of the same `make` steps run_single.sh uses, at MBPS=2 by default — the config
+(cyberrange/scenarios/mqtt_mtd/campaign.py): each configuration is a unit
+of the same `make` steps scripts/run_single.sh uses, at MBPS=2 by default — the config
 the paper's numbers were generated at. Its ledger and summary (per-config
 metrics, mean [95% CI] across runs) are under output/campaigns/paper-mbps<M>/;
 `make dashboard` follows it live.
@@ -39,7 +39,7 @@ Usage:
 import argparse
 import sys
 
-from network_scenario.scenarios.mqtt_mtd.campaign import (
+from cyberrange.scenarios.mqtt_mtd.campaign import (
     FIGURES, build_campaign, compare_dir, say,
 )
 
@@ -85,7 +85,7 @@ def main() -> None:
         campaign.dry_run()
         print(say("=== Done (dry run) ==="))
         return
-    from network_scenario.core import lifecycle
+    from cyberrange.core import lifecycle
     try:
         lifecycle.preflight()          # every unit needs a lab: fail fast, not 3 retries each
     except lifecycle.LabUnavailable as e:
