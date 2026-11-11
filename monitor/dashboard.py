@@ -1,7 +1,10 @@
-"""cps_dashboard.py — host-side progress dashboard for the cyber-physical
-experiments. It serves cps_dashboard.html and the progress ledgers
-(monitor/progress.py) found under --root: campaigns written by
-network_scenario/cps_campaign.py and standalone `make cps-lab/cps-attack` runs.
+"""dashboard.py — host-side progress dashboard of the platform, for every
+scenario. It serves dashboard.html and the progress ledgers (monitor/progress.py)
+found under --root: campaigns (network_scenario/core/campaign.py: `make
+cps-campaign`, `main.py`) and standalone runs (`make cps-attack`, the MQTT
+dataset/attack runs). The page shows what is common (queue, phases, ETA,
+results) for any scenario, plus each scenario's own panel (CPS: plant,
+findings, knowledge graph / attack tree; MQTT: MTD actions and delivery gaps).
 
 It only READS files: it never touches the lab, can be started before, during
 or after a campaign, and shows finished or interrupted campaigns as well as the
@@ -14,15 +17,15 @@ Endpoints:
   GET /api/ledgers              [{id, kind, name, status, …}] newest first
   GET /api/events?id=&since=    {"next": seq, "events": [...]} (seq >= since)
   GET /api/structure?id=&run=   {"source": "recorded"|"rebuilt", "kg", "tree"}
-                                — the run's kg.json / tree.json (SOAR prototype);
-                                rebuilt from the current lab model when the run
-                                predates them
+                                — a CPS run's kg.json / tree.json (SOAR); rebuilt
+                                from the current lab model when the run predates
+                                them (CPS runs only)
 
 Only ledgers discovered under --root are served (the id is looked up, never
 joined into a path); a run is served only if the ledger names it, and its
 directory must resolve under --root. The server binds 127.0.0.1 by default.
 
-Run: python -m monitor.cps_dashboard --root output/cps --port 8765
+Run: python -m monitor.dashboard --root output --port 8765
 """
 
 import argparse
@@ -34,7 +37,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cps_dashboard.html")
+PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
 GRAPH_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cps_graph.js")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 STRUCTURE_FILES = ("kg.json", "tree.json")
@@ -90,6 +93,7 @@ def summarize(events, mtime, now=None):
         cur = events[starts[-1]:]
         head = cur[0]
         s["name"] = head.get("name")
+        s["scenario"] = head.get("scenario") or "cps"
         s["total"] = len(head.get("grid") or [])
         finished = {e.get("run_id") for e in cur if e.get("kind") in ("run_metrics", "run_skipped")}
         failed = {e.get("run_id") for e in cur if e.get("kind") == "run_failed"}
@@ -100,6 +104,7 @@ def summarize(events, mtime, now=None):
         start = next((e for e in reversed(events) if e.get("kind") == "run_start"), {})
         s["name"] = start.get("run_id") or first.get("run_id")
         s["mode"], s["seed"] = start.get("mode"), start.get("seed")
+        s["scenario"] = start.get("scenario") or "cps"
         end = None
         if start:
             idx = events.index(start)
@@ -207,6 +212,8 @@ class LedgerStore:
         d = self.run_dir(lid, run_id)
         if d is None:
             return None
+        if self.scenario_of(lid, run_id) != "cps":
+            return {"error": "this scenario has no knowledge graph / attack tree"}
         paths = [os.path.join(d, f) for f in STRUCTURE_FILES]
         try:
             key = (d,) + tuple(os.path.getmtime(p) for p in paths)
@@ -227,6 +234,20 @@ class LedgerStore:
                 self._structures = {k: v for k, v in self._structures.items() if k[0] != d}
                 self._structures[key] = hit
         return hit
+
+    def scenario_of(self, lid, run_id):
+        """The scenario a run belongs to, from its ledger (older ledgers: cps)."""
+        led = self.get(lid)
+        if led is None:
+            return None
+        with self._lock:
+            events = list(led.events)
+        for e in events:
+            if e.get("kind") == "campaign_start" and e.get("scenario"):
+                return e["scenario"]
+            if e.get("kind") == "run_start" and e.get("run_id") == run_id and e.get("scenario"):
+                return e["scenario"]
+        return "cps"
 
     def rebuilt_structure(self):
         """The current lab's structure, for runs recorded before kg.json existed.
@@ -278,7 +299,7 @@ class ProgressDashboard:
                         with open(server.page, "rb") as f:
                             self._send(f.read(), "text/html; charset=utf-8")
                     except OSError:
-                        self.send_error(404, "cps_dashboard.html missing")
+                        self.send_error(404, "dashboard.html missing")
                 elif url.path == "/graph.js":
                     try:
                         with open(GRAPH_JS, "rb") as f:
@@ -328,14 +349,14 @@ class ProgressDashboard:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="CPS experiment progress dashboard")
-    ap.add_argument("--root", default="output/cps", help="where to look for progress ledgers")
+    ap = argparse.ArgumentParser(description="Experiment progress dashboard (every scenario)")
+    ap.add_argument("--root", default="output", help="where to look for progress ledgers")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
     os.makedirs(args.root, exist_ok=True)
     dash = ProgressDashboard(args.root, port=args.port, host=args.host)
-    print(f"CPS progress dashboard: http://{args.host}:{dash.port}/  (root: {dash.store.root})",
+    print(f"Progress dashboard: http://{args.host}:{dash.port}/  (root: {dash.store.root})",
           flush=True)
     try:
         dash.serve_forever()

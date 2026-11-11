@@ -323,35 +323,9 @@ def scmc_pool_detection(ranking: pd.DataFrame, scmc_pool) -> float:
     return float(rows["positive_count"].sum() / n) if n else float("nan")
 
 
-# Lab subnets that carry the nanogrid: 10.0.0.x = SCMC side, 10.1.0.x = SEMP side.
-# Everything else in a capture (192.168.x, public internet replay) is background.
-NANOGRID_SUBNET_PREFIXES = ("10.0.0.", "10.1.0.")
-
-
-def ranking_nanogrid_detection(ranking_csv: str, scmc_pool) -> tuple:
-    """Average attacker nanogrid_frac over the src_ips that belong to the nanogrid.
-
-    Parse a saved nanogrid_ranking.csv (the attack run's per-source-IP nanogrid_frac
-    = fraction of that IP's packets the attacker flagged as nanogrid) and average it
-    across the genuinely-nanogrid endpoints in this experiment — the SCMC source pool
-    plus the SEMP broker subnet. This is how confidently the attacker fingerprints the
-    real nanogrid IPs; MTD lowering it is the win.
-
-    Returns (mean_frac, n_ips); (nan, 0) when the file/columns are unusable.
-    """
-    if not ranking_csv or not os.path.exists(ranking_csv):
-        return float("nan"), 0
-    df = pd.read_csv(ranking_csv)
-    if "src_ip" not in df.columns or "nanogrid_frac" not in df.columns:
-        return float("nan"), 0
-
-    def _is_nanogrid(ip: str) -> bool:
-        return ip in scmc_pool or ip.startswith(NANOGRID_SUBNET_PREFIXES)
-
-    ng = df[df["src_ip"].map(_is_nanogrid)]
-    if ng.empty:
-        return float("nan"), 0
-    return float(ng["nanogrid_frac"].mean()), int(len(ng))
+from monitor.mqtt_metrics import (  # noqa: E402  (shared with per-run metrics)
+    NANOGRID_SUBNET_PREFIXES, ranking_nanogrid_detection,
+)
 
 
 # ── Plots ─────────────────────────────────────────────────────────────────────

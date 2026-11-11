@@ -514,12 +514,25 @@ def load_campaign_rows(campaign_dir):
     return rows
 
 
+CI_HEADLINE = ("detectors.combined.detected", "detectors.combined.latency_from_write_s",
+               "impact_duration_s", "max_abs_deviation_pu", "false_alarms",
+               "response.accurate", "mitigated_s")
+
+
 def write_aggregate(campaign_dir, rows=None):
     """Write summary.md / summary.csv / impact.csv; return the aggregate."""
     import csv
-    agg = aggregate(rows if rows is not None else load_campaign_rows(campaign_dir))
+    from network_scenario.core import aggregate as core_agg
+    rows = rows if rows is not None else load_campaign_rows(campaign_dir)
+    agg = aggregate(rows)
+    # Every numeric metric with its 95% CI, per mode (core statistics).
+    ci = core_agg.summarize(rows, by=("mode",))
+    core_agg.write_csv(os.path.join(campaign_dir, "ci.csv"), ci)
     with open(os.path.join(campaign_dir, "summary.md"), "w") as f:
         f.write(format_aggregate(agg))
+        f.write("\n## Headline metrics, mean [95% CI] (runs)\n\n")
+        f.write(core_agg.format_markdown(ci, by=("mode",), metrics=[
+            m for m in CI_HEADLINE if any(r["metric"] == m for r in ci)]))
     for name, key in (("summary.csv", "detection"), ("impact.csv", "impact"),
                       ("response.csv", "response")):
         table = agg.get(key) or []
@@ -530,7 +543,7 @@ def write_aggregate(campaign_dir, rows=None):
                 w = csv.DictWriter(f, fieldnames=list(table[0]))
                 w.writeheader()
                 w.writerows(table)
-    return agg
+    return {**agg, "ci": [r for r in ci if r["metric"] in CI_HEADLINE]}
 
 
 def main():

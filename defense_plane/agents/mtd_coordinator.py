@@ -107,13 +107,17 @@ class SEMPCoordinator:
                  freq_pool: list = None, freq_interval: float = 30.0,
                  hop_timeout: float = 10.0, shared_key: str = None,
                  seed: int = None, telemetry_path: str = None,
-                 dashboard_port: int = None, detector_model: str = None):
+                 dashboard_port: int = None, detector_model: str = None,
+                 observe_data: bool = False):
         self.control_port = control_port
         self.seed = seed
         # In-memory unless a path is given; the dashboard needs a port.
         self.telemetry = Telemetry(telemetry_path, dict(zip(KNOBS, KNOB_COST)))
         self.dashboard_port = dashboard_port
         self.detector_model = detector_model
+        # The data-plane observer labels delivery (data / data_gap events); it runs
+        # whenever asked for or whenever the dashboard is up.
+        self.observe_data = bool(observe_data or dashboard_port)
         # One RNG per knob, so a seeded run draws the same per-knob sequence no
         # matter how the knob threads interleave (seed=None → OS entropy).
         self._rng = {knob: random.Random(None if seed is None else f"{seed}:{knob}")
@@ -172,8 +176,8 @@ class SEMPCoordinator:
                                  new_ip=new_ip, new_port=new_port)
 
     def _start_telemetry(self) -> None:
-        """Record the run configuration; with a dashboard port, also start the
-        HTTP dashboard and the data-plane observer."""
+        """Record the run configuration; start the data-plane observer (and the
+        live detector, which scores its events) and the HTTP dashboard if asked."""
         self.telemetry.emit(
             "run_info", coordinator=self.KIND, seed=self.seed,
             knob_cost=dict(zip(KNOBS, KNOB_COST)),
@@ -186,12 +190,13 @@ class SEMPCoordinator:
                      "src": self.current_src_ip,
                      "interval": self.telemetry.publish_interval},
         )
-        if self.dashboard_port:
-            DashboardServer(self.telemetry, self.dashboard_port).start()
+        if self.observe_data:
             DataPlaneObserver(self.telemetry).start()
             # The detector scores the data-plane observer's events, so it needs it.
             if self.detector_model:
                 LiveDetector(self.telemetry, self.detector_model).start()
+        if self.dashboard_port:
+            DashboardServer(self.telemetry, self.dashboard_port).start()
 
     # ── iptables NAT management ──
 
@@ -809,13 +814,15 @@ def add_telemetry_args(parser: argparse.ArgumentParser) -> None:
                         help="File the MTD telemetry events are appended to "
                              "(default: telemetry.jsonl; empty = memory only)")
     parser.add_argument("--dashboard-port", type=int, default=None,
-                        help="Serve the live MTD dashboard on this port and observe "
-                             "the data plane over the broker's loopback listener "
-                             "(omit = no dashboard)")
+                        help="Serve the live MTD dashboard on this port (implies "
+                             "--observe-data; omit = no dashboard)")
+    parser.add_argument("--observe-data", action="store_true",
+                        help="Observe the data plane over the broker's loopback "
+                             "listener (data / data_gap telemetry events)")
     parser.add_argument("--detector-model", default=None,
                         help="Delivery attack detector (.npz from "
-                             "train_delivery_detector.py) to run live; needs "
-                             "--dashboard-port (omit = no detector)")
+                             "train_delivery_detector.py) to run live on the observed "
+                             "data plane (omit = no detector)")
 
 
 def main():
@@ -876,6 +883,7 @@ def main():
         hop_timeout=args.hop_timeout, shared_key=args.shared_key,
         seed=args.seed, telemetry_path=args.telemetry_path,
         dashboard_port=args.dashboard_port, detector_model=args.detector_model,
+        observe_data=args.observe_data,
     ).run()
 
 

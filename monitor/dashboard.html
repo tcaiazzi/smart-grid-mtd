@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CPS Experiment Progress</title>
+<title>Experiment Progress</title>
 <!--
-  Progress dashboard for the cyber-physical experiments, served by
-  monitor/cps_dashboard.py. It follows the progress ledgers (progress.jsonl)
-  written by network_scenario/cps_campaign.py and cps_experiment.py: polls
+  Progress dashboard of the platform (every scenario), served by
+  monitor/dashboard.py. It follows the progress ledgers (progress.jsonl)
+  written by the core run lifecycle and campaign runner: polls
   /api/ledgers for the list and /api/events for the selected one, and folds
   every event through one reducer (apply()) — a finished campaign and a live
   one are shown by the same code. Self-contained on purpose: no CDN.
@@ -118,7 +118,7 @@ td.wrap { white-space: normal; min-width: 280px; }
 <body>
 <main>
   <header>
-    <h1>CPS experiment progress</h1>
+    <h1>Experiment progress</h1>
     <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
     <span class="spacer"></span>
     <label class="sub" style="margin:0" for="ledger">Experiment</label>
@@ -134,7 +134,7 @@ td.wrap { white-space: normal; min-width: 280px; }
       <h2>Queue</h2>
       <p class="sub">One row per run; click a row to inspect it. Results appear as each run is scored.</p>
       <div class="scroll"><table id="queue"></table></div>
-      <p class="sub" style="margin:8px 0 0">rules / model: detection latency from the first malicious write; <b>*</b> = fired only after the physical impact.</p>
+      <p class="sub" style="margin:8px 0 0" id="q-note"></p>
     </section>
 
     <section class="card" id="detail">
@@ -145,8 +145,8 @@ td.wrap { white-space: normal; min-width: 280px; }
       <div class="legend" id="d-legend"></div>
       <div class="chart" id="d-chart"><div class="tip" id="tip"></div></div>
       <div class="err" id="d-err"></div>
-      <h2 style="margin-top:14px">Findings</h2>
-      <p class="sub">Sensor findings so far, by detector and class (live during the run).</p>
+      <h2 style="margin-top:14px" id="f-title">Findings</h2>
+      <p class="sub" id="f-sub">Sensor findings so far, by detector and class (live during the run).</p>
       <div class="scroll"><table id="d-findings"></table></div>
     </section>
   </div>
@@ -179,6 +179,7 @@ td.wrap { white-space: normal; min-width: 280px; }
     <div class="tabs" id="r-tabs" role="group" aria-label="Results table">
       <button type="button" data-tab="detection" aria-pressed="true">Detection</button>
       <button type="button" data-tab="impact" aria-pressed="false">Physical impact</button>
+      <button type="button" data-tab="ci" aria-pressed="false">Mean [95% CI]</button>
     </div>
     <div class="scroll"><table id="results"></table></div>
   </section>
@@ -188,12 +189,14 @@ td.wrap { white-space: normal; min-width: 280px; }
 <script>
 "use strict";
 // ── state & reducer ─────────────────────────────────────────────────────────
-const TIMED = new Set(["normal", "post_attack"]);
+// Fixed-length observation phases (older ledgers do not flag them with "timed").
+const TIMED = new Set(["normal", "post_attack", "capture", "sniff"]);
 let S, cur = { id: null, since: 0 }, selectedRun = null, resultsTab = "detection";
 let ledgers = [], clockSkew = 0;
 
 function fresh() {
-  return { kind: null, campaign: null, runs: {}, order: [], aggregate: null, current: null, ended: null };
+  return { kind: null, scenario: null, campaign: null, runs: {}, order: [], aggregate: null, current: null,
+           ended: null, step: null };
 }
 S = fresh();
 
@@ -202,7 +205,8 @@ function runOf(id) {
     S.runs[id] = { id, mode: null, seed: null, status: "pending", attempt: 1, phases: [],
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
-      states: [], decisions: [], actions: [], respond: null };
+      states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
+      mtd: [], gaps: [], alerts2: [] };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -210,7 +214,8 @@ function runOf(id) {
 
 function resetRunDetail(r, ev) {
   Object.assign(r, { status: "running", attempt: ev.attempt || 1, mode: ev.mode, seed: ev.seed,
-    phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, start_t: null, end_t: null, ok: null })),
+    scenario: ev.scenario || "cps", mtd: [], gaps: [], alerts2: [],
+    phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, timed: p.timed, start_t: null, end_t: null, ok: null })),
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
     states: [], decisions: [], actions: [], respond: ev.respond || null });
@@ -223,12 +228,27 @@ function apply(ev) {
       const keep = S.aggregate;
       S.campaign = { name: ev.name, grid: ev.grid || [], params: ev.params || {},
         planned: ev.planned_run_s || {}, start_t: ev.t };
-      S.kind = "campaign"; S.ended = null; S.runs = {}; S.order = []; S.aggregate = keep;
-      for (const g of S.campaign.grid) Object.assign(runOf(g.run_id), { mode: g.mode, seed: g.seed });
+      S.kind = "campaign"; S.scenario = ev.scenario || "cps"; S.ended = null; S.runs = {}; S.order = []; S.aggregate = keep;
+      for (const g of S.campaign.grid) Object.assign(runOf(g.run_id), { mode: g.mode ?? g.group, seed: g.seed, scenario: S.scenario });
       break;
     }
     case "run_skipped": Object.assign(r, { status: "skipped", mode: ev.mode, seed: ev.seed, metrics: ev.metrics }); break;
-    case "run_start": if (!S.kind) S.kind = "run"; resetRunDetail(r, ev); S.current = r.id; break;
+    case "run_start": if (!S.kind) S.kind = "run"; if (!S.scenario) S.scenario = ev.scenario || "cps";
+      resetRunDetail(r, ev); S.current = r.id; break;
+    // campaign units and their (command) steps; a scored unit shares its run's id
+    case "unit_start": S.step = { unit: ev.unit, step: null, t: ev.t };
+      if (S.runs[ev.unit]) { const u = S.runs[ev.unit]; if (u.status === "pending") u.status = "running"; u.start_t = u.start_t ?? ev.t; S.current = ev.unit; }
+      break;
+    case "step_start": S.step = { unit: ev.unit, step: ev.step, t: ev.t };
+      if (S.runs[ev.unit]) Object.assign(S.runs[ev.unit], { step: ev.step, status: "running" });
+      break;
+    case "step_end": if (!ev.ok && S.runs[ev.unit]) S.runs[ev.unit].error = ev.error; break;
+    case "step_failed": if (S.runs[ev.unit]) S.runs[ev.unit].status = "failed"; break;
+    case "unit_blocked": if (S.runs[ev.unit]) S.runs[ev.unit].status = "blocked"; break;
+    // MQTT: the MTD coordinator's telemetry, mirrored live
+    case "mtd_action": r.mtd.push({ t: ev.guest_t || ev.t, action: ev.action, status: ev.status, cost: ev.cost }); break;
+    case "data_gap": r.gaps.push({ t: ev.guest_t || ev.t, gap: ev.gap_s }); break;
+    case "detector_alert": case "detection": r.alerts2.push({ t: ev.guest_t || ev.t, kind: ev.kind, ev }); break;
     case "phase": {
       const p = r.phases.find(x => x.name === ev.name) ||
         (r.phases.push({ name: ev.name, planned_s: null, start_t: null, end_t: null, ok: null }), r.phases[r.phases.length - 1]);
@@ -249,11 +269,13 @@ function apply(ev) {
     case "run_end":
       r.end_t = ev.t; r.duration = ev.duration_s; r.error = ev.error;
       r.status = ev.status === "ok" ? (S.kind === "campaign" ? "scoring" : "ok") : ev.status;
+      if (S.kind === "run" && ev.rc) r.error = `exit code ${ev.rc}`;
       if (S.current === r.id) S.current = null;
       break;
     case "run_failed": r.status = "failed"; break;
-    case "run_metrics": r.status = "ok"; r.metrics = ev.metrics; break;
-    case "aggregate": S.aggregate = { detection: ev.detection || [], impact: ev.impact || [] }; break;
+    case "run_metrics": r.status = "ok"; r.metrics = ev.metrics; r.end_t = r.end_t ?? ev.t;
+      if (r.start_t && r.duration == null) r.duration = ev.t - r.start_t; break;
+    case "aggregate": S.aggregate = { detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
     case "campaign_end": S.ended = ev; break;
   }
 }
@@ -268,7 +290,9 @@ function observedPhase() {
   for (const [k, v] of Object.entries(acc)) out[k] = v.reduce((a, b) => a + b, 0) / v.length;
   return out;
 }
-function phaseEst(p, obs) { return TIMED.has(p.name) ? (p.planned_s || 0) : (obs[p.name] ?? p.planned_s ?? 0); }
+function isTimed(p) { return p.timed ?? TIMED.has(p.name); }
+function phaseEst(p, obs) { return isTimed(p) ? (p.planned_s || 0) : (obs[p.name] ?? p.planned_s ?? 0); }
+const isCps = () => (S.scenario || "cps") === "cps";
 function runRemaining(r, obs, t) {
   let rem = 0;
   for (const p of r.phases) {
@@ -316,6 +340,7 @@ const STATUS = {
   running: ["var(--s1)", "running"], scoring: ["var(--s1)", "scoring"], pending: ["var(--axis)", "pending"],
   ok: ["var(--good)", "done"], skipped: ["var(--good)", "done (resumed)"], failed: ["var(--critical)", "failed"],
   retrying: ["var(--warning)", "retrying"], interrupted: ["var(--serious)", "interrupted"],
+  blocked: ["var(--serious)", "blocked"], invalid: ["var(--critical)", "invalid run"],
   done: ["var(--good)", "finished"], done_with_failures: ["var(--warning)", "finished with failures"],
 };
 function statusBadge(st) {
@@ -362,7 +387,8 @@ function renderTiles(lst) {
     tile("Elapsed", start ? dur((end || t) - start) : "—", start ? `started ${clock(start)}` : ""),
     tile("Time left", live ? dur(rem) : (lst === "interrupted" ? "stopped" : "—"),
       live ? `ETA ${clock(t + rem)}` : (end ? `ended ${clock(end)}` : "")),
-    tile("Now", curRun ? curRun.id : "idle", curPhase ? `phase: ${curPhase.name.replace("_", " ")}` : ""),
+    tile("Now", curRun ? curRun.id : (S.step?.unit && live ? S.step.unit : "idle"),
+      curPhase ? `phase: ${curPhase.name.replace("_", " ")}` : (S.step?.step && live ? `step: ${S.step.step}` : "")),
   );
   const bar = $("pbar"); bar.replaceChildren();
   if (c.total) {
@@ -380,6 +406,8 @@ function detCell(m, d) {
 }
 
 function renderQueue() {
+  if (!isCps()) return renderQueueMqtt();
+  $("q-note").innerHTML = "rules / model: detection latency from the first malicious write; <b>*</b> = fired only after the physical impact.";
   const tb = $("queue");
   const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
     h("th", { class: "num", title: "latency from the first malicious write; * = after the physical impact" }, "rules"),
@@ -399,6 +427,26 @@ function renderQueue() {
       h("td", { class: "num" }, fa == null ? "—" : String(fa)));
   });
   tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 7, class: "empty" }, "No runs yet"))));
+}
+
+function renderQueueMqtt() {
+  $("q-note").textContent = "attacker confidence: its nanogrid_frac over the nanogrid's own IPs (lower = the MTD hides it better); MTD cost: availability cost of the knob changes.";
+  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
+    h("th", {}, "step"), h("th", { class: "num" }, "attacker confidence"), h("th", {}, "blocked"),
+    h("th", { class: "num" }, "MTD cost"));
+  const rows = S.order.map(id => {
+    const r = S.runs[id], m = r.metrics;
+    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
+    const blocked = !m ? "—" : !m.blocked_ip ? "nothing" : `${m.blocked_ip}${m.blocked_is_scmc ? " (nanogrid)" : ""}`;
+    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
+        onclick: () => { selectedRun = id; render(); },
+        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
+      h("td", {}, id), h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
+      h("td", {}, r.step || (r.phases.find(p => p.start_t && !p.end_t)?.name ?? "—")),
+      h("td", { class: "num" }, m ? String(num(m.nanogrid_detect)) : "—"), h("td", {}, blocked),
+      h("td", { class: "num" }, m ? String(num(m.availability_cost, 2)) : "—"));
+  });
+  $("queue").replaceChildren(h("thead", {}, head), h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 7, class: "empty" }, "No runs yet"))));
 }
 
 function shownRunId() {
@@ -429,6 +477,9 @@ function renderDetail() {
       h("div", { class: "nm" }, p.name.replace("_", " ")),
       h("div", { class: "tm" }, p.start_t ? `${dur(el)} / ${dur(est)}` : dur(est)));
   }));
+  if (r.scenario && r.scenario !== "cps") return renderDetailMqtt(r);
+  $("f-title").textContent = "Findings";
+  $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
   // chips
   const last = r.plant[r.plant.length - 1];
   const chip = (k, v, dot) => h("div", { class: "chip" }, h("div", { class: "k" }, k),
@@ -453,6 +504,78 @@ function renderDetail() {
       h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
   $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
     h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
+}
+
+function renderDetailMqtt(r) {
+  const chip = (k, v, dot) => h("div", { class: "chip" }, h("div", { class: "k" }, k),
+    h("div", { class: "v" }, dot ? h("span", { class: "dot", style: `background:${dot}` }) : null, v));
+  const by = st => r.mtd.filter(a => a.status === st).length;
+  const m = r.metrics, maxGap = r.gaps.reduce((a, g) => Math.max(a, g.gap || 0), 0);
+  $("d-chips").replaceChildren(
+    chip("MTD actions", String(r.mtd.length || (m ? Object.values(m.mtd_outcomes || {}).reduce((a, b) => a + b, 0) : 0))),
+    chip("applied", String(by("applied")), "var(--good)"),
+    chip("failed / timed out", String(by("failed") + by("timed_out")), by("failed") + by("timed_out") ? "var(--warning)" : null),
+    chip("delivery gaps", String(r.gaps.length || (m?.data_gaps ?? 0)), r.gaps.length ? "var(--critical)" : null),
+    chip("longest gap", maxGap ? `${num(maxGap, 1)} s` : (m?.max_data_gap_s ? `${num(m.max_data_gap_s, 1)} s` : "—")),
+    chip("detector alerts", String(r.alerts2.filter(a => a.kind === "detector_alert").length)),
+  );
+  if (r.step) $("d-sub").textContent += ` · step: ${r.step}`;
+  $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
+  drawMtd(r);
+  $("f-title").textContent = "MTD actions";
+  $("f-sub").textContent = "Moving-target actions of the coordinator by knob and outcome, and the delivery gaps the SEMP observed (live during the run).";
+  const agg = {};
+  for (const a of r.mtd) { const k = `${a.action}|${a.status}`; (agg[k] = agg[k] || { a: a.action, s: a.status, n: 0, cost: 0, first: a.t }).n++; agg[k].cost += a.cost || 0; }
+  if (r.gaps.length) agg["gap"] = { a: "data gap", s: `max ${num(maxGap, 1)} s`, n: r.gaps.length, cost: null, first: r.gaps[0].t };
+  const rows = Object.values(agg).sort((x, y) => x.first - y.first).map(x =>
+    h("tr", {}, h("td", {}, x.a), h("td", {}, x.s), h("td", { class: "num" }, String(x.n)),
+      h("td", { class: "num" }, x.cost == null ? "—" : String(num(x.cost, 2))),
+      h("td", { class: "num" }, r.start_t ? `+${dur(x.first - r.start_t)}` : "—")));
+  $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "action"), h("th", {}, "outcome"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "cost"), h("th", { class: "num" }, "first at"))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 5, class: "empty" },
+      S.kind === "campaign" ? "Live MTD events are in the run's own ledger (select it in the list)" : "No MTD events (baseline run, or not started yet)"))));
+}
+
+// MQTT: MTD actions over time (one lane per knob, colour = outcome) and the
+// delivery gaps the SEMP saw, on the run's phase timeline.
+function drawMtd(r) {
+  const box = $("d-chart"), legend = $("d-legend");
+  const key = ["mtd", r.id, r.start_t, r.mtd.length, r.gaps.length, box.clientWidth, document.documentElement.dataset.theme || ""].join("|");
+  if (key === chartKey) return;
+  chartKey = key;
+  box.querySelector("svg")?.remove(); box.querySelector(".empty")?.remove(); legend.replaceChildren();
+  if (!r.start_t || (!r.mtd.length && !r.gaps.length)) {
+    box.append(h("div", { class: "empty" }, r.start_t ? "No MTD actions or delivery gaps yet." : "No live trace for this run."));
+    return;
+  }
+  const lanes = [...new Set(r.mtd.map(a => a.action))].sort();
+  if (r.gaps.length) lanes.push("delivery gap");
+  const COL = { applied: "var(--good)", failed: "var(--critical)", timed_out: "var(--warning)", client_lost: "var(--serious)" };
+  legend.append(...Object.entries(COL).map(([k, c]) => h("span", {}, h("span", { class: "lk", style: `background:${c}` }), k.replace("_", " "))));
+  const W = Math.max(320, box.clientWidth || 600), LH = 22, m = { l: 96, r: 12, t: 8, b: 24 };
+  const H = m.t + m.b + LH * Math.max(lanes.length, 1);
+  const t0 = r.start_t, tEnd = Math.max(...r.mtd.map(a => a.t), ...r.gaps.map(g => g.t), ...r.phases.map(p => p.end_t || 0), t0 + 10);
+  const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+  const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
+  const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `MTD actions for ${r.id}` });
+  lanes.forEach((ln, i) => {
+    const y = m.t + LH * i + LH / 2;
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: "var(--grid)" }));
+    svg.append(s("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, ln));
+  });
+  for (const a of r.mtd) {
+    const y = m.t + LH * lanes.indexOf(a.action) + LH / 2;
+    svg.append(s("rect", { x: X(a.t) - 1.5, y: y - 6, width: 3, height: 12, fill: COL[a.status] || "var(--axis)" }));
+  }
+  if (r.gaps.length) {
+    const y = m.t + LH * (lanes.length - 1) + LH / 2;
+    for (const g of r.gaps) svg.append(s("rect", { x: X(g.t - (g.gap || 0)), y: y - 5, width: Math.max(2, X(g.t) - X(g.t - (g.gap || 0))), height: 10, fill: "var(--critical)" }));
+  }
+  const step = xMax > 240 ? 60 : xMax > 90 ? 30 : 10;
+  for (let x = 0; x <= xMax; x += step)
+    svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, `${x}s`));
+  box.insertBefore(svg, $("tip"));
 }
 
 // ── voltage chart ───────────────────────────────────────────────────────────
@@ -572,10 +695,24 @@ function drawChart(r) {
 // ── results ─────────────────────────────────────────────────────────────────
 function renderResults() {
   const tb = $("results"), a = S.aggregate;
-  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tab === resultsTab)));
-  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run" ? "Results are aggregated for campaigns (make cps-campaign); score a single run with make cps-metrics." : "No scored runs yet")))); return; }
+  const hasCps = !!(a && a.detection), hasCi = !!(a && a.ci);
+  if (hasCps && !["detection", "impact", "ci"].includes(resultsTab)) resultsTab = "detection";
+  if (!hasCps && hasCi) resultsTab = "ci";
+  document.querySelectorAll("#r-tabs button").forEach(b => {
+    b.style.display = (b.dataset.tab === "ci" ? hasCi : (hasCps || (!a && isCps()))) ? "" : "none";
+    b.setAttribute("aria-pressed", String(b.dataset.tab === resultsTab));
+  });
+  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run" ? "Results are aggregated for campaigns; a single run is scored by its scenario's metrics (make cps-metrics, python -m monitor.mqtt_metrics)." : "No scored runs yet")))); return; }
   const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
-  if (resultsTab === "detection") {
+  if (resultsTab === "ci" && hasCi) {
+    const gk = a.ci.length && "group" in a.ci[0] ? "group" : "mode";
+    const head = h("tr", {}, h("th", {}, gk === "group" ? "configuration" : "mode"), h("th", {}, "metric"),
+      ...["runs", "mean", "95% CI", "median", "min–max"].map(x => h("th", { class: "num" }, x)));
+    const rows = a.ci.map(r => h("tr", {}, h("td", {}, r[gk]), h("td", {}, r.metric), n(r.n), n(r.mean),
+      h("td", { class: "num" }, r.n > 1 ? `${num(r.ci95_low)} – ${num(r.ci95_high)}` : "—"), n(r.median),
+      h("td", { class: "num" }, r.min == null ? "—" : `${num(r.min)}–${num(r.max)}`)));
+    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  } else if (resultsTab === "detection") {
     const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
       ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
     const rows = a.detection.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
@@ -622,7 +759,8 @@ function relLabel(r, t) {
     : (r.start_t ? `+${dur(t - r.start_t)} into the run` : clock(t));
 }
 function renderGraph() {
-  if (!window.CPSGraph) return;
+  $("graph-card").style.display = isCps() ? "" : "none";
+  if (!window.CPSGraph || !isCps()) return;
   const id = shownRunId(), r = id ? S.runs[id] : null;
   document.querySelectorAll("#g-tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === gView)));
   $("g-inputs-wrap").style.display = gView === "kg" ? "" : "none";
@@ -685,7 +823,7 @@ async function pollLedgers() {
     sel.replaceChildren(...ledgers.map(l => {
       const st = (STATUS[l.status] || [null, l.status])[1];
       const prog = l.kind === "campaign" ? ` · ${l.done}/${l.total}` : "";
-      return h("option", { value: l.id }, `${l.kind === "campaign" ? "campaign" : "run"} ${l.name || l.id}${prog} · ${st}`);
+      return h("option", { value: l.id }, `${l.scenario || "cps"} · ${l.kind === "campaign" ? "campaign" : "run"} ${l.name || l.id}${prog} · ${st}`);
     }));
     const want = cur.id || decodeURIComponent(location.hash.slice(1)) || ledgers[0]?.id;
     if (want && ledgers.some(l => l.id === want)) { select(want); sel.value = want; }
@@ -714,9 +852,9 @@ $("theme").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
     ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
-  try { localStorage.setItem("cps-dash-theme", document.documentElement.dataset.theme); } catch (e) {}
+  try { localStorage.setItem("platform-dash-theme", document.documentElement.dataset.theme); } catch (e) {}
 });
-try { const th = localStorage.getItem("cps-dash-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+try { const th = localStorage.getItem("platform-dash-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
 window.addEventListener("resize", () => renderDetail());
 
 (async function loop() {

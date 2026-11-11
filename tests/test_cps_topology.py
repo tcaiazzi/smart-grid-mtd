@@ -1,5 +1,5 @@
 """Topology test for the cyber-physical Kathará lab builder
-(network_scenario.cps_experiment.build_lab). Builds the Lab model in-process
+(network_scenario/scenarios/cps/topology.py on core.topology). Builds the Lab model in-process
 (no Docker) and asserts the three zones, the IT/OT boundary firewall, and the
 passive-sensor wiring are correct.
 
@@ -14,7 +14,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from network_scenario import cps_experiment as cps  # noqa: E402
+from network_scenario.scenarios.cps import topology as cps  # noqa: E402
+from network_scenario.scenarios.cps.scenario import CpsScenario  # noqa: E402
 
 
 def _links(machine):
@@ -80,14 +81,14 @@ class Topology(unittest.TestCase):
         self.assertIn(f"ip route add default via {cps.FW_IT_IP} dev eth0", cmds)
 
     def test_attack_must_not_overlap_model_calibration(self):
+        validate = CpsScenario().validate
         ok = types.SimpleNamespace(attack=True, normal_duration=60, learn_seconds=45)
-        cps.validate_args(ok)  # no raise
+        validate(ok)  # no raise
         bad = types.SimpleNamespace(attack=True, normal_duration=30, learn_seconds=45)
         with self.assertRaises(SystemExit):
-            cps.validate_args(bad)
+            validate(bad)
         # A normal-only run has no attack to overlap with.
-        cps.validate_args(types.SimpleNamespace(attack=False, normal_duration=30,
-                                                learn_seconds=45))
+        validate(types.SimpleNamespace(attack=False, normal_duration=30, learn_seconds=45))
 
     def test_dashboard_meta_only_when_enabled(self):
         self.assertIsNone(self.m["sensor"].meta.get("bridged"))

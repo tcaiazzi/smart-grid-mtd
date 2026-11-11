@@ -1,9 +1,9 @@
 """Tests for the progress ledger (monitor/progress.py) and the live
-instrumentation of network_scenario/cps_experiment.py — with a FAKE Kathará
-manager, so no Docker: the run lifecycle emits its phases in order, the live
-plant/sensor poll turns container output into ledger events without
-duplicates, a broken exec never breaks a run, and a failing run still closes
-its ledger entry with the error.
+instrumentation of a run (network_scenario/core lifecycle + the CPS scenario's
+monitor components) — with a FAKE Kathará manager, so no Docker: the run
+lifecycle emits its phases in order, the live plant/sensor mirrors turn
+container output into ledger events without duplicates, a broken exec never
+breaks a run, and a failing run still closes its ledger entry with the error.
 
 Run: `.venv/bin/python -m unittest tests.test_progress`.
 """
@@ -21,8 +21,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from attack_plane import active_attack                             # noqa: E402
+from defense_plane.components import OtSensor                       # noqa: E402
+from monitor.components import PlantMirror, TelemetryMirror         # noqa: E402
 from monitor.progress import NullProgress, ProgressLog, read_events   # noqa: E402
 from network_scenario import cps_experiment as cps                  # noqa: E402
+from network_scenario.core.cli import default_args                  # noqa: E402
+from network_scenario.core.context import RunContext                # noqa: E402
+from network_scenario.scenarios.cps import scenario as cps_scenario  # noqa: E402
+from tests.fakes.kathara import FakeManager, fake_downloads          # noqa: E402
 
 
 class Ledger(unittest.TestCase):
@@ -68,40 +75,6 @@ class Ledger(unittest.TestCase):
         self.assertIsNone(n.bind(run_id="x").emit("anything", a=1))
 
 
-class FakeManager:
-    """Stands in for Kathara's manager: canned exec output per machine."""
-
-    def __init__(self, frames=None, telemetry=None, fail_exec=False, fail_deploy=False):
-        self.frames = frames or []
-        self.telemetry = telemetry or []
-        self.fail_exec = fail_exec
-        self.fail_deploy = fail_deploy
-        self.calls = []
-
-    def exec_obj(self, machine, cmd, stream=True, wait=False):
-        name = getattr(machine, "name", str(machine))
-        self.calls.append((name, cmd))
-        if self.fail_exec and stream is False:
-            raise RuntimeError("exec blew up")
-        if stream is not False:
-            return None                      # background start of an agent
-        if "engine_frames" in cmd:
-            body = (json.dumps(self.frames.pop(0)) + "\n") if self.frames else ""
-            return body.encode(), b"", 0
-        if "telemetry.jsonl" in cmd:
-            start = int(cmd.split("+")[1].split()[0])
-            lines = self.telemetry[start - 1:]
-            return "".join(lines).encode(), b"", 0
-        return b"", b"", 0
-
-    def deploy_lab(self, lab):
-        if self.fail_deploy:
-            raise RuntimeError("deploy failed")
-
-    def undeploy_lab(self, lab):
-        pass
-
-
 def _frame(step, v_dg=1.01, mode=0):
     return {"timestamp": 1000.0 + step, "step": step, "v_load": 0.99, "v_dg": v_dg,
             "abnormal": int(v_dg > 1.05), "energy_kwh": 0.1 * step,
@@ -125,25 +98,37 @@ class Collector:
         return [e["kind"] for e in self.events]
 
 
-class PlantPoll(unittest.TestCase):
-    M = {"engine": types.SimpleNamespace(name="engine"), "sensor": types.SimpleNamespace(name="sensor")}
+def _live_ctx(mgr, col):
+    """A RunContext with the CPS sensor started and the two live mirrors."""
+    machines = {n: types.SimpleNamespace(name=n) for n in ("engine", "sensor")}
+    ctx = RunContext(mgr, None, machines, types.SimpleNamespace(poll_interval=0),
+                     tempfile.mkdtemp(prefix="cps-live-"), col)
+    ctx.start(OtSensor("sensor", "eth0", "10.20.0.20", 5020, "10.20.0.10", "10.10.0.20",
+                       "rules,model", 45))
+    ctx.start(PlantMirror("engine"))
+    ctx.start(TelemetryMirror())
+    return ctx
 
+
+class PlantPoll(unittest.TestCase):
     def test_plant_only_on_new_step_and_findings_incremental(self):
         mgr = FakeManager(frames=[_frame(1), _frame(1), _frame(2, 1.07, 1)],
-                          telemetry=[_tel(0, "sensor_up")])
-        col, st = Collector(), {}
-        cps._poll_plant(mgr, self.M, col, st)
-        mgr.telemetry += [_tel(1, "model_fitted", threshold=6.0),
-                          _tel(2, "ot_finding", detector="model", klass="behavioral_anomaly",
-                               entities={"src": None, "register": None})]
-        cps._poll_plant(mgr, self.M, col, st)          # same step 1 -> no plant event
-        mgr.telemetry += ['{"i": 3, "t": 2003, "kind": "ot_fin']      # partial line
-        cps._poll_plant(mgr, self.M, col, st)
-        mgr.telemetry[-1] = _tel(3, "ot_finding", detector="rules", klass="unsafe_command",
-                                 entities={"src": "10.10.0.20", "register": 0})
-        mgr.telemetry.append(_tel(4, "ot_alert", state="raised", detector="rules",
-                                  klass="unsafe_command"))
-        cps._poll_plant(mgr, self.M, col, st)
+                          files={"/telemetry.jsonl": [_tel(0, "sensor_up")]})
+        col = Collector()
+        ctx = _live_ctx(mgr, col)
+        tel = mgr.files["/telemetry.jsonl"]
+        ctx.poll()
+        tel += [_tel(1, "model_fitted", threshold=6.0),
+                _tel(2, "ot_finding", detector="model", klass="behavioral_anomaly",
+                     entities={"src": None, "register": None})]
+        ctx.poll()                                # same step 1 -> no plant event
+        tel += ['{"i": 3, "t": 2003, "kind": "ot_fin']      # partial line
+        ctx.poll()
+        tel[-1] = _tel(3, "ot_finding", detector="rules", klass="unsafe_command",
+                       entities={"src": "10.10.0.20", "register": 0})
+        tel.append(_tel(4, "ot_alert", state="raised", detector="rules",
+                        klass="unsafe_command"))
+        ctx.poll()
         self.assertEqual(col.kinds(), ["plant", "model_fitted", "finding", "plant",
                                        "finding", "alert"])
         plants = [e for e in col.events if e["kind"] == "plant"]
@@ -153,19 +138,19 @@ class PlantPoll(unittest.TestCase):
         self.assertEqual([(x["detector"], x["klass"]) for x in f],
                          [("model", "behavioral_anomaly"), ("rules", "unsafe_command")])
         self.assertEqual(f[1]["src"], "10.10.0.20")
-        self.assertEqual(st["tel_lines"], 5)
+        mirror = ctx.components[-1]
+        self.assertEqual(mirror.lines[("sensor", "/telemetry.jsonl")], 5)
 
     def test_exec_errors_are_swallowed(self):
-        mgr = FakeManager(fail_exec=True)
         col = Collector()
-        cps._poll_plant(mgr, self.M, col, {})     # must not raise
+        _live_ctx(FakeManager(fail_exec=True), col).poll()     # must not raise
         self.assertEqual(col.events, [])
 
     def test_observe_keeps_phase_length(self):
-        mgr = FakeManager(frames=[_frame(i) for i in range(1, 50)])
         col = Collector()
+        ctx = _live_ctx(FakeManager(frames=[_frame(i) for i in range(1, 50)]), col)
         t0 = time.time()
-        cps._observe(mgr, self.M, 0.5, col, {}, poll_s=0.1)
+        ctx.observe(0.5, poll_s=0.1)
         el = time.time() - t0
         self.assertGreaterEqual(el, 0.5)
         self.assertLess(el, 0.9)
@@ -175,42 +160,39 @@ class PlantPoll(unittest.TestCase):
 class RunLifecycle(unittest.TestCase):
     def setUp(self):
         self.out = tempfile.mkdtemp(prefix="cps-run-")
-        self._saved = (cps.Kathara, cps.Setting, cps._download_artifacts,
-                       cps.active_attack.drive_attack, cps.time.sleep, cps.LEARN_MARGIN_S)
-        cps.Setting = types.SimpleNamespace(get_instance=lambda: types.SimpleNamespace(
-            load_from_dict=lambda d: None))
-        cps._download_artifacts = lambda manager, m, out_dir, attack=True, it=False: None
-        cps.LEARN_MARGIN_S = 0.0
-        real_sleep = self._saved[4]
-        cps.time.sleep = lambda s: real_sleep(min(s, 0.05))   # services' fixed 2 s pause
+        self._saved = (active_attack.drive_attack, cps_scenario.LEARN_MARGIN_S,
+                       cps_scenario.SERVICE_SETTLE_S)
+        cps_scenario.LEARN_MARGIN_S = 0.0
+        cps_scenario.SERVICE_SETTLE_S = 0.0
 
         def fake_attack(manager, attacker, gt, **kw):
             gt.record("attack_start", mode=kw["attack_mode"])
             gt.record("modbus_write", register=2, register_name="ctrl_mode", value=1.0, ok=True)
             gt.record("attack_end", rc=0)
             return 0
-        cps.active_attack.drive_attack = fake_attack
+        active_attack.drive_attack = fake_attack
 
     def tearDown(self):
-        (cps.Kathara, cps.Setting, cps._download_artifacts, cps.active_attack.drive_attack,
-         cps.time.sleep, cps.LEARN_MARGIN_S) = self._saved
+        (active_attack.drive_attack, cps_scenario.LEARN_MARGIN_S,
+         cps_scenario.SERVICE_SETTLE_S) = self._saved
 
     def _args(self, attack=True):
-        return types.SimpleNamespace(
-            out_dir=self.out, seed=1, step_interval=1.0, normal_duration=0.2, learn_seconds=0.1,
-            detectors="rules,model", attack=attack, attack_mode="manual-hijack",
-            attack_repeat=None, attack_interval=0.5, post_attack_duration=0.2,
-            dashboard_port=0, poll_interval=0.05, progress_file=None)
+        return default_args(
+            cps_scenario.CpsScenario(), out_dir=self.out, seed=1, normal_duration=0.2,
+            learn_seconds=0.1, attack=attack, attack_mode="manual-hijack",
+            post_attack_duration=0.2, poll_interval=0.05)
 
-    def _use(self, mgr):
-        cps.Kathara = types.SimpleNamespace(get_instance=lambda: mgr)
+    def _run(self, mgr, progress=None, attack=True):
+        with fake_downloads():
+            return cps.run(self._args(attack), progress=progress, manager=mgr)
 
     def test_phases_in_order_with_own_ledger(self):
-        self._use(FakeManager(frames=[_frame(i) for i in range(1, 200)]))
-        cps.run(self._args())
+        mgr = FakeManager(frames=[_frame(i) for i in range(1, 200)])
+        self.assertEqual(self._run(mgr), 0)
         evs = read_events(os.path.join(self.out, "progress.jsonl"))
         kinds = [e["kind"] for e in evs]
         self.assertEqual(kinds[0], "run_start")
+        self.assertEqual(evs[0]["scenario"], "cps")
         self.assertEqual(kinds[-1], "run_end")
         self.assertEqual(evs[-1]["status"], "ok")
         self.assertTrue(all(e["run_id"] == os.path.basename(self.out) for e in evs))
@@ -221,25 +203,42 @@ class RunLifecycle(unittest.TestCase):
         self.assertIn("plant", kinds)
         w = [e for e in evs if e["kind"] == "attack_write"]
         self.assertEqual([(x["register_name"], x["value"]) for x in w], [("ctrl_mode", 1.0)])
+        self.assertEqual(mgr.deployed, ["cps"])
+        self.assertEqual(mgr.undeployed, ["cps", "cps"])     # stale lab first, then ours
+        self.assertTrue(os.path.exists(os.path.join(self.out, "topology.json")))
+
+    def test_planner_label_on_run_start(self):
+        args = self._args()
+        args.attack_driver, args.attacker_profile = "planner", "stealthy"
+        info = cps_scenario.CpsScenario().run_info(args)
+        self.assertEqual(info["mode"], "planner:stealthy")
 
     def test_normal_run_has_no_attack_phases(self):
-        self._use(FakeManager())
-        cps.run(self._args(attack=False), progress=(col := Collector()))
+        col = Collector()
+        self._run(FakeManager(), progress=col, attack=False)
         names = [e["name"] for e in col.events if e["kind"] == "phase" and e["state"] == "start"]
         self.assertEqual(names, ["deploy", "services", "normal", "download", "undeploy"])
         self.assertEqual(col.events[0]["mode"], "normal")
 
     def test_failure_is_recorded_and_raised(self):
-        self._use(FakeManager(fail_deploy=True))
         col = Collector()
         with self.assertRaises(RuntimeError):
-            cps.run(self._args(), progress=col)
+            self._run(FakeManager(fail_deploy=True), progress=col)
         end = col.events[-1]
         self.assertEqual(end["kind"], "run_end")
         self.assertEqual(end["status"], "failed")
         self.assertIn("deploy failed", end["error"])
         deploy = [e for e in col.events if e["kind"] == "phase" and e["name"] == "deploy"]
         self.assertEqual(deploy[-1]["ok"], False)
+
+    def test_lab_is_undeployed_when_the_episode_fails(self):
+        def boom(*a, **k):
+            raise RuntimeError("attack exploded")
+        active_attack.drive_attack = boom
+        mgr = FakeManager()
+        with self.assertRaises(RuntimeError):
+            self._run(mgr, progress=Collector())
+        self.assertEqual(mgr.undeployed, ["cps", "cps"])
 
 
 if __name__ == "__main__":

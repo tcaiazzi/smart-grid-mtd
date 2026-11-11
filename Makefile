@@ -175,7 +175,7 @@ ATTACK_OUT_DIR := $(EXP_DIR)/attack/model-$(MODEL_SRC)
 
 BASELINE_DIR := $(OUTPUT_ROOT)/baseline-mbps$(BG_REPLAY_MBPS)
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay dashboard selftest lab-conf platform-loc clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -217,6 +217,10 @@ help:
 	@echo "  train-rl            Train the RL coordinator policy offline -> $(RL_DIR)/policy.{zip,npz}"
 	@echo "  compare-rl          Model-free RL-vs-fixed-MTD comparison -> $(OUTPUT_ROOT)/compare-<slug>/"
 	@echo "  plot-tradeoff       Security-vs-hop-cost frontier (RL vs fixed) -> $(RL_DIR)/tradeoff.pdf"
+	@echo "  dashboard           Live progress of every scenario's runs/campaigns (http://127.0.0.1:$(CPS_DASH_PORT))"
+	@echo "  selftest            Whole test suite, no Kathará/Docker"
+	@echo "  lab-conf            Export SCENARIO=$(SCENARIO) as a Kathará lab dir -> $(OUTPUT_ROOT)/labconf/$(SCENARIO)/"
+	@echo "  platform-loc        Code size: platform core vs plane components vs scenarios"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
 	@echo "RL coordinator: add RL=1 to datasets/train/attack to use the trained policy"
@@ -543,7 +547,7 @@ cps-selftest:              ## CPS physics, Modbus, PLC, sensor rules+model, atta
 	$(PYTHON) -m unittest -v tests.test_grid_sim tests.test_modbus_roundtrip \
 		tests.test_plc_control tests.test_ot_sensor tests.test_ot_model \
 		tests.test_active_attack tests.test_cps_topology tests.test_cps_metrics \
-		tests.test_progress tests.test_cps_campaign tests.test_cps_dashboard \
+		tests.test_progress tests.test_cps_campaign tests.test_dashboard \
 		tests.test_soar_kg tests.test_soar_trees tests.test_soar_mapping \
 		tests.test_soar_policy tests.test_cps_responder tests.test_attack_planner \
 		tests.test_it_sensor
@@ -571,10 +575,11 @@ cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + ag
 		--modes $(CPS_MODES) --seeds $(CPS_SEEDS) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--post-attack-duration $(CPS_POST) --step-interval $(CPS_STEP) \
-		--detectors $(CPS_DETECTORS) $(CPS_RESPOND_FLAGS) $(if $(DRY),--dry-run)
+		--detectors $(CPS_DETECTORS) $(CPS_RESPOND_FLAGS) $(CPS_ATTACK_FLAGS) $(CPS_IT_FLAG) \
+		$(if $(DRY),--dry-run)
 
-cps-dashboard:             ## progress dashboard for CPS runs/campaigns on http://127.0.0.1:$(CPS_DASH_PORT)
-	$(PYTHON) -m monitor.cps_dashboard --root $(OUTPUT_ROOT)/cps --port $(CPS_DASH_PORT)
+cps-dashboard:             ## progress dashboard restricted to the CPS runs/campaigns
+	$(PYTHON) -m monitor.dashboard --root $(OUTPUT_ROOT)/cps --port $(CPS_DASH_PORT)
 
 cps-metrics:               ## score a finished run (detection, impact, response)
 	$(PYTHON) -m monitor.cps_metrics --out-dir $(CPS_OUT) --report $(CPS_OUT)/metrics.md
@@ -583,6 +588,21 @@ cps-replay:                ## what a response policy WOULD have done on a finish
 	$(PYTHON) -m network_scenario.cps_responder --replay $(CPS_OUT) \
 		--policy $(if $(filter off,$(CPS_RESPOND)),rules,$(CPS_RESPOND)) --approval $(CPS_APPROVAL)
 
+
+# ── Platform (every scenario) ────────────────────────────────────────────────
+SCENARIO ?= cps
+
+dashboard:                 ## progress dashboard of every scenario's runs/campaigns on http://127.0.0.1:$(CPS_DASH_PORT)
+	$(PYTHON) -m monitor.dashboard --root $(OUTPUT_ROOT) --port $(CPS_DASH_PORT)
+
+selftest:                  ## the whole test suite (no Kathará, no Docker)
+	$(PYTHON) -m unittest $(patsubst %.py,%,$(subst /,.,$(wildcard tests/test_*.py)))
+
+lab-conf:                  ## export SCENARIO's topology as a Kathará lab dir (lab.conf + .startup)
+	$(PYTHON) -m network_scenario.core export $(SCENARIO) --out $(OUTPUT_ROOT)/labconf/$(SCENARIO)
+
+platform-loc:              ## lines of code: platform core vs per-plane components vs each scenario
+	$(PYTHON) -m network_scenario.core loc --markdown $(OUTPUT_ROOT)/platform-loc.md
 
 clean:
 	rm -rf output

@@ -1,7 +1,7 @@
 """kg.py — knowledge graph v0 of the cyber-physical lab.
 
 Built from the Kathará Lab model (machines, their interfaces/collision domains
-and the "addresses" meta that cps_experiment.build_lab sets), the boundary
+and the "addresses" meta that core.topology.build_lab sets), the boundary
 firewall ruleset and the OT plant contract (defense_plane/ot_registers.py).
 
 Node ids are typed by prefix:
@@ -264,22 +264,16 @@ def save(g, path):
 def cps_catalog():
     """Services and roles of the CPS lab. Imported lazily so this module does
     not pull in Kathará/network_scenario unless the CPS lab is wanted."""
-    from network_scenario import cps_experiment as cps
-    services = {
-        "hmi":    [("diag-http", "tcp", cps.APP_PORT, "http")],
-        "engine": [("modbus", "tcp", cps.MODBUS_PORT, "modbus")],
-    }
-    roles = {"plc": "plc", "hmi": "hmi", "engine": "plant", "sensor": "sensor",
-             "firewall": BOUNDARY_ROLE, "attacker": "it-host"}
-    return services, roles
+    from network_scenario.scenarios.cps import topology as cps
+    return cps.services(), cps.roles()
 
 
 def build_cps_kg(lab=None):
-    """Knowledge graph of the CPS lab (builds the Lab model if not given)."""
-    import types
-    from network_scenario import cps_experiment as cps
+    """Knowledge graph of the CPS lab: the deployed ``lab`` when given, else
+    the Lab model built from the scenario's topology."""
+    from network_scenario.scenarios.cps import topology as cps
     if lab is None:
-        lab, _m, _s = cps.build_lab(types.SimpleNamespace(dashboard_port=0))
+        lab, _m, _s = cps.build_lab()
     services, roles = cps_catalog()
     return build_kg(lab, cps.firewall_rules(), services=services, roles=roles,
                     plant_service=("engine", "modbus"))

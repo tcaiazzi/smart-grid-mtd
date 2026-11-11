@@ -29,6 +29,8 @@ import time
 
 from defense_plane.soar import kg as kgmod
 from defense_plane.soar import mapping, policy, trees
+from network_scenario.core.component import TelemetryCursor
+from network_scenario.core.streams import read_jsonl
 
 log = logging.getLogger("cps_responder")
 
@@ -135,7 +137,12 @@ class Responder(threading.Thread):
     """Live responder: tails the sensor, decides, applies countermeasures."""
 
     def __init__(self, manager, machines, kind, out_dir, emit=None, interval=0.5,
-                 approval="auto", exec_fn=None, read_fn=None, it=False, it_read_fn=None):
+                 approval="auto", exec_fn=None, read_fn=None, it=False, it_read_fn=None,
+                 sources=None, g=None):
+        """``sources`` are read functions ``read(start_line) -> text`` over the
+        guest telemetry files (core.component.tail_reader); by default the OT
+        sensor's and, with ``it``, the HMI's IT sensor's. ``g`` is the knowledge
+        graph of the deployed lab (default: the scenario topology's)."""
         super().__init__(name="cps-responder", daemon=True)
         self.manager, self.machines = manager, machines
         self.interval = float(interval)
@@ -145,15 +152,16 @@ class Responder(threading.Thread):
         os.makedirs(out_dir, exist_ok=True)
         self.record = JsonlRecorder(os.path.join(out_dir, "response.jsonl"))
         self.engine = ResponseEngine(
-            kind, approval, record=self.record, it=self.it,
+            kind, approval, g=g, record=self.record, it=self.it,
             on_state=lambda snap: self.emit("tree_state", **compact_state(snap)))
         write_structure(out_dir, self.engine.g, it=self.it)
         self._exec = exec_fn or self._exec_in_lab
-        # Telemetry sources: the OT sensor, and (with IT) the HMI's IT sensor.
-        # Each keeps its own line cursor.
-        self._sources = [{"read": read_fn or self._read_sensor, "lines": 0}]
-        if self.it:
-            self._sources.append({"read": it_read_fn or self._read_it_sensor, "lines": 0})
+        # One cursor per telemetry source (complete lines only, see TelemetryCursor).
+        if sources is None:
+            sources = [read_fn or self._read_sensor]
+            if self.it:
+                sources.append(it_read_fn or self._read_it_sensor)
+        self._cursors = [TelemetryCursor(r) for r in sources]
         self._halt = threading.Event()
         self._pending = []            # (due_t, decision, countermeasure id)
         self.record("response_up", policy=kind, approval=approval, interval=self.interval,
@@ -161,7 +169,7 @@ class Responder(threading.Thread):
 
     @property
     def _lines(self):
-        return self._sources[0]["lines"]     # OT source cursor (compat)
+        return self._cursors[0].lines     # OT source cursor
 
     # ── lab I/O ──────────────────────────────────────────────────────────────
     def _exec_in_lab(self, machine, cmd):
@@ -197,18 +205,8 @@ class Responder(threading.Thread):
             self._halt.wait(self.interval)
 
     def poll_once(self):
-        for src in self._sources:
-            raw = src["read"](src["lines"] + 1)
-            lines = raw.split("\n")
-            complete = lines[:-1]      # the last element is "" or a partial line
-            src["lines"] += len(complete)
-            for line in complete:
-                if not line.strip():
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
+        for cur in self._cursors:
+            for ev in cur.poll():
                 d = self.engine.on_event(ev, now=time.time())
                 if d is not None:
                     self._dispatch(d)
@@ -268,23 +266,26 @@ def replay_run(run_dir, kind, approval="auto", out_path=None):
             break
     if tel is None:
         raise FileNotFoundError(f"no sensor telemetry in {run_dir}")
+    # With the IT sensor, its findings join the OT ones in time order.
+    it_tel = next((os.path.join(run_dir, n) for n in ("hmi.it_telemetry.jsonl",
+                                                      "it_telemetry.jsonl")
+                   if os.path.exists(os.path.join(run_dir, n))), None)
     rec = JsonlRecorder(out_path)
-    rec("response_up", policy=kind, approval=approval, replay=True, source=tel)
-    eng = ResponseEngine(kind, approval, record=rec)
+    rec("response_up", policy=kind, approval=approval, replay=True, source=tel,
+        it=bool(it_tel))
+    eng = ResponseEngine(kind, approval, record=rec, it=bool(it_tel))
+    events = read_jsonl(tel) + (read_jsonl(it_tel) if it_tel else [])
+    events.sort(key=lambda e: e.get("t") or 0)
     decisions = []
-    with open(tel) as f:
-        for line in f:
-            try:
-                ev = json.loads(line)
-            except ValueError:
-                continue
-            d = eng.on_event(ev, now=ev.get("t"))
-            if d is not None:
-                decisions.append(d)
-                for a in d.actions:
-                    if a != "notify":
-                        rec("action", t=ev.get("t"), id=a, machine=eng.cms[a].machine,
-                            ok=True, planned=True, issued_t=ev.get("t"), done_t=ev.get("t"))
+    for ev in events:
+        d = eng.on_event(ev, now=ev.get("t"))
+        if d is None:
+            continue
+        decisions.append(d)
+        for a in d.actions:
+            if a != "notify":
+                rec("action", t=ev.get("t"), id=a, machine=eng.cms[a].machine,
+                    ok=True, planned=True, issued_t=ev.get("t"), done_t=ev.get("t"))
     rec.close()
     return decisions, rec.rows
 

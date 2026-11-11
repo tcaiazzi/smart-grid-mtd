@@ -33,7 +33,7 @@ from mtd_coordinator import SEMPCoordinator  # noqa: E402
 from mtd_executor import SCMCExecutor  # noqa: E402
 from microgrid_sim import build_microgrid, sensor_rng, step_microgrid  # noqa: E402
 
-from network_scenario.run_experiment import role_seed, seed_arg  # noqa: E402
+from network_scenario.core.context import role_seed, seed_arg  # noqa: E402
 
 KNOBS = ("hop", "pad", "src", "freq")
 

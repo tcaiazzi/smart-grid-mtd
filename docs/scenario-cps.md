@@ -231,6 +231,6 @@ README, sezione "Response (SOAR prototype)"). Comprende:
 | PLC e HMI | `traffic_generator/agents/plc_controller.py`, `hmi_client.py` |
 | Catena d'attacco | `attack_plane/agents/`, `attack_plane/active_attack.py` |
 | Sensore e modello | `defense_plane/agents/ot_sensor.py`, `ot_model.py` |
-| Lab e orchestrazione | `network_scenario/cps_experiment.py`, `cps_campaign.py` |
-| Metriche e dashboard | `monitor/cps_metrics.py`, `cps_dashboard.py` |
+| Lab e orchestrazione | `network_scenario/scenarios/cps/` (topologia, episodio) sul core `network_scenario/core/`; CLI `cps_experiment.py`, `cps_campaign.py` |
+| Metriche e dashboard | `monitor/cps_metrics.py`, `monitor/dashboard.py` (dashboard comune a tutti gli scenari) |
 | Comandi | `make cps-selftest`, `cps-image`, `cps-lab`, `cps-attack`, `cps-campaign`, `cps-dashboard`, `cps-metrics` (dettagli nel README) |

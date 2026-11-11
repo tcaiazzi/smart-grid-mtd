@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from defense_plane.soar import policy  # noqa: E402
-from network_scenario import cps_experiment as cps  # noqa: E402
+from network_scenario.scenarios.cps import topology as cps  # noqa: E402
 from network_scenario import cps_responder as cr  # noqa: E402
 from tests.test_soar_mapping import HMI, finding  # noqa: E402
 

@@ -1,4 +1,4 @@
-"""Tests for the CPS progress dashboard server (monitor/cps_dashboard.py): a
+"""Tests for the platform progress dashboard server (monitor/dashboard.py): a
 real HTTP server on a free port over a temporary root holding fake ledgers —
 a finished campaign, a running one, an interrupted one, a standalone run.
 
@@ -7,7 +7,7 @@ Checks ledger discovery and derived status, incremental event paging with
 that only discovered ledgers are served (no path traversal), and that the page
 is served.
 
-Run: `.venv/bin/python -m unittest tests.test_cps_dashboard`.
+Run: `.venv/bin/python -m unittest tests.test_dashboard`.
 """
 
 import json
@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from monitor.cps_dashboard import ProgressDashboard, summarize   # noqa: E402
+from monitor.dashboard import ProgressDashboard, summarize   # noqa: E402
 from monitor.progress import ProgressLog                         # noqa: E402
 
 GRID = [{"run_id": "normal-s1", "mode": "normal", "seed": 1, "attack": False},
@@ -119,7 +119,7 @@ class Server(_Fixture):
         status, ctype, body = self.get("/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", ctype)
-        self.assertIn(b"CPS experiment progress", body)
+        self.assertIn(b"Experiment progress", body)
         for ext in (b'src="http', b"src='http", b'href="http', b"@import"):
             self.assertNotIn(ext, body)                            # self-contained, no CDN
 
@@ -175,6 +175,30 @@ class Structure(_Fixture):
         self.assertEqual(status, 200)
         self.assertIn("javascript", ctype)
         self.assertIn(b"drawTopology", body)
+
+
+class OtherScenarios(_Fixture):
+    """A ledger of another scenario (MQTT) is listed with its scenario and has
+    no knowledge-graph structure; older ledgers without one count as CPS."""
+
+    def setUp(self):
+        super().setUp()
+        run = ProgressLog(os.path.join(self.root, "mqtt", "datasets", "progress.jsonl")).bind(
+            run_id="train")
+        run.emit("run_start", scenario="mqtt-mtd", mode="dataset", seed=1, phases=[])
+        run.emit("mtd_action", action="hop", status="applied", cost=0.45)
+        run.emit("run_end", status="ok")
+        run._log.close()
+
+    def test_scenario_in_listing_and_no_structure(self):
+        led = self.ledgers()
+        self.assertEqual(led[os.path.join("mqtt", "datasets", "progress.jsonl")]["scenario"],
+                         "mqtt-mtd")
+        self.assertEqual(led[os.path.join("manual-run", "progress.jsonl")]["scenario"], "cps")
+        lid = urllib.parse.quote(os.path.join("mqtt", "datasets", "progress.jsonl"))
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self.get(f"/api/structure?id={lid}&run=train")
+        self.assertEqual(cm.exception.code, 404)
 
 
 class Summary(unittest.TestCase):

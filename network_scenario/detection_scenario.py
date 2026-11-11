@@ -17,34 +17,17 @@ which the containers share) next to the run's captures. The ground truth stays o
 host: the SEMP never sees it. monitor/delivery_dataset.py turns it into labels.
 """
 
-import json
 import logging
 import random
 import re
 import threading
-import time
+
+from network_scenario.core.streams import GroundTruth
 
 log = logging.getLogger(__name__)
 
 _ADDR_RE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)")
 ROUTER_DEVS = ("eth0", "eth1")       # eth0 → SCMC side (link A), eth1 → SEMP side (link B)
-
-
-class GroundTruth:
-    """Append-only ground_truth.jsonl writer (thread-safe)."""
-
-    def __init__(self, path: str):
-        self._lock = threading.Lock()
-        self._f = open(path, "w", buffering=1)
-
-    def record(self, kind: str, **fields) -> None:
-        line = json.dumps({"t": round(time.time(), 3), "kind": kind, **fields})
-        with self._lock:
-            self._f.write(line + "\n")
-
-    def close(self) -> None:
-        with self._lock:
-            self._f.close()
 
 
 def _run(manager, machine, cmd: str) -> str:
@@ -108,8 +91,9 @@ def executor_state(manager, scmc, port_pool) -> dict:
     return state
 
 
-class Scenario:
-    """Drives blackhole and benign-fault episodes during the post-attack phase."""
+class FaultInjector:
+    """Drives blackhole and benign-fault episodes during the post-attack phase
+    (wrapped as a component by attack_plane.components.DeliveryAttack)."""
 
     def __init__(self, manager, router, scmc, gt: GroundTruth, port_pool, seed, relaunch):
         self.manager, self.router, self.scmc, self.gt = manager, router, scmc, gt
@@ -129,13 +113,13 @@ class Scenario:
         _run(self.manager, self.router, f"iptables -A FORWARD -s {ip} -j DROP")
         self._blocked.add(ip)
         self.gt.record("block", ip=ip, target=target)
-        log.info("[Scenario] Blackhole %s (%s)", ip, target)
+        log.info("[FaultInjector] Blackhole %s (%s)", ip, target)
 
     def unblock(self, ip: str) -> None:
         _run(self.manager, self.router, f"iptables -D FORWARD -s {ip} -j DROP")
         self._blocked.discard(ip)
         self.gt.record("unblock", ip=ip)
-        log.info("[Scenario] Lifted blackhole on %s", ip)
+        log.info("[FaultInjector] Lifted blackhole on %s", ip)
 
     def _target(self, oracle: str, cnn_ip: str):
         if not oracle:
@@ -145,7 +129,7 @@ class Scenario:
                 or executor_state(self.manager, self.scmc, self.port_pool))
         ip = path.get("src_ip" if which == "src" else "broker_ip")
         if ip is None:
-            log.warning("[Scenario] SCMC path unknown — oracle block skipped")
+            log.warning("[FaultInjector] SCMC path unknown — oracle block skipped")
         return ip, f"oracle-{which}"
 
     def _blocks(self, oracle: str, cnn_ip: str, duration: float, episodes: int) -> None:
@@ -171,7 +155,7 @@ class Scenario:
             _run(self.manager, self.router, f"tc qdisc replace dev {dev} root netem {spec}")
             self._netem_devs.add(dev)
         self.gt.record("impair_start", type=kind, devs=list(devs), params=params)
-        log.info("[Scenario] netem %s on %s for %.0fs", spec, ",".join(devs), duration)
+        log.info("[FaultInjector] netem %s on %s for %.0fs", spec, ",".join(devs), duration)
         self.stop.wait(duration)
         self._netem_clear()
         self.gt.record("impair_stop", type=kind)
@@ -185,7 +169,7 @@ class Scenario:
         state = executor_state(self.manager, self.scmc, self.port_pool)
         self.restarts += 1
         self.gt.record("executor_restart", phase="kill", state=state)
-        log.info("[Scenario] Restarting the SCMC executor (resume state %s)", state)
+        log.info("[FaultInjector] Restarting the SCMC executor (resume state %s)", state)
         _run(self.manager, self.scmc, "pkill -f mtd_executor.py")
         self.stop.wait(self._rng_impair.uniform(1.0, 5.0))
         self.relaunch(state, self.restarts)

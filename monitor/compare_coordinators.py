@@ -65,6 +65,7 @@ from monitor.plot_results import (
     ranking_nanogrid_detection,
 )
 from defense_plane.rl_policy import KNOB_COST, KNOBS
+from monitor.mqtt_metrics import availability_cost
 
 # Per-knob availability cost, the SAME weights the RL reward charges in
 # mtd_env (Calibration.cost is itself rl_policy.KNOB_COST). Keyed by knob name so
@@ -187,18 +188,6 @@ def load_availability(exp_dir: str) -> dict:
     }
 
 
-# Knob-actuation event lines the SCMC executor writes to client.log. Each carries an
-# ISO wall-clock timestamp and maps to a costed knob (see COST). The broker hop line
-# carries both endpoints so we can tell an ip hop (0.30) from a port-only hop (0.15).
-_LOG_TS_RE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)")
-_BROKER_HOP_RE = re.compile(
-    r"\] hop seq=\d+\s+(\d{1,3}(?:\.\d{1,3}){3}):(\d+)\s+→\s+"
-    r"(\d{1,3}(?:\.\d{1,3}){3}):(\d+)")
-_SRC_HOP_RE = re.compile(r"\] src hop seq=\d+")
-_PAD_RE = re.compile(r"\] padding policy →")
-_FREQ_RE = re.compile(r"\] publish interval →")
-
-
 def _client_log(exp_dir: str):
     """The attack-run SCMC executor log holding the knob-actuation events, or None."""
     attack_dir = _attack_capture_dir(exp_dir)
@@ -209,59 +198,13 @@ def _client_log(exp_dir: str):
 
 
 def load_availability_cost(exp_dir: str) -> dict:
-    """Cumulative availability cost a coordinator pays to hop, over the run, or {}.
-
-    Parses the attack-run client.log: every knob actuation the SCMC executor logs is
-    charged the SAME per-knob weight the RL reward uses (COST, from mtd_env). A broker
-    hop is costed per field that actually changed — ip (0.30) and/or port (0.15) — so a
-    port-only NAT swap is cheap while a full ip+port hop is dear, mirroring the env's
-    independent knobs. src hops cost 0.30; padding/frequency retimes 0.01 each. The
-    baseline (no MTD) emits none of these lines, so its cost stays flat at 0.
-
-    Times are anchored to the first log line so the curve starts at run start. Returns
-    {"rel_events": [(rel_t, cost), ...] sorted, "total_cost": float, "window_s": float}.
-    """
+    """Cumulative availability cost a coordinator pays to hop, over the attack run,
+    or {} (see monitor.mqtt_metrics.availability_cost)."""
     log_path = _client_log(exp_dir)
     if log_path is None:
         print(f"[warn] no attack client.log under {exp_dir}/attack — no cost curve")
         return {}
-
-    def _ts(line: str):
-        m = _LOG_TS_RE.match(line)
-        return (datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp()
-                if m else None)
-
-    t0, events = None, []
-    with open(log_path, errors="replace") as f:
-        for line in f:
-            ts = _ts(line)
-            if ts is None:
-                continue
-            if t0 is None:
-                t0 = ts
-            cost = 0.0
-            m = _BROKER_HOP_RE.search(line)
-            if m:
-                old_ip, old_port, new_ip, new_port = m.group(1), m.group(2), m.group(3), m.group(4)
-                if new_ip != old_ip:
-                    cost += COST["ip"]
-                if new_port != old_port:
-                    cost += COST["port"]
-            elif _SRC_HOP_RE.search(line):
-                cost = COST["src"]
-            elif _PAD_RE.search(line):
-                cost = COST["pad"]
-            elif _FREQ_RE.search(line):
-                cost = COST["freq"]
-            if cost > 0.0:
-                events.append((ts - t0, cost))
-
-    events.sort()
-    return {
-        "rel_events": events,
-        "total_cost": float(sum(c for _, c in events)),
-        "window_s": events[-1][0] if events else 0.0,
-    }
+    return availability_cost(log_path)
 
 
 def load_detection(exp_dir: str) -> dict:

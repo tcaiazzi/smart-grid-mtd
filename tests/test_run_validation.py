@@ -19,10 +19,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from network_scenario.run_experiment import (  # noqa: E402
+from network_scenario.core.context import with_console_log  # noqa: E402
+from network_scenario.scenarios.mqtt_mtd.scenario import (  # noqa: E402
     check_published,
     count_publishes,
-    with_console_log,
 )
 
 EXECUTOR_LOG = """\

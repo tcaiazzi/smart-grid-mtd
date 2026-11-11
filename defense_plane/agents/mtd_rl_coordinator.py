@@ -303,7 +303,7 @@ def main():
         hop_timeout=args.hop_timeout, shared_key=args.shared_key,
         policy_path=args.policy, tick_interval=args.tick, seed=args.seed,
         telemetry_path=args.telemetry_path, dashboard_port=args.dashboard_port,
-        detector_model=args.detector_model,
+        detector_model=args.detector_model, observe_data=args.observe_data,
     ).run()
 
 

@@ -2,12 +2,22 @@
 
 AI-driven Moving Target Defense (MTD) for MQTT communications in a smart grid, emulated with [Kathará](https://github.com/KatharaFramework/Kathara).
 
+The repository is a **platform** for testing attacks and defenses on emulated
+cyber-physical systems safely, reproducibly and observably, with two
+**scenarios** on it: the MQTT smart grid of the workshop paper (MTD vs ML
+traffic fingerprinting) and a cyber-physical OT/Modbus plant (active IT→OT
+attack, DPI/IT sensors, SOAR response). How the platform is built and how to
+add a scenario: **[docs/platform.md](docs/platform.md)**.
+
 The source is organized into the platform's four functional planes plus the
-network scenario they surround (see the paper, Fig. 1):
+network scenario they surround (see the paper, Fig. 1). Each plane exposes its
+reusable building blocks in `<plane>/components.py`:
 
 | Package | Plane |
 |---|---|
-| `network_scenario/` | Kathará lab (topology, machines, deploy/exec lifecycle) |
+| `network_scenario/core/` | Platform core: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry |
+| `network_scenario/scenarios/` | The scenarios (`mqtt_mtd`, `cps`): topology + episode + campaign |
+| `network_scenario/` | Scenario entry points (`run_experiment.py`, `cps_experiment.py`, `cps_campaign.py`), the guest deploy manifest |
 | `defense_plane/` | MTD coordinators (fixed-timer + RL), the QKD-simulated cert bootstrap |
 | `attack_plane/` | The 1D-CNN fingerprinting classifier + attack actuation |
 | `traffic_generator/` | Background trace replay + the nanogrid MQTT publishers |
@@ -35,9 +45,13 @@ MTD, RL-cost, RL-entropy (training both RL policies first if missing) — at the
 replay rate (`MBPS=2`) the paper's reported numbers were generated at, then
 runs `compare_coordinators.py` to produce `availability_comparison.pdf` (Fig. 2a),
 `detection_comparison.pdf` (Fig. 2b), `availability_cost_comparison.pdf` (Fig. 2c)
-and `entropy_comparison.pdf` (Fig. 3) under `output/compare-<slug>/`. It shells
-out to the same `make` targets `run_single.sh` does, so the two stay in
-lockstep — see `tests/` for the checks that enforce that.
+and `entropy_comparison.pdf` (Fig. 3) under `output/compare-<slug>/`. It runs the
+evaluation as a campaign on the platform's runner, whose steps are the same `make`
+targets `run_single.sh` uses (so the two stay in lockstep — see `tests/`): lab
+steps are retried, a failed configuration does not stop the others, every attack
+run is scored (`monitor/mqtt_metrics.py`) and `output/campaigns/paper-mbps<M>/summary.md`
+holds the per-configuration mean [95% CI] across `--runs`. `make dashboard` follows
+it live.
 
 ---
 
@@ -157,7 +171,11 @@ never over link B, so the attacker's capture contains no dashboard traffic; the
 data-plane observer subscribes over a loopback-only mosquitto listener. Every
 event is also written to `telemetry.jsonl`, downloaded next to `coordinator.log`;
 open `defense_plane/agents/mtd_dashboard.html` directly in a browser and load
-that file to replay a finished run.
+that file to replay a finished run. The data-plane observer (`data` / `data_gap`
+events, which the delivery detector and its dataset need) runs on every MTD run,
+with or without the dashboard. Every run also writes a host-side progress ledger
+in its output dir, which `make dashboard` shows with the MTD actions per knob and
+the delivery gaps mirrored live.
 
 ### Delivery-attack detector (blackhole seen from the SEMP)
 
@@ -280,7 +298,8 @@ off the sensor's mgmt NIC.
 ```bash
 make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5      # 4 modes x 5 seeds = 20 runs (~30 min)
 make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5 DRY=1   # print the grid and the planned time
-make cps-dashboard                                    # http://127.0.0.1:8765 (CPS_DASH_PORT)
+make cps-campaign CPS_CAMPAIGN=p1 CPS_RESPOND=solver CPS_IT=1 CPS_ATTACK_DRIVER=planner
+make dashboard                                        # http://127.0.0.1:8765 (CPS_DASH_PORT), every scenario
 ```
 
 `cps-campaign` (`network_scenario/cps_campaign.py`) runs `CPS_MODES` (default
@@ -290,13 +309,16 @@ is scored as it finishes (`metrics.json`/`metrics.md`) and the aggregate is refr
 (`summary.md`, `summary.csv` per mode x detector, `impact.csv` per mode). Re-running the
 same `CPS_CAMPAIGN` resumes it (scored runs are skipped); a failed run is retried once,
 then recorded and skipped; Ctrl-C undeploys the lab and marks the campaign interrupted.
+Every option of the CPS run (`python -m network_scenario.cps_experiment --help`) is
+accepted by the campaign and applies to all its runs; `ci.csv` and the last table of
+`summary.md` give every metric's mean [95% CI] per mode.
 
 Everything is written to a progress ledger, `progress.jsonl` (`monitor/progress.py`; a
 standalone `make cps-lab`/`cps-attack` writes one in its `CPS_OUT` too): phases, the
 live plant state and the sensor's findings pulled from the containers every ~2 s, the
-attacker's writes, each run's metrics and the aggregate. `cps-dashboard`
-(`monitor/cps_dashboard.py`, stdlib, read-only, 127.0.0.1) follows every ledger under
-`output/cps`: campaign progress and ETA, the queue with per-run detection latencies and
+attacker's writes, each run's metrics and the aggregate. `make dashboard`
+(`monitor/dashboard.py`, stdlib, read-only, 127.0.0.1) follows every ledger under
+`output/` — every scenario; `make cps-dashboard` only `output/cps`. For CPS runs it shows campaign progress and ETA, the queue with per-run detection latencies and
 impact, the current run's phase timeline, live bus voltages with the attack and the
 first finding of each detector marked, findings by class, and the aggregated results.
 It can be started before, during or after a campaign.
@@ -330,7 +352,7 @@ A first end-to-end data → detection → response loop on top of the sensor
 It is off by default (`CPS_RESPOND=off`), which leaves the scenario unchanged.
 
 - **Knowledge graph** (`soar/kg.py`, networkx). It is built from the Kathará Lab model:
-  hosts, zones and the `addresses` meta that `build_lab` sets on each machine, plus
+  hosts, zones and the `addresses` meta that `core.topology.build_lab` sets on each machine, plus
   services, the plant's registers and role permissions (`ot_registers.ROLE_POLICY`) and
   the boundary FORWARD rules. `reachable(g, src, dst, port)` decides whether a host can
   reach a port on another from zones, addresses and rules.

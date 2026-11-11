@@ -13,7 +13,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from defense_plane import ot_registers as reg  # noqa: E402
 from defense_plane.soar import kg  # noqa: E402
-from network_scenario import cps_experiment as cps  # noqa: E402
+from network_scenario.scenarios.cps import topology as cps  # noqa: E402
 
 
 class CPSKnowledgeGraph(unittest.TestCase):

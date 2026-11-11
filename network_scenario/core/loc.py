@@ -1,0 +1,128 @@
+"""loc.py — how much code is platform and how much is scenario.
+
+Counts source lines (non-blank, not a comment-only line) of:
+
+  platform core        network_scenario/core, the ledger, the dashboard, the
+                       guest deploy manifest
+  plane components     <plane>/components.py — reusable building blocks
+  each scenario        its SOURCES (network_scenario/scenarios/<x>/__init__.py)
+                       by category, plus the guest agents its nodes run (from
+                       the deploy manifests it lists); files used by more than
+                       one scenario are counted once, as shared
+
+This is the "cost of a scenario" table: what a new scenario has to write
+versus what it gets from the platform.
+"""
+
+import glob
+import importlib
+import os
+
+from network_scenario.core import registry
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+CORE = {
+    "run lifecycle, topology, context, streams, campaigns, CLI": ["network_scenario/core/*.py"],
+    "progress ledger + dashboard": ["monitor/progress.py", "monitor/dashboard.py",
+                                    "monitor/dashboard.html"],
+    "guest deploy manifest": ["network_scenario/guest_files.py"],
+}
+COMPONENTS = {
+    "attack plane": ["attack_plane/components.py"],
+    "defense plane": ["defense_plane/components.py"],
+    "traffic plane": ["traffic_generator/components.py"],
+    "monitor plane": ["monitor/components.py"],
+}
+GUEST = "guest agents (run in the containers)"
+
+
+def sloc(path):
+    """Non-blank lines that are not comment-only (#, //)."""
+    n = 0
+    with open(path, errors="replace") as f:
+        for line in f:
+            t = line.strip()
+            if t and not t.startswith(("#", "//")):
+                n += 1
+    return n
+
+
+def expand(patterns):
+    out = []
+    for p in patterns:
+        for f in sorted(glob.glob(os.path.join(REPO_ROOT, p))):
+            rel = os.path.relpath(f, REPO_ROOT)
+            if rel not in out:
+                out.append(rel)
+    return out
+
+
+def scenario_files(name):
+    """{category: [files]} of one scenario, guest agents included."""
+    from network_scenario import guest_files
+    module = registry.SCENARIOS[name].split(":")[0].rsplit(".", 1)[0]
+    pkg = importlib.import_module(module)
+    cats = {cat: expand(pats) for cat, pats in getattr(pkg, "SOURCES", {}).items()}
+    guest = []
+    for manifest in getattr(pkg, "GUEST_MANIFESTS", ()):
+        for host_path, _guest in getattr(guest_files, manifest):
+            if host_path not in guest and os.path.exists(os.path.join(REPO_ROOT, host_path)):
+                guest.append(host_path)
+    cats[GUEST] = guest
+    return cats
+
+
+def report():
+    """{"core": {cat: n}, "components": {cat: n}, "scenarios": {name: {cat: n}},
+    "shared": {"files": [...], "sloc": n}, "files": {path: sloc}}"""
+    files = {}
+
+    def count(paths):
+        total = 0
+        for p in paths:
+            files[p] = files.get(p) or sloc(os.path.join(REPO_ROOT, p))
+            total += files[p]
+        return total
+
+    core = {c: count(expand(p)) for c, p in CORE.items()}
+    comps = {c: count(expand(p)) for c, p in COMPONENTS.items()}
+    per = {n: scenario_files(n) for n in registry.names()}
+    owners = {}
+    for name, cats in per.items():
+        for paths in cats.values():
+            for p in paths:
+                owners.setdefault(p, set()).add(name)
+    shared = sorted(p for p, o in owners.items() if len(o) > 1)
+    scen = {name: {c: count([p for p in paths if p not in shared]) for c, paths in cats.items()}
+            for name, cats in per.items()}
+    return {"core": core, "components": comps, "scenarios": scen,
+            "shared": {"files": shared, "sloc": count(shared)}, "files": files}
+
+
+def format_markdown(r):
+    names = sorted(r["scenarios"])
+    core_total = sum(r["core"].values())
+    comp_total = sum(r["components"].values())
+    lines = ["# Platform vs scenario code (source lines)", "",
+             "| platform | lines |", "|---|---:|"]
+    lines += [f"| core: {c} | {n} |" for c, n in r["core"].items()]
+    lines += [f"| components: {c} | {n} |" for c, n in r["components"].items()]
+    lines += [f"| **platform total** | **{core_total + comp_total}** |", ""]
+    cats = []
+    for name in names:
+        cats += [c for c in r["scenarios"][name] if c not in cats]
+    lines += ["| scenario-specific | " + " | ".join(names) + " |",
+              "|---|" + "---:|" * len(names)]
+    for c in cats:
+        lines.append(f"| {c} | " + " | ".join(str(r["scenarios"][n].get(c, 0)) for n in names)
+                     + " |")
+    totals = {n: sum(r["scenarios"][n].values()) for n in names}
+    lines.append("| **scenario total** | " + " | ".join(f"**{totals[n]}**" for n in names) + " |")
+    lines += ["", f"Shared by more than one scenario (counted once): {r['shared']['sloc']} lines "
+              f"({', '.join(r['shared']['files']) or '—'}).", ""]
+    plat = core_total + comp_total
+    for n in names:
+        lines.append(f"- {n}: {totals[n]} scenario lines on {plat} platform lines "
+                     f"({100 * plat / (plat + totals[n]):.0f}% of what it runs on is platform).")
+    return "\n".join(lines) + "\n"
