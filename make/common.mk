@@ -29,6 +29,7 @@ M_DELIVERY_DATA   := cyberrange.scenarios.mqtt_mtd.analysis.delivery_dataset
 M_TRAIN_RL        := cyberrange.scenarios.mqtt_mtd.training.train_rl_coordinator
 M_TRAIN_DETECTOR  := cyberrange.scenarios.mqtt_mtd.training.train_delivery_detector
 M_TRADEOFF        := cyberrange.scenarios.mqtt_mtd.analysis.tradeoff
+M_ABLATION        := cyberrange.scenarios.mqtt_mtd.ablation
 # CPS scenario
 M_CPS_RUN         := cyberrange.scenarios.cps.cli
 M_CPS_CAMPAIGN    := cyberrange.scenarios.cps.campaign

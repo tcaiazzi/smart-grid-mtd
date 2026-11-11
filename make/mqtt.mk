@@ -355,6 +355,9 @@ compare-rl-all:
 # Security vs hop-cost tradeoff (simulation): the RL policy vs the fixed-timer
 # frontier -> $(RL_DIR)/tradeoff.{pdf,csv}. This is where "lower hop cost at equal
 # security" is measurable (the lab entropy comparison has no cost axis). No lab run.
+sweep:                     ## MTD parameter ablation (E0-E4) as a resumable campaign -> output/sweep/
+	$(PYTHON) -m $(M_ABLATION) $(if $(GROUPS),--groups $(GROUPS)) $(if $(DRY),--dry-run)
+
 plot-tradeoff:
 	$(PYTHON) -m $(M_TRADEOFF) --policy $(RL_POLICY) --out-dir $(RL_DIR) --output-root output
 

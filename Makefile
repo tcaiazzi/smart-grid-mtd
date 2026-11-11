@@ -14,7 +14,7 @@
 #     eval/model-<src>/                    evaluate metrics (predictions, plots)
 #     attack/model-<src>/                  attack captures, ranking, broker log
 #     summary.csv + comparison plots       (from `make plots`)
-#   output/sweep/                          aggregate sweep plots (from scripts/run_sweep.sh)
+#   output/sweep/                          ablation figures (from `make sweep`)
 #
 # MTD vs baseline: set NO_MTD=1 for the baseline (no-MTD) variant.
 # Cross-model attack: MODEL_SRC=baseline uses the baseline model on MTD traffic.
@@ -34,7 +34,7 @@ include make/common.mk
 include make/mqtt.mk
 include make/cps.mk
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -75,7 +75,7 @@ help:
 	@echo "  entropy-all         Recompute entropy + refresh ALL figures from existing results (NO_DETECTION=1 to skip scoring)"
 	@echo "  train-rl            Train the RL coordinator policy offline -> $(RL_DIR)/policy.{zip,npz}"
 	@echo "  compare-rl          Model-free RL-vs-fixed-MTD comparison -> $(OUTPUT_ROOT)/compare-<slug>/"
-	@echo "  plot-tradeoff       Security-vs-hop-cost frontier (RL vs fixed) -> $(RL_DIR)/tradeoff.pdf"
+	@echo "  plot-tradeoff sweep       Security-vs-hop-cost frontier (RL vs fixed) -> $(RL_DIR)/tradeoff.pdf"
 	@echo "  dashboard           Live progress of every scenario's runs/campaigns (http://127.0.0.1:$(CPS_DASH_PORT))"
 	@echo "  fmt                 Reformat every Python file (ruff, 100 columns)"
 	@echo "  lint                Report style and dead-code problems, change nothing"

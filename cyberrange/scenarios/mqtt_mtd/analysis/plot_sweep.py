@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-plot_sweep.py — paper sweep figures from scripts/run_sweep.sh results
+plot_sweep.py — the MTD ablation figures, from the results `make sweep` leaves behind
 
 Reads:   output/sweep_manifest.csv            (slug column = experiment dir name)
          output/<exp-dir>/summary.csv         (one per config, from plot_results.py)
@@ -407,7 +407,7 @@ def main() -> None:
 
     df = load_sweep(args.manifest, args.plots_root)
     if df.empty:
-        print("[error] no data loaded — did you run scripts/run_sweep.sh?")
+        print("[error] no data loaded — run `make sweep` first")
         return
 
     base_ref = score(df, LABEL_BASELINE, experiment="E0-default")

@@ -17,7 +17,7 @@ import argparse
 import csv
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Optional
 
 from cyberrange.core import aggregate as core_agg, paths
@@ -29,16 +29,59 @@ PYTHON = sys.executable
 DEFAULT_ROOT = "output"
 MANIFEST_NAME = "sweep_manifest.csv"
 
-# The paper's parameter configuration (scripts/run_experiments.sh's four env blocks),
+
+# The paper's parameter configuration,
 # independent of the background replay rate (--mbps).
-HOP = 4
-IP_POOL = "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8"
-PORT_POOL = "8883,8884,8885,8886,8887,8888,8889"
-SCMC_POOL = "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8"
-PAD_BUCKETS = "128,256,384,512,640,768,1024"
-PAD_INTERVAL = 3
-FREQ_INTERVAL = 5
-FREQ_POOL = "0.1,0.2,0.4,0.6,0.8,1"
+@dataclass(frozen=True)
+class MtdParams:
+    """One point in the MTD parameter space: what the coordinator is allowed to
+    move, how often, and over how many options.
+
+    The defaults are the paper's configuration. An ablation varies one field at
+    a time (see analysis of a single mechanism in ablation.py), which is why
+    every value lives here rather than as a module constant: a grid runner needs
+    to build a different point per unit.
+    """
+
+    hop: int = 4
+    ip_pool: str = "10.1.0.2,10.1.0.4,10.1.0.5,10.1.0.6,10.1.0.7,10.1.0.8"
+    port_pool: str = "8883,8884,8885,8886,8887,8888,8889"
+    scmc_pool: str = "10.0.0.2,10.0.0.4,10.0.0.5,10.0.0.6,10.0.0.7,10.0.0.8"
+    pad_buckets: str = "128,256,384,512,640,768,1024"
+    pad_interval: int = 3
+    freq_interval: int = 5
+    freq_pool: str = "0.1,0.2,0.4,0.6,0.8,1"
+    mbps: int = 2
+
+    def make_vars(self):
+        """The MTD_* overrides for a make invocation, in the order the Makefile
+        documents them. The source-IP hop shares the broker hop's timer."""
+        return [
+            f"MTD_HOP_INTERVAL={self.hop}",
+            f"MTD_IP_POOL={self.ip_pool}",
+            f"MTD_PORT_POOL={self.port_pool}",
+            f"MTD_SCMC_IP_POOL={self.scmc_pool}",
+            f"MTD_SRC_HOP_INTERVAL={self.hop}",
+            f"MTD_PAD_BUCKETS={self.pad_buckets}",
+            f"MTD_PAD_INTERVAL={self.pad_interval}",
+            f"BG_REPLAY_MBPS={self.mbps}",
+            f"MTD_FREQ_INTERVAL={self.freq_interval}",
+            f"MTD_FREQ_POOL={self.freq_pool}",
+        ]
+
+    def counts(self):
+        """Pool sizes, the axes the sweep figures are drawn against."""
+        n = lambda pool: len([x for x in pool.split(",") if x])  # noqa: E731
+        return {
+            "n_ips": n(self.ip_pool),
+            "n_ports": n(self.port_pool),
+            "n_pads": n(self.pad_buckets),
+            "n_src": n(self.scmc_pool),
+            "n_freqs": n(self.freq_pool),
+        }
+
+
+PAPER = MtdParams()
 
 # (experiment, block title, rl_policy, rl_tag)
 CONFIGS = [
@@ -87,18 +130,20 @@ def run_contexts(runs: int, seed_base: Optional[int], first_run: int = 0) -> lis
     ]
 
 
-def slug(no_mtd: bool, mbps: int, rl_policy: str = None, rl_tag: str = "") -> str:
+def slug(
+    no_mtd: bool, mbps: int, rl_policy: str = None, rl_tag: str = "", params: MtdParams = PAPER
+) -> str:
     args = argparse.Namespace(
         no_mtd=no_mtd,
         bg_replay_mbps=mbps,
-        mtd_hop_interval=HOP,
-        mtd_pad_interval=PAD_INTERVAL,
-        mtd_ip_pool=IP_POOL,
-        mtd_port_pool=PORT_POOL,
-        mtd_scmc_ip_pool=SCMC_POOL,
-        mtd_pad_buckets=PAD_BUCKETS,
-        mtd_freq_interval=FREQ_INTERVAL,
-        mtd_freq_pool=FREQ_POOL,
+        mtd_hop_interval=params.hop,
+        mtd_pad_interval=params.pad_interval,
+        mtd_ip_pool=params.ip_pool,
+        mtd_port_pool=params.port_pool,
+        mtd_scmc_ip_pool=params.scmc_pool,
+        mtd_pad_buckets=params.pad_buckets,
+        mtd_freq_interval=params.freq_interval,
+        mtd_freq_pool=params.freq_pool,
         rl_policy=rl_policy,
         rl_tag=rl_tag,
     )
@@ -202,29 +247,26 @@ def config_unit(
     rl_tick: float = 1.0,
     ctx: RunCtx = RunCtx(),
     retries: int = 0,
+    params: MtdParams = None,
+    own_model_attack: bool = False,
 ) -> Unit:
-    """Mirrors scripts/run_single.sh's run_config() for one MTD configuration (the
-    paper's fixed HOP/pools; only mbps and the RL policy selection vary)."""
+    """One MTD configuration: capture, train, evaluate both ways, attack, plot.
+
+    ``params`` is the point in the parameter space (default: the paper's).
+    ``own_model_attack`` also runs the MTD-trained model against MTD traffic —
+    the paper's figures do not need it, the ablation figures plot it as their
+    second series."""
     prefix = "mtd"
     if rl_policy:
         prefix = f"mtdrl-{rl_tag}" if rl_tag else "mtdrl"
     # slug() returns the FULL directory name (prefix included) — what make builds
     # on disk; plot_results wants the prefix and the bare hop/pool suffix apart.
-    exp = slug(no_mtd=False, mbps=mbps, rl_policy=rl_policy, rl_tag=rl_tag)
+    params = params or PAPER
+    if params.mbps != mbps:
+        params = replace(params, mbps=mbps)
+    exp = slug(no_mtd=False, mbps=mbps, rl_policy=rl_policy, rl_tag=rl_tag, params=params)
     suffix = exp[len(prefix) + 1 :]
-    v = [
-        f"MTD_HOP_INTERVAL={HOP}",
-        f"MTD_IP_POOL={IP_POOL}",
-        f"MTD_PORT_POOL={PORT_POOL}",
-        f"MTD_SCMC_IP_POOL={SCMC_POOL}",
-        f"MTD_SRC_HOP_INTERVAL={HOP}",
-        f"MTD_PAD_BUCKETS={PAD_BUCKETS}",
-        f"MTD_PAD_INTERVAL={PAD_INTERVAL}",
-        f"BG_REPLAY_MBPS={mbps}",
-        f"MTD_FREQ_INTERVAL={FREQ_INTERVAL}",
-        f"MTD_FREQ_POOL={FREQ_POOL}",
-        *ctx.make_vars,
-    ]
+    v = [*params.make_vars(), *ctx.make_vars]
     steps = []
     if rl_policy:
         v += ["RL=1", f"RL_POLICY={rl_policy}", f"RL_TICK={rl_tick}"]
@@ -265,8 +307,15 @@ def config_unit(
             cmd=["make", "evaluate", "MODEL_SRC=baseline", *v],
             skip_if=lambda: built() and _exists(f"{exp_dir}/eval/model-baseline/predictions.csv")(),
         ),
-        # Cross-model attack only (the paper's Fig. 2 attack runs the baseline-trained
-        # model against the MTD-morphed traffic; the own-model attack is skipped).
+        # The MTD-trained model against MTD traffic: a second series for the
+        # ablation figures, not needed by the paper's.
+        *(
+            [Step("attack-own-model", cmd=["make", "attack", *v], retries=retries)]
+            if own_model_attack
+            else []
+        ),
+        # The cross-model attack is the scored one: the baseline-trained model
+        # against MTD-morphed traffic, which is what the paper's Fig. 2 reports.
         Step(
             "attack",
             cmd=["make", "attack", "MODEL_SRC=baseline", *v],
@@ -317,7 +366,15 @@ def config_unit(
     )
 
 
-def append_manifest(experiment: str, mbps: int, exp: str, root: str = DEFAULT_ROOT) -> None:
+def append_manifest(
+    experiment: str, mbps: int, exp: str, root: str = DEFAULT_ROOT, params: MtdParams = None
+) -> None:
+    """One row per configuration, the axes the sweep figures are drawn against.
+
+    analysis/plot_sweep.py joins these rows with each configuration's
+    summary.csv, so a row must carry the parameters this configuration actually
+    ran with — not the defaults."""
+    params = params or PAPER
     # One manifest per run root, so the slug dedup below is per run.
     manifest_path = REPO_ROOT / root / MANIFEST_NAME
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,18 +398,19 @@ def append_manifest(experiment: str, mbps: int, exp: str, root: str = DEFAULT_RO
         writer = csv.writer(f)
         if write_header:
             writer.writerow(header)
+        c = params.counts()
         writer.writerow(
             [
                 experiment,
-                HOP,
-                len(IP_POOL.split(",")),
-                len(PORT_POOL.split(",")),
-                len(PAD_BUCKETS.split(",")),
-                len(SCMC_POOL.split(",")),
-                PAD_INTERVAL,
+                params.hop,
+                c["n_ips"],
+                c["n_ports"],
+                c["n_pads"],
+                c["n_src"],
+                params.pad_interval,
                 mbps,
-                FREQ_INTERVAL,
-                len(FREQ_POOL.split(",")),
+                params.freq_interval,
+                c["n_freqs"],
                 exp,
             ]
         )
@@ -452,14 +510,7 @@ def build_campaign(
         "seed_base": seed_base,
         "first_run": first_run,
         "retries": retries,
-        "hop": HOP,
-        "ip_pool": IP_POOL,
-        "port_pool": PORT_POOL,
-        "scmc_pool": SCMC_POOL,
-        "pad_buckets": PAD_BUCKETS,
-        "pad_interval": PAD_INTERVAL,
-        "freq_interval": FREQ_INTERVAL,
-        "freq_pool": FREQ_POOL,
+        **asdict(PAPER),
     }
     return Campaign(
         name,

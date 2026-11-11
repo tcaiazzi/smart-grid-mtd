@@ -28,7 +28,7 @@ if str(REPO_ROOT) not in sys.path:
 
 # Raise this deliberately whenever the suite genuinely grows (261 before the
 # guardrail tests of the structure refactor were added).
-MIN_TESTS = 280
+MIN_TESTS = 286
 
 SLOW_MODULES = {
     "test_active_attack",  # spawns modbus_engine, sleeps

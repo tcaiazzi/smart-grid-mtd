@@ -3,7 +3,7 @@
 Single source of truth for run_experiment.py and main.py — both need to derive
 the same output/<slug>/ directory a given parameter configuration lands in.
 The Makefile computes the identical string independently as MTD_PARAMS_SLUG
-(Makefile:82-129) and scripts/run_single.sh/scripts/run_sweep.sh do the same in bash
+(make/mqtt.mk) and scripts/run_single.sh do the same in bash
 (make_slug()); that triplication cannot be collapsed without changing the
 Makefile, which is out of scope here — see tests/test_slug_consistency.py for
 the check that keeps the three formulas honest.

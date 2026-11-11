@@ -9,7 +9,7 @@ project's refactor plan, item (e)):
      run_experiment.py and main.py.
   2. Makefile's MTD_PARAMS_SLUG / EXP_SLUG     — GNU Make string substitution
      (Makefile:82-129).
-  3. scripts/run_single.sh / scripts/run_sweep.sh's make_slug() — bash (same formula, split
+  3. scripts/run_single.sh's make_slug() — bash (same formula, split
      into a suffix-only helper + a prefix assembled by the caller).
 
 This test keeps that triplication *checked* rather than silently drifting: for

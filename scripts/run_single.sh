@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_single.sh — run ONE experiment with manually-set parameters
 #
-# Unlike run_sweep.sh (which builds the fixed E0–E4 groups), this script
+# Unlike `make sweep` (which walks the fixed E0-E4 ablation grid), this script
 # exposes every MTD parameter as an editable variable below. Set them, then:
 #
 #   ./run_single.sh              # run with the parameters set below

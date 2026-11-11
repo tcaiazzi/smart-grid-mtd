@@ -161,7 +161,7 @@ output/
     datasets/  model/
     eval/  attack/    model-mtd/...  model-baseline/...   # cross-model results too
     summary.csv ...
-  sweep/        e1_*.pdf e2_*.pdf e3_*.pdf sweep_results.csv   # aggregate (scripts/run_sweep.sh)
+  sweep/        e1_*.pdf e2_*.pdf e3_*.pdf e4_*.pdf sweep_results.csv   # from `make sweep`
   sweep_manifest.csv
 ```
 
