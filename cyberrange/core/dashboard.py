@@ -42,6 +42,12 @@ from cyberrange.core import registry
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Ledgers written before run_start carried a `scenario` field; every one of them
+# is a CPS run, and there are real experiments among them. New runs always
+# record it, so this name serves history and nothing else — it is the only place
+# in the dashboard that knows a scenario exists.
+LEGACY_SCENARIO = "cps"
+
 
 def scenario_panels():
     """The panel scripts declared by the registered scenarios (Scenario.panel_js).
@@ -119,7 +125,7 @@ def summarize(events, mtime, now=None):
         cur = events[starts[-1] :]
         head = cur[0]
         s["name"] = head.get("name")
-        s["scenario"] = head.get("scenario") or "cps"
+        s["scenario"] = head.get("scenario") or LEGACY_SCENARIO
         s["total"] = len(head.get("grid") or [])
         finished = {e.get("run_id") for e in cur if e.get("kind") in ("run_metrics", "run_skipped")}
         failed = {e.get("run_id") for e in cur if e.get("kind") == "run_failed"}
@@ -130,7 +136,7 @@ def summarize(events, mtime, now=None):
         start = next((e for e in reversed(events) if e.get("kind") == "run_start"), {})
         s["name"] = start.get("run_id") or first.get("run_id")
         s["mode"], s["seed"] = start.get("mode"), start.get("seed")
-        s["scenario"] = start.get("scenario") or "cps"
+        s["scenario"] = start.get("scenario") or LEGACY_SCENARIO
         end = None
         if start:
             idx = events.index(start)
@@ -271,9 +277,9 @@ class LedgerStore:
                 return e["scenario"]
             if e.get("kind") == "run_start" and e.get("run_id") == run_id and e.get("scenario"):
                 return e["scenario"]
-        return "cps"
+        return LEGACY_SCENARIO
 
-    def rebuilt_structure(self, scenario="cps"):
+    def rebuilt_structure(self, scenario=LEGACY_SCENARIO):
         """The current lab's structure, for runs recorded before kg.json existed.
         The scenario rebuilds it from its own topology (Scenario.structure);
         the dashboard only asks. Lazy: it pulls in networkx and the lab model."""

@@ -378,5 +378,164 @@
       ["var(--muted)", "⊘ prevented by · ↺ restored by"], ["var(--good)", "✓ countermeasure applied by the selected time"]]);
   }
 
-  window.CPSGraph = { index, overlayAt, marks, drawTopology, drawKG, drawTree };
+
+  // ── views the core page cannot draw ───────────────────────────────────
+  // Moved out of dashboard.html: only this scenario knows what a detection
+  // latency or a bus voltage means. The page's helpers (h, $, num, dur, now,
+  // statusBadge) are globals by the time this factory runs.
+function det(m, d) { return m?.detectors?.[d]; }
+function detCell(m, d) {
+  const x = det(m, d);
+  if (!m || !m.attack || !x) return h("td", { class: "muted" }, "—");
+  return h("td", { class: "num" }, x.detected ? `${num(x.latency_from_write_s, 2)} s${x.before_impact ? "" : " *"}` : "missed");
+}
+
+// The queue every scenario gets: what a run is, not what it measured. Numeric
+// metrics are shown in the order the scenario reported them, with no opinion
+// about which matter — a scenario that wants an opinion ships a panel.
+  function queue() {
+  $("q-note").innerHTML = "rules / model: detection latency from the first malicious write; <b>*</b> = fired only after the physical impact.";
+  const tb = $("queue");
+  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
+    h("th", { class: "num", title: "latency from the first malicious write; * = after the physical impact" }, "rules"),
+    h("th", { class: "num", title: "latency from the first malicious write; * = after the physical impact" }, "model"),
+    h("th", {}, "impact"), h("th", { class: "num" }, "false alarms"));
+  const rows = S.order.map(id => {
+    const r = S.runs[id], m = r.metrics;
+    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
+    const impact = !m ? "—" : !m.abnormal_frames ? "none" : m.impact_persists_after_attack ? "persists" : m.recovered ? `recovered ${num(m.recovery_s, 1)} s` : "yes";
+    const fa = m ? (m.detectors?.combined?.false_alarms ?? m.false_alarms) : null;
+    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
+        onclick: () => { selectedRun = id; render(); },
+        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
+      h("td", {}, id, r.attempt > 1 ? h("span", { class: "muted" }, ` (try ${r.attempt})`) : null),
+      h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
+      detCell(m, "rules"), detCell(m, "model"), h("td", {}, impact),
+      h("td", { class: "num" }, fa == null ? "—" : String(fa)));
+  });
+  tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 7, class: "empty" }, "No runs yet"))));
+  }
+
+// ── voltage chart ───────────────────────────────────────────────────────────
+const SVGNS = "http://www.w3.org/2000/svg";
+function s(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+}
+const Y_LO = 0.80, Y_HI = 1.20;
+let chartKey = null;
+function drawChart(r) {
+  const box = $("d-chart"), tip = $("tip");
+  const key = r ? [r.id, r.start_t, r.plant.length, r.findings.length, r.writes.length, box.clientWidth,
+    document.documentElement.dataset.theme || ""].join("|") : "none";
+  if (key === chartKey) return;            // unchanged: keep the frame (and a live tooltip)
+  chartKey = key;
+  box.querySelector("svg")?.remove();
+  const legend = $("d-legend"); legend.replaceChildren();
+  if (!r || !r.plant.length) {
+    box.querySelector(".empty")?.remove();
+    box.append(h("div", { class: "empty" }, r && r.start_t ? "Waiting for the first plant sample…" : "No plant trace for this run."));
+    return;
+  }
+  box.querySelector(".empty")?.remove();
+  legend.append(
+    h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
+    h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
+    h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), "normal band 0.95–1.05 pu"));
+  const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
+  const t0 = r.start_t, pts = r.plant;
+  const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
+  const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+  // A live run is drawn on its whole planned timeline (stable axis, fills up);
+  // a finished one on what actually happened.
+  const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
+  const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
+  const clampV = v => Math.min(Y_HI, Math.max(Y_LO, v));
+  const Y = v => m.t + (H - m.t - m.b) * (1 - (clampV(v) - Y_LO) / (Y_HI - Y_LO));
+  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}` });
+  // calibration window
+  const np = r.phases.find(p => p.name === "normal");
+  if (np?.start_t && r.learn_s) {
+    const x1 = X(np.start_t), x2 = Math.min(X(np.start_t + r.learn_s), W - m.r);
+    svg.append(s("rect", { x: x1, y: m.t, width: Math.max(0, x2 - x1), height: H - m.t - m.b, fill: "var(--wash)" }));
+    svg.append(s("text", { x: x1 + 4, y: H - m.b - 6, "font-size": 11, fill: "var(--muted)" }, "model calibration"));
+  }
+  // band + grid
+  svg.append(s("rect", { x: m.l, y: Y(1.05), width: W - m.l - m.r, height: Y(0.95) - Y(1.05), fill: "var(--wash)", stroke: "var(--grid)" }));
+  for (const v of [0.8, 0.9, 1.0, 1.1, 1.2]) {
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
+    svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, v.toFixed(2)));
+  }
+  const step = xMax > 240 ? 60 : xMax > 90 ? 30 : 10;
+  for (let x = 0; x <= xMax; x += step)
+    svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, `${x}s`));
+  svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }));
+  // events: attack + first finding per detector
+  const marks = [];
+  if (r.writes.length) marks.push({ t: r.writes[0].t, label: "attack", dash: "4 3", shape: null });
+  for (const [d, shape] of [["rules", "tri"], ["model", "dia"]]) {
+    const w0 = r.writes[0]?.t;
+    const f = r.findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
+    if (f) marks.push({ t: f.t, label: d, dash: null, shape });
+  }
+  let lastX = -1e9, row = 0;
+  for (const mk of marks.sort((a, b) => a.t - b.t)) {
+    const x = X(mk.t);
+    row = x - lastX < 46 ? row + 1 : 0; lastX = x;
+    svg.append(s("line", { x1: x, x2: x, y1: m.t, y2: H - m.b, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": mk.dash || "none" }));
+    const ty = m.t + 12 + row * 13;          // inside the plot, stacked downward
+    if (mk.shape === "tri") svg.append(s("path", { d: `M${x - 4},${ty - 8} L${x + 4},${ty - 8} L${x},${ty - 1}`, fill: "var(--ink-2)" }));
+    if (mk.shape === "dia") svg.append(s("path", { d: `M${x},${ty - 9} L${x + 4},${ty - 5} L${x},${ty - 1} L${x - 4},${ty - 5}Z`, fill: "var(--ink-2)" }));
+    svg.append(s("text", { x: x + 6, y: ty, "font-size": 11, fill: "var(--ink-2)", stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, mk.label));
+  }
+  // series
+  for (const [key, col] of [["v_load", "var(--s1)"], ["v_dg", "var(--s2)"]]) {
+    const d = pts.filter(p => p[key] != null).map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
+    svg.append(s("path", { d, fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  }
+  // direct labels at the line ends
+  const lp = pts[pts.length - 1];
+  const ly = [[Y(lp.v_load), "load"], [Y(lp.v_dg), "DG"]].sort((a, b) => a[0] - b[0]);
+  if (ly[1][0] - ly[0][0] < 12) ly[1][0] = ly[0][0] + 12;
+  for (const [y, txt] of ly) svg.append(s("text", { x: Math.min(X(lp.t) + 4, W - 2), y: y + 4, "font-size": 11, fill: "var(--ink-2)", "text-anchor": X(lp.t) + 30 > W ? "end" : "start" }, txt));
+  if (pts.some(p => p.v_load < Y_LO || p.v_dg < Y_LO || p.v_load > Y_HI || p.v_dg > Y_HI))
+    svg.append(s("text", { x: W - m.r, y: H - m.b - 6, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, "values outside 0.80–1.20 pu clipped"));
+  // crosshair + tooltip
+  const hair = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1, visibility: "hidden" });
+  const dots = [s("circle", { r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }),
+                s("circle", { r: 4, fill: "var(--s2)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" })];
+  svg.append(hair, ...dots);
+  const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent" });
+  svg.append(hit);
+  const hide = () => { hair.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); tip.style.display = "none"; };
+  hit.addEventListener("pointerleave", hide);
+  hit.addEventListener("pointermove", ev => {
+    const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
+    let best = pts[0], bd = 1e9;
+    for (const p of pts) { const d = Math.abs(X(p.t) - px); if (d < bd) { bd = d; best = p; } }
+    const x = X(best.t);
+    hair.setAttribute("x1", x); hair.setAttribute("x2", x); hair.setAttribute("visibility", "visible");
+    [["v_load", 0], ["v_dg", 1]].forEach(([k, i]) => { dots[i].setAttribute("cx", x); dots[i].setAttribute("cy", Y(best[k])); dots[i].setAttribute("visibility", "visible"); });
+    const row = (col, val, name) => h("div", { class: "row" }, h("span", { class: "lk", style: `background:${col}` }), h("b", {}, val), h("span", { class: "muted" }, name));
+    tip.replaceChildren(h("div", { class: "muted" }, `+${dur(best.t - t0)} into the run`),
+      row("var(--s1)", `${num(best.v_load)} pu`, "load bus"), row("var(--s2)", `${num(best.v_dg)} pu`, "DG bus"),
+      h("div", { class: "muted" }, `${best.ctrl_mode === 1 ? "MANUAL" : "auto"} · ${num(best.dg_setpoint, 1)} kW · ${best.abnormal ? "abnormal" : "in band"}`));
+    tip.style.display = "block";
+    const left = x * rect.width / W;
+    tip.style.left = `${Math.min(left + 12, rect.width - tip.offsetWidth - 4)}px`;
+    tip.style.top = "8px";
+  });
+  box.insertBefore(svg, tip);
+}
+
+  // The page invokes this once, with its own handles.
+  (window.CyberRangePanels ||= {})["cps"] = () => ({
+    queue,
+    chart: drawChart,
+    graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree },
+    // The results tabs this scenario fills, shown before any run is scored.
+    tabs: ["detection", "impact"],
+  });
 })();

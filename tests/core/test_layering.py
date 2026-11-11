@@ -61,6 +61,34 @@ def offences(root, forbidden_prefixes):
     return out
 
 
+class CoreNamesNoScenario(unittest.TestCase):
+    """The rule above is enforced on Python imports, which the dashboard's page
+    and panels are not: they are HTML and JavaScript, and the way a scenario
+    leaks into them is a hardcoded name (`scenario === "cps"`), not an import.
+
+    The core serves the dashboard; which scenario is running is data it reads
+    from a ledger, and what to draw for it comes from that scenario's panel.
+    One exception is declared: LEGACY_SCENARIO, the name ledgers written before
+    run_start carried a scenario field are attributed to."""
+
+    def test_the_dashboard_does_not_name_a_scenario(self):
+        from cyberrange.core import registry
+
+        for rel in ("cyberrange/core/dashboard.py", "cyberrange/core/dashboard.html"):
+            text = (REPO_ROOT / rel).read_text()
+            if rel.endswith(".py"):  # the declared legacy fallback, and only it
+                text = text.replace('LEGACY_SCENARIO = "cps"', "")
+            for name in registry.names():
+                with self.subTest(file=rel, scenario=name):
+                    self.assertNotIn(
+                        f'"{name}"',
+                        text,
+                        f"{rel} names the {name!r} scenario. The page should ask the "
+                        f"registry for a panel and draw its neutral views when there "
+                        f"is none; the backend should read the name from the ledger.",
+                    )
+
+
 class LayeringHolds(unittest.TestCase):
     def test_core_imports_no_plane_and_no_scenario(self):
         bad = offences(CORE, ["cyberrange.planes", "cyberrange.scenarios"])

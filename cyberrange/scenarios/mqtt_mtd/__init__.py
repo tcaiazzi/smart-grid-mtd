@@ -18,6 +18,7 @@ SOURCES = {
         "main.py",
     ],
     "analysis & paper figures": ["cyberrange/scenarios/mqtt_mtd/analysis/*.py"],
+    "dashboard panel": ["cyberrange/scenarios/mqtt_mtd/panel.js"],
     "offline training (RL coordinator, delivery detector)": [
         "cyberrange/scenarios/mqtt_mtd/training/*.py"
     ],

@@ -295,6 +295,11 @@ class MqttMtdScenario(Scenario):
 
         return compute_metrics(run_dir)
 
+    def panel_js(self):
+        """The run queue and detail card for this scenario: the attacker's
+        confidence, the MTD actions and what each one cost."""
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.js")
+
     # ── episode ──────────────────────────────────────────────────────────────
     def episode(self, ctx):
         a = ctx.args
