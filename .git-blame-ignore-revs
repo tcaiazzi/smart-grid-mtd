@@ -1,0 +1,9 @@
+# Revisions to skip when running `git blame`, because they changed layout
+# rather than meaning. Enable them once per clone:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Adopt ruff: reformat every Python file at 100 columns.
+# Mostly mechanical reflow; it also rewrote ~50 comments and removed dead
+# imports, so a line blamed here may still have been touched on purpose.
+7466ef0
