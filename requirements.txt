@@ -1,5 +1,5 @@
 paho-mqtt==1.6.1
-numpy==1.26.4
+numpy==2.4.6
 cryptography==48.0.1
 docker==7.1.0
 dpkt==1.9.8

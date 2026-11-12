@@ -26,7 +26,7 @@ RUN apt-get update && \
 # agents are tested on the host against those versions.
 RUN pip3 install --no-cache-dir --break-system-packages \
         paho-mqtt==1.6.1 \
-        numpy==1.26.4 \
+        numpy==2.4.6 \
         scapy==2.7.0 \
         pymgrid==1.2.2 \
         cryptography==48.0.1
