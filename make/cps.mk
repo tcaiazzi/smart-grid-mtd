@@ -52,7 +52,7 @@ cps-engine:                ## run engine + PLC locally over loopback Modbus (Ctr
 	@echo "  PYTHONPATH=cyberrange/planes/traffic/agents:cyberrange/planes/defense $(PYTHON) -m modbus_engine --frame-log engine_frames.jsonl"
 	@echo "  PYTHONPATH=cyberrange/planes/traffic/agents:cyberrange/planes/defense $(PYTHON) -m plc_controller --engine-host 127.0.0.1"
 
-cps-lab:                   ## deploy the 3-zone lab, normal operation only
+cps-lab:                   ## deploy the lab, normal operation only
 	$(PYTHON) -m $(M_CPS_RUN) --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \

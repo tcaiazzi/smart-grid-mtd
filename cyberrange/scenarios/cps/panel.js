@@ -26,7 +26,7 @@
     }
     return lines.map(l => clip(l, n));
   }
-  const ZONE_ORDER = ["IT", "OT", "DEF"];
+  const ZONE_ORDER = ["IT", "OT", "MGMT"];
   const STATE_STYLE = {
     confirmed: { stroke: "var(--critical)", fill: "var(--critical)", dash: null, label: "confirmed" },
     inferred: { stroke: "var(--serious)", fill: "var(--serious)", dash: "5 3", label: "inferred" },
@@ -145,15 +145,19 @@
     for (const h of hosts) {
       const zs = hostZones(h);
       let x;
-      if (zs.length >= 2) {           // boundary device: on the edge between its outermost zones
-        const a = zi[zs[0]], b = zi[zs[zs.length - 1]];
-        // adjacent zones: centred in the gap; otherwise centred over the span
-        x = b - a === 1 ? colX(a) + colW + (GAP - BW) / 2 : (colX(a) + colW + colX(b)) / 2 - BW / 2;
-        place[h.id] = { x, y: slot(`gap${a}-${b}`, h), zs };
+      // A host on two neighbouring zones sits on the edge between them. Zones
+      // further away (the management network, for a host of IT) are not drawn
+      // as a link: the line would cross the columns in between, and the host's
+      // address list already says it is there.
+      const k = zs.findIndex((z, n) => n + 1 < zs.length && zi[zs[n + 1]] - zi[z] === 1);
+      if (k >= 0) {
+        const a = zi[zs[k]];
+        x = colX(a) + colW + (GAP - BW) / 2;
+        place[h.id] = { x, y: slot(`gap${a}-${a + 1}`, h), zs: [zs[k], zs[k + 1]] };
       } else {
         const i = zi[zs[0]] ?? 0;
         x = colX(i) + (colW - BW) / 2;
-        place[h.id] = { x, y: slot(`col${i}`, h), zs };
+        place[h.id] = { x, y: slot(`col${i}`, h), zs: zs.slice(0, 1) };
       }
     }
     const H = Math.max(...Object.values(stackY), HEAD + 120) + 30;

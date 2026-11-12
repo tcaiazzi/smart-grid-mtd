@@ -102,13 +102,13 @@ two nodes can be linked by more than one relation:
 | `src` | rule → host | the rule matches traffic from that host |
 | `dst` | rule → service | the rule matches traffic to that service |
 
-The CPS lab as built gives 28 nodes and 39 edges:
+The CPS lab as built gives 32 nodes and 48 edges:
 
 | Type | Count | |
 |---|---|---|
-| host | 6 | attacker (`it-host`), hmi (`hmi`), firewall (`boundary`), engine (`plant`), plc (`plc`), sensor (`sensor`) |
-| zone | 3 | IT, OT, DEF |
-| ip | 7 | the firewall has one in IT and one in OT |
+| host | 7 | attacker (`it-host`), hmi (`hmi`), firewall (`boundary`), engine (`plant`), plc (`plc`), sensor (`sensor`), soc (`soc`) |
+| zone | 3 | IT, OT, MGMT |
+| ip | 10 | the firewall has one in each zone, the hmi one in IT and one in MGMT |
 | service | 2 | `svc:hmi/diag-http` (tcp/8080), `svc:engine/modbus` (tcp/5020) |
 | register | 9 | 3 holding (setpoint, breaker, control mode), all sensitive; 6 input |
 | flow_rule | 1 | `rule:firewall:0`: ACCEPT 10.10.0.20 → 10.20.0.20 tcp/5020 |
@@ -159,6 +159,8 @@ can host `src` open a connection to `port` on host `dst`?
 In the lab, `reachable(hmi → engine:5020)` is true through the rule,
 `reachable(attacker → engine:5020)` is false (default DROP), and
 `reachable(plc → engine:5020)` is true because both are in OT.
+`reachable(soc → engine:5020)` is false: the boundary has an address in MGMT
+but no rule forwards from it.
 
 What `reachable` does not model:
 - host firewalls (`block_web_src` is an INPUT rule on the HMI and is invisible

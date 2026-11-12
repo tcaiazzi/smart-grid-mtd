@@ -1,6 +1,7 @@
-"""Cyber-physical (OT/Modbus) scenario: three zones (IT / OT / defense), a
-pandapower digital twin behind Modbus/TCP, a PLC, an HMI with a vulnerable web
-app, an active attacker, OT/IT sensors and an optional SOAR responder."""
+"""Cyber-physical (OT/Modbus) scenario: IT and OT zones behind a boundary
+firewall plus a management network, a pandapower digital twin behind
+Modbus/TCP, a PLC, a dual-homed HMI with a vulnerable web app, an active
+attacker, OT/IT sensors and an optional SOAR responder."""
 
 # What this scenario is made of, by category, for the platform's code-size
 # accounting (python -m cyberrange.core loc). Guest agents come from the

@@ -81,7 +81,7 @@ The network is plain data. Interface order fixes `eth0`, `eth1`, …:
 Topology("cps", default_image="kathara/cps", nodes=[
     Node("hmi", [Iface("IT", "10.10.0.20/24")], role="hmi",
          routes=[Route("default", "10.10.0.1", "eth0")], files=HMI_FILES),
-    Node("sensor", [Iface("OT", promisc=True), Iface("DEF", "10.30.0.10/24")],
+    Node("sensor", [Iface("OT", promisc=True), Iface("MGMT", "10.30.0.10/24")],
          role="sensor", files=SENSOR_FILES, mgmt_port="8090:8080/tcp"),
     ...
 ])

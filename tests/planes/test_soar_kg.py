@@ -20,20 +20,29 @@ class CPSKnowledgeGraph(unittest.TestCase):
     def test_hosts_zones_roles(self):
         self.assertEqual(
             kg.hosts(self.g),
-            [f"host:{h}" for h in ["attacker", "engine", "firewall", "hmi", "plc", "sensor"]],
+            [
+                f"host:{h}"
+                for h in ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"]
+            ],
         )
         zones = sorted(n for n, d in self.g.nodes(data=True) if d["type"] == "zone")
-        self.assertEqual(zones, ["zone:DEF", "zone:IT", "zone:OT"])
+        self.assertEqual(zones, ["zone:IT", "zone:MGMT", "zone:OT"])
         self.assertEqual(self.g.nodes["host:firewall"]["role"], kg.BOUNDARY_ROLE)
         self.assertEqual(self.g.nodes["host:plc"]["role"], "plc")
 
     def test_addresses_from_meta(self):
-        self.assertEqual(kg.addresses(self.g, "hmi"), [(cps.HMI_IP, "IT")])
+        # IT first: the tree and the countermeasures take a host's first address
+        # as its primary one.
         self.assertEqual(
-            kg.addresses(self.g, "firewall"), sorted([(cps.FW_IT_IP, "IT"), (cps.FW_OT_IP, "OT")])
+            kg.addresses(self.g, "hmi"), [(cps.HMI_IP, "IT"), (cps.HMI_MGMT_IP, "MGMT")]
         )
+        self.assertEqual(
+            kg.addresses(self.g, "firewall"),
+            [(cps.FW_IT_IP, "IT"), (cps.FW_OT_IP, "OT"), (cps.FW_MGMT_IP, "MGMT")],
+        )
+        self.assertEqual(kg.addresses(self.g, "soc"), [(cps.SOC_IP, "MGMT")])
         # Passive OT NIC: the sensor is in OT but has no address there.
-        self.assertEqual(kg.addresses(self.g, "sensor"), [(cps.SENSOR_DEF_IP, "DEF")])
+        self.assertEqual(kg.addresses(self.g, "sensor"), [(cps.SENSOR_MGMT_IP, "MGMT")])
         self.assertEqual(kg.host_of_ip(self.g, cps.ENGINE_IP), "engine")
         self.assertEqual(kg.host_of_ip(self.g, "10.99.0.1"), None)
 
@@ -73,6 +82,24 @@ class CPSKnowledgeGraph(unittest.TestCase):
         self.assertTrue(kg.reachable(self.g, "plc", "engine", P))  # same zone
         self.assertFalse(kg.reachable(self.g, "sensor", "engine", P))  # no OT address
         self.assertFalse(kg.reachable(self.g, "hmi", "engine", 502))  # no such service
+        self.assertFalse(kg.reachable(self.g, "soc", "engine", P))  # MGMT is not forwarded
+
+    def test_management_network_membership(self):
+        on_mgmt = sorted(
+            self.g.nodes[h]["name"]
+            for h in kg.hosts(self.g)
+            if "MGMT" in {z for _, z in kg.addresses(self.g, self.g.nodes[h]["name"])}
+        )
+        self.assertEqual(on_mgmt, ["firewall", "hmi", "sensor", "soc"])
+        # The HMI is the only host with one foot in IT and one in MGMT besides
+        # the boundary device, which forwards nothing between them.
+        it_and_mgmt = [
+            h
+            for h in on_mgmt
+            if "IT" in {z for _, z in kg.addresses(self.g, h)}
+            and self.g.nodes[f"host:{h}"]["role"] != kg.BOUNDARY_ROLE
+        ]
+        self.assertEqual(it_and_mgmt, ["hmi"])
 
     def test_rule_removal_cuts_the_path(self):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]

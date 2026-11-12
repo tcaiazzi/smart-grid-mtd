@@ -5,7 +5,7 @@ and the "addresses" meta that core.topology.build_lab sets), the boundary
 firewall ruleset and the OT plant contract (cyberrange/planes/defense/ot_registers.py).
 
 Node ids are typed by prefix:
-    zone:<name>             collision domain (IT / OT / DEF)
+    zone:<name>             collision domain (IT / OT / MGMT)
     host:<name>             machine; attrs image, role
     ip:<addr>               interface address; attrs prefix, iface, host
     svc:<host>/<name>       network service; attrs proto, port, app

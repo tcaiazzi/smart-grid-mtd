@@ -33,11 +33,13 @@
   "settings": {
    "0": "IT",
    "1": "OT",
+   "2": "MGMT",
    "image": "kathara/cps"
   },
   "startup": [
    "ip address add 10.10.0.1/24 dev eth0",
    "ip address add 10.20.0.1/24 dev eth1",
+   "ip address add 10.30.0.1/24 dev eth2",
    "sysctl -w net.ipv4.ip_forward=1",
    "iptables -P FORWARD DROP",
    "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
@@ -55,10 +57,12 @@
   ],
   "settings": {
    "0": "IT",
+   "1": "MGMT",
    "image": "kathara/cps"
   },
   "startup": [
    "ip address add 10.10.0.20/24 dev eth0",
+   "ip address add 10.30.0.30/24 dev eth1",
    "ip route add default via 10.10.0.1 dev eth0"
   ]
  },
@@ -87,13 +91,23 @@
   ],
   "settings": {
    "0": "OT",
-   "1": "DEF",
+   "1": "MGMT",
    "image": "kathara/cps"
   },
   "startup": [
    "ip link set eth0 promisc on",
    "ip link set eth0 up",
-   "ip address add 10.30.0.10/24 dev eth1"
+   "ip address add 10.30.0.10/24 dev eth1",
+   "iptables -A INPUT -i eth1 -p tcp --dport 8080 -j DROP"
+  ]
+ },
+ "soc": {
+  "settings": {
+   "0": "MGMT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.30.0.20/24 dev eth0"
   ]
  }
 }

@@ -86,7 +86,7 @@ help:
 	@echo "  cps-image           Build the OT node image (kathara/cps)"
 	@echo "  cps-selftest        CPS tests only, no Kathará"
 	@echo "  cps-engine          How to run engine + PLC locally over loopback Modbus"
-	@echo "  cps-lab             Deploy the 3-zone lab, normal operation only"
+	@echo "  cps-lab             Deploy the lab, normal operation only"
 	@echo "  cps-attack          Deploy the lab and drive the attack chain (CPS_ATTACK_MODE)"
 	@echo "  cps-campaign        CPS_MODES x CPS_SEEDS, scored and aggregated (resumable)"
 	@echo "  cps-dashboard       Progress dashboard restricted to the CPS runs/campaigns"

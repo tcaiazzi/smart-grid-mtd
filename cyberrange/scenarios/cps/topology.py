@@ -1,17 +1,28 @@
-"""topology.py — the CPS lab: three zones joined by an IT/OT boundary firewall.
+"""topology.py — the CPS lab: IT and OT joined by a boundary firewall, plus the
+management network of the security tooling.
 
     IT 10.10.0.0/24            firewall             OT 10.20.0.0/24
       attacker 10.10.0.10   10.10.0.1 | 10.20.0.1   plc    10.20.0.10
       hmi      10.10.0.20       (FORWARD DROP,      engine 10.20.0.20
-                                  HMI->engine Modbus  sensor eth0 (passive)
-                                  allowed)
-                                                    DEF 10.30.0.0/24
-                                                      sensor eth1 10.30.0.10
+        |                         HMI->engine Modbus  sensor eth0 (passive)
+        |                         allowed)              |
+    MGMT 10.30.0.0/24 ---------------------------------------------------
+      hmi eth1 10.30.0.30   firewall eth2 10.30.0.1   sensor eth1 10.30.0.10
+      soc      10.30.0.20
 
 The attacker cannot reach the engine directly: it must compromise the HMI and
 pivot from it, so its writes come from an allowed host. The sensor has a
-passive NIC on the OT link (it sees the Modbus traffic) and a management NIC
-on the defense net (unreachable from OT). Node roles are the knowledge graph's.
+passive NIC on the OT link (it sees the Modbus traffic) and no address there.
+
+MGMT is the in-band management network: the hosts that report findings or
+enforce countermeasures sit on it next to the SOC. The HMI is dual-homed, which
+makes it the one way in for an attacker — the firewall forwards nothing to or
+from MGMT. The engine and the PLC are deliberately not on it: a host sharing a
+network with the engine could write to it without crossing the boundary.
+
+What the experiment itself reads (ledger, dashboard, artifacts) never travels
+on a lab network: it goes through the container runtime, so no node can see it.
+Node roles are the knowledge graph's.
 """
 
 import types
@@ -28,7 +39,7 @@ from cyberrange.scenarios.cps.guest_files import (
 LAB_NAME = "cps"
 IMAGE = "kathara/cps"
 # Zones (collision domains)
-IT, OT, DEF = "IT", "OT", "DEF"
+IT, OT, MGMT = "IT", "OT", "MGMT"
 # Addresses
 ATTACKER_IP = "10.10.0.10"
 HMI_IP = "10.10.0.20"
@@ -36,8 +47,13 @@ FW_IT_IP = "10.10.0.1"
 FW_OT_IP = "10.20.0.1"
 PLC_IP = "10.20.0.10"
 ENGINE_IP = "10.20.0.20"
-SENSOR_DEF_IP = "10.30.0.10"
-IT_NET, OT_NET, DEF_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
+# MGMT stays numerically above IT and OT: the knowledge graph lists a host's
+# addresses in string order and takes the first as its primary one.
+FW_MGMT_IP = "10.30.0.1"
+SENSOR_MGMT_IP = "10.30.0.10"
+SOC_IP = "10.30.0.20"
+HMI_MGMT_IP = "10.30.0.30"
+IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT = 5020
 APP_PORT = 8080
 DASHBOARD_GUEST_PORT = 8080
@@ -45,17 +61,27 @@ DASHBOARD_GUEST_PORT = 8080
 # The sensor's OT NIC (eth0) is passive and deliberately has no address.
 ADDRESSES = {
     "attacker": {"eth0": f"{ATTACKER_IP}/24"},
-    "hmi": {"eth0": f"{HMI_IP}/24"},
-    "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24"},
+    "hmi": {"eth0": f"{HMI_IP}/24", "eth1": f"{HMI_MGMT_IP}/24"},
+    "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24", "eth2": f"{FW_MGMT_IP}/24"},
     "plc": {"eth0": f"{PLC_IP}/24"},
     "engine": {"eth0": f"{ENGINE_IP}/24"},
-    "sensor": {"eth1": f"{SENSOR_DEF_IP}/24"},
+    "sensor": {"eth1": f"{SENSOR_MGMT_IP}/24"},
+    "soc": {"eth0": f"{SOC_IP}/24"},
 }
 
 
+def sensor_rules():
+    """The sensor's live page is instrumentation, reached through the bridged
+    NIC only. Its server listens on every address, so without this rule the
+    page would also answer on MGMT, where the HMI — the attacker's foothold —
+    could read the defense's own view of the attack."""
+    return [f"iptables -A INPUT -i eth1 -p tcp --dport {DASHBOARD_GUEST_PORT} -j DROP"]
+
+
 def firewall_rules():
-    """Standing IT/OT boundary ruleset: default-drop forwarding, keep established
-    flows, and allow ONLY the sanctioned HMI -> engine Modbus flow. The firewall
+    """Standing boundary ruleset: default-drop forwarding, keep established
+    flows, and allow ONLY the sanctioned HMI -> engine Modbus flow — so nothing
+    is forwarded to or from MGMT either. The firewall
     cannot tell a legitimate operator command from a hijacked one — it only sees
     "HMI, TCP to 5020" — which is what the DPI sensor and the SOAR response
     exist to compensate for."""
@@ -88,11 +114,21 @@ def topology(args) -> Topology:
                 files=ATTACKER_CPS_FILES,
             ),
             Node(
-                "hmi", [Iface(IT, addr("hmi", 0))], role="hmi", routes=gw(FW_IT_IP), files=HMI_FILES
+                "hmi",
+                # IT first: the response isolates the HMI by taking eth0 down,
+                # and must still reach it afterwards on eth1.
+                [Iface(IT, addr("hmi", 0)), Iface(MGMT, addr("hmi", 1))],
+                role="hmi",
+                routes=gw(FW_IT_IP),
+                files=HMI_FILES,
             ),
             Node(
                 "firewall",
-                [Iface(IT, addr("firewall", 0)), Iface(OT, addr("firewall", 1))],
+                [
+                    Iface(IT, addr("firewall", 0)),
+                    Iface(OT, addr("firewall", 1)),
+                    Iface(MGMT, addr("firewall", 2)),
+                ],
                 role="boundary",
                 startup=firewall_rules(),
             ),
@@ -108,11 +144,13 @@ def topology(args) -> Topology:
             ),
             Node(
                 "sensor",
-                [Iface(OT, promisc=True), Iface(DEF, addr("sensor", 1))],
+                [Iface(OT, promisc=True), Iface(MGMT, addr("sensor", 1))],
                 role="sensor",
+                startup=sensor_rules(),
                 files=SENSOR_FILES,
                 mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
             ),
+            Node("soc", [Iface(MGMT, addr("soc", 0))], role="soc"),
         ],
     )
 

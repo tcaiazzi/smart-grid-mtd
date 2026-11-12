@@ -1,7 +1,7 @@
 """Topology test for the cyber-physical Kathará lab builder
 (cyberrange/scenarios/cps/topology.py on core.topology). Builds the Lab model in-process
-(no Docker) and asserts the three zones, the IT/OT boundary firewall, and the
-passive-sensor wiring are correct.
+(no Docker) and asserts the zones, the IT/OT boundary firewall, the management
+network and the passive-sensor wiring are correct.
 
 Run: `.venv/bin/python -m unittest tests.test_cps_topology`.
 """
@@ -22,20 +22,47 @@ class Topology(unittest.TestCase):
     def setUp(self):
         self.lab, self.m, self.startups = cps.build_lab(types.SimpleNamespace(dashboard_port=0))
 
-    def test_six_machines_on_cps_image(self):
+    def test_machines_on_cps_image(self):
         self.assertEqual(
-            sorted(self.lab.machines), ["attacker", "engine", "firewall", "hmi", "plc", "sensor"]
+            sorted(self.lab.machines),
+            ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"],
         )
         for name, mach in self.lab.machines.items():
             self.assertEqual(mach.get_image(), cps.IMAGE, name)
 
     def test_zones(self):
         self.assertEqual(_links(self.m["attacker"]), {0: cps.IT})
-        self.assertEqual(_links(self.m["hmi"]), {0: cps.IT})
-        self.assertEqual(_links(self.m["firewall"]), {0: cps.IT, 1: cps.OT})
+        self.assertEqual(_links(self.m["hmi"]), {0: cps.IT, 1: cps.MGMT})
+        self.assertEqual(_links(self.m["firewall"]), {0: cps.IT, 1: cps.OT, 2: cps.MGMT})
         self.assertEqual(_links(self.m["plc"]), {0: cps.OT})
         self.assertEqual(_links(self.m["engine"]), {0: cps.OT})
-        self.assertEqual(_links(self.m["sensor"]), {0: cps.OT, 1: cps.DEF})
+        self.assertEqual(_links(self.m["sensor"]), {0: cps.OT, 1: cps.MGMT})
+        self.assertEqual(_links(self.m["soc"]), {0: cps.MGMT})
+
+    def test_plant_is_not_on_the_management_network(self):
+        for name in ("engine", "plc", "attacker"):
+            self.assertNotIn(
+                cps.MGMT,
+                _links(self.m[name]).values(),
+                f"{name} on MGMT: a host there could reach it without crossing the firewall",
+            )
+
+    def test_hmi_keeps_it_on_eth0(self):
+        # isolate_hmi takes eth0 down; if MGMT were eth0 the response would cut
+        # the HMI off from the SOC and leave the attacker's IT link up.
+        self.assertEqual(_links(self.m["hmi"])[0], cps.IT)
+
+    def test_nothing_is_forwarded_to_or_from_mgmt(self):
+        accepts = [r for r in cps.firewall_rules() if "-j ACCEPT" in r and "ESTABLISHED" not in r]
+        for r in accepts:
+            self.assertNotIn("10.30.", r, "a forward rule opens the management network")
+
+    def test_sensor_page_is_closed_on_mgmt(self):
+        self.assertIn(
+            f"iptables -A INPUT -i eth1 -p tcp --dport {cps.DASHBOARD_GUEST_PORT} -j DROP",
+            self.startups["sensor"],
+            "the sensor's live page would answer on MGMT, readable from the HMI",
+        )
 
     def test_firewall_default_drop_single_allow(self):
         rules = cps.firewall_rules()
@@ -50,10 +77,10 @@ class Topology(unittest.TestCase):
         self.assertNotIn(cps.IT_NET, allow[0])
         self.assertTrue(any("ip_forward=1" in r for r in rules))
 
-    def test_sensor_startup_passive_ot_mgmt_def(self):
+    def test_sensor_startup_passive_ot_addressed_mgmt(self):
         cmds = self.startups["sensor"]
         self.assertTrue(any("promisc on" in c for c in cmds))
-        self.assertTrue(any(f"{cps.SENSOR_DEF_IP}/24 dev eth1" in c for c in cmds))
+        self.assertTrue(any(f"{cps.SENSOR_MGMT_IP}/24 dev eth1" in c for c in cmds))
         # No IP on the OT subnet -> unreachable from OT while still sniffing it.
         self.assertFalse(any("10.20." in c for c in cmds))
 

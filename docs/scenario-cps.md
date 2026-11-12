@@ -18,7 +18,8 @@ It is independent of the MQTT/MTD scenario. It has its own node image
 
 ## 2. Architecture
 
-Three network zones, separated by an IT/OT boundary firewall:
+Two process zones separated by an IT/OT boundary firewall, plus a management
+network for the security tooling:
 
 ```
         IT ZONE                  FIREWALL                OT ZONE
@@ -28,26 +29,42 @@ Three network zones, separated by an IT/OT boundary firewall:
   │ hmi       .0.20  │────▶│ FORWARD:    │───▶│ engine     10.20.0.20│
   │  (+ vulnerable   │     │ DROP except │    │  (digital twin +     │
   │   diagnostics)   │     │ HMI→engine  │    │   Modbus server)     │
-  └──────────────────┘     │ Modbus/TCP  │    └──────────┬───────────┘
-                           └─────────────┘               │ passive tap
-                                                         ▼
-                                              ┌──────────────────────┐
-                                              │ sensor     10.30.0.10│
-                                              │ DEF ZONE 10.30.0.0/24│
-                                              └──────────────────────┘
+  └────────┬─────────┘     │ Modbus/TCP  │    └──────────┬───────────┘
+           │ eth1          └──────┬──────┘               │ passive tap
+           │ 10.30.0.30           │ eth2 10.30.0.1       ▼ sensor eth1 10.30.0.10
+  ─────────┴──────────────────────┴──────────────────────┴──────────────
+        MGMT 10.30.0.0/24                       soc 10.30.0.20
 ```
 
 - **IT zone**: the operator's HMI/SCADA workstation and the attacker.
 - **OT zone**: the PLC and the physical engine — the plant's digital twin,
-  exposed over Modbus/TCP.
-- **Defence zone**: the sensor. It has a passive interface on the OT network,
-  where it listens without transmitting, and a separate management interface
-  where it publishes its findings. The management interface is not reachable
-  from OT.
+  exposed over Modbus/TCP. The sensor listens here on a passive interface with
+  no address, without transmitting.
+- **Management network (MGMT)**: the in-band network of the security tooling.
+  On it sit the hosts that report findings or enforce countermeasures (sensor,
+  HMI, firewall) and the SOC node. The firewall forwards nothing to or from it.
+  The **HMI is dual-homed**, so it is the one way in: an attacker who
+  compromises the HMI is on the management network. The engine and the PLC are
+  not on it — a host sharing a network with the engine could write to it
+  without crossing the boundary.
 - **Boundary firewall**: drops all IT→OT traffic except one authorised flow,
   HMI to engine over Modbus. The attacker therefore cannot reach the plant
   directly: it must compromise the HMI first and use it as a springboard, which
   is what makes its writes arrive **from a legitimate host**.
+
+Two channels must not be confused:
+
+| | Management network | Instrumentation |
+|---|---|---|
+| What it is | a lab network, `10.30.0.0/24` | the container runtime (`docker exec`, file copy-out) and, for the sensor's live page, a bridged NIC |
+| Who uses it | scenario nodes | the experiment: ledger, progress dashboard, artifacts, ground truth |
+| In the knowledge graph | yes (`zone:MGMT`) | no — it is not a lab interface, so no node can see or reach it |
+
+The sensor's live page is instrumentation: an `INPUT` rule on the sensor drops
+it on the MGMT interface, so it is reachable through the bridged NIC only.
+
+As of today the management network carries no traffic: the response loop still
+runs on the host and reaches the nodes through the container runtime (§11).
 
 ## 3. The physical process
 
@@ -133,7 +150,7 @@ travel on the same telemetry bus and dashboard the MTD scenario uses.
 
 Every run follows the same sequence of phases:
 
-1. **deploy** — bring up the three-zone lab and configure the firewall;
+1. **deploy** — bring up the lab and configure the firewall;
 2. **services** — start the engine, the PLC, the HMI, the vulnerable app and
    the sensor;
 3. **normal** — normal operation, 60 s by default; the behavioural model
@@ -207,9 +224,10 @@ reading the run's `kg.json` / `tree.json` through
 `GET /api/structure?id=&run=`. Every run writes both files; for runs that predate
 them the structure is rebuilt from today's lab model and the card says so.
 
-- **Topology**: zones as columns, firewall and sensor on their boundaries, the
-  sensor's passive tap dashed, with addresses, services and the boundary allow
-  rule.
+- **Topology**: zones as columns, firewall and sensor on the boundary of two
+  neighbouring zones, the sensor's passive tap dashed, with addresses, services
+  and the boundary allow rule. A host's presence on a zone further away (the
+  HMI on MGMT) shows in its address list, not as a link.
 - **Knowledge graph**: all typed nodes in layers, edges coloured by relation;
   hovering a node shows its attributes.
 - **Attack tree**: each node's state (suspected / confirmed / inferred) with the
@@ -378,7 +396,9 @@ deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
 - automatic generation of the attack trees;
 - the stochastic game model;
 - real energy measurement of the countermeasures;
-- a SOAR node inside the lab instead of the host-side responder.
+- a response loop inside the lab, on the management network (agents on the
+  hosts, a manager and the analytics on the `soc` node), instead of the
+  host-side responder.
 
 ## 12. Quick reference
 
