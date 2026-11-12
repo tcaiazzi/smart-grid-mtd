@@ -68,18 +68,27 @@ class _Base:
         self.cms = {c.id: c for c in countermeasures}
         self.allowed = set(allowed) if allowed is not None else set(self.cms)
         self.applied = set()  # countermeasures already in effect
+        self.declined = set()  # turned down by an operator: not proposed again
         self.notified = False
 
-    def mark_applied(self, ids):
+    def mark_applied(self, ids, by_hand=False):
+        """Countermeasures now in effect. One an operator applied ``by_hand``
+        after turning it down is theirs to change their mind about: it may be
+        proposed again."""
         self.applied.update(ids)
+        if by_hand:
+            self.allowed.update(self.declined.intersection(ids))
+            self.declined.difference_update(ids)
 
     def mark_withdrawn(self, ids, declined=False):
         """Countermeasures proposed that will not run after all: an operator
         turned them down, or never answered. They leave ``applied``, so the
         policy stops counting on their effect. A ``declined`` one is not
-        proposed again; one that merely lapsed may be, on new evidence."""
+        proposed again (until the operator applies it by hand, see
+        mark_applied); one that merely lapsed may be, on new evidence."""
         self.applied.difference_update(ids)
         if declined:
+            self.declined.update(self.allowed.intersection(ids))
             self.allowed.difference_update(ids)
 
     def _order(self, ids):

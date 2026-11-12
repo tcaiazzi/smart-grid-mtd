@@ -39,10 +39,14 @@ to.
   the run then tears down normally and ends `ok`. Its length is arbitrary, so
   do not compare its duration-dependent metrics with a campaign's. Campaigns
   never set it.
-- `make cps-advisor` (with `make cps-advisor-dashboard` in another terminal)
-  runs the CPS lab with a SOC that only suggests: the countermeasures wait on
-  the dashboard's *Operator suggestions* card for Approve / Reject. It needs a
-  person, so it has no campaign. See `docs/scenario-cps-advisor.md`.
+- `make cps-advisor PLAYGROUND=1` runs the CPS lab with a SOC that only
+  suggests: the countermeasures wait at the SOC's own console (link printed by
+  the run, port 8766) for Approve / Reject.
+- `make cps-teams` is red team against blue team on that lab: nobody drives the
+  attack, each team works from the console and shell on its own node, and
+  `make dashboard` is the referee's read-only view. Links and tokens are in
+  `<out_dir>/teams.json`. Both need people, so neither has a campaign. See
+  `docs/scenario-cps-advisor.md`.
 
 ## Before the first run
 

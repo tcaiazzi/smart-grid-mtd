@@ -119,7 +119,7 @@ the test regenerate it: deletion is how the guarantee is lost without trace.
 for t in $(grep -hoE '^[a-zA-Z0-9_.-]+:' Makefile make/*.mk | tr -d ':' | sort -u); do
     make -n "$t" >/dev/null 2>&1 || echo "BROKEN: $t"
 done
-make lab-conf SCENARIO=cps && make lab-conf SCENARIO=mqtt-mtd
+make lab-conf SCENARIO=cps && make lab-conf SCENARIO=cps-advisor && make lab-conf SCENARIO=mqtt-mtd
 ```
 
 The suite never deploys a real lab. If your change touched deploy paths, startup

@@ -186,7 +186,10 @@ def _operator(resp):
 def _response(resp, gt, findings, attack_start, mode, end_t):
     up = next((r for r in resp if r.get("kind") == "response_up"), {})
     decisions = [r for r in resp if r.get("kind") == "decision"]
-    actions = [r for r in resp if r.get("kind") == "action"]
+    # A countermeasure taken back is on record as an action too, but it is the
+    # opposite of a response applied: counted, it would make a revert look like
+    # the block it undid.
+    actions = [r for r in resp if r.get("kind") == "action" and r.get("op") != "revert"]
     applied = [a for a in actions if a.get("ok")]
     applied_ids = {a["id"] for a in applied}
     expected = expected_response(gt)

@@ -65,10 +65,17 @@ def render(scenario_name):
             host.setdefault(node, {})[guest] = host_path
         elif m := re.match(r'^(\w+)\[(\w+)\]="(.*)"$', line):
             node, key, value = m.groups()
-            nodes.setdefault(node, {}).setdefault("settings", {})[key] = value
+            settings = nodes.setdefault(node, {}).setdefault("settings", {})
+            # A key given more than once (several published ports) keeps every
+            # value: the last one alone would freeze only part of the contract.
+            settings[key] = value if key not in settings else [*_as_list(settings[key]), value]
     for node, text in startups.items():
         nodes.setdefault(node, {})["startup"] = text.splitlines()
     return {"nodes": nodes, "host": host}
+
+
+def _as_list(value):
+    return value if isinstance(value, list) else [value]
 
 
 class DeployContractFrozen(unittest.TestCase):

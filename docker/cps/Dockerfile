@@ -39,5 +39,18 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends wazuh-agent=4.14.10-1 && \
     rm -rf /var/lib/apt/lists/*
 
+# ttyd: the web terminal a team reaches a node through (nodes/common/team-access.sh).
+# Debian 12 does not package it; the upstream static binary is pinned by version
+# and checksum, per architecture.
+RUN arch="$(dpkg --print-architecture)" && \
+    case "$arch" in \
+        amd64) bin=ttyd.x86_64; sum=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55 ;; \
+        arm64) bin=ttyd.aarch64; sum=b38acadd89d1d396a0f5649aa52c539edbad07f4bc7348b27b4f4b7219dd4165 ;; \
+        *) echo "no pinned ttyd for $arch" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL -o /usr/local/bin/ttyd "https://github.com/tsl0922/ttyd/releases/download/1.7.7/$bin" && \
+    echo "$sum  /usr/local/bin/ttyd" | sha256sum -c - && \
+    chmod 755 /usr/local/bin/ttyd
+
 LABEL org.smartgrid-mtd.role="cps-node" \
       org.smartgrid-mtd.description="engine/plc/sensor/firewall/appserver/attacker base image (OT scenario)"

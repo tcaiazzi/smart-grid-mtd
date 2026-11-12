@@ -131,22 +131,43 @@ class Topology(unittest.TestCase):
         self.assertTrue(m["sensor"].meta.get("bridged"))
         self.assertEqual(m["sensor"].meta["ports"], {(8090, "tcp"): cps.DASHBOARD_GUEST_PORT})
 
-    def test_operator_api_is_published_only_when_asked_and_closed_on_mgmt(self):
+    def test_a_scenario_built_on_the_lab_adds_to_its_nodes_without_changing_it(self):
         self.assertIsNone(self.m["soc"].meta.get("bridged"))
-        self.assertEqual(
-            [c for c in self.startups["soc"] if "iptables" in c],
-            [],
-            "the cps lab changed its SOC node for an API it does not run",
-        )
-        _lab, m, startups = cps.build_lab(
-            types.SimpleNamespace(dashboard_port=0, operator_port=8766)
-        )
-        self.assertEqual(m["soc"].meta["ports"], {(8766, "tcp"): cps.OPERATOR_GUEST_PORT})
+        self.assertEqual([c for c in self.startups["soc"] if "iptables" in c], [])
+        extras = {
+            "soc": cps.Extra(
+                files=[("nodes/soc/soc_console.html", "/soc_console.html")],
+                ports=["8766:8090/tcp", "8767:8091/tcp"],
+                startup=cps.closed_on("eth0", 8090, 8091),
+            )
+        }
+        topo = cps.topology(cps.default_args(), name="other", extras=extras)
+        self.assertEqual(topo.name, "other")
+        _lab, m, startups = cps._build(topo)
+        self.assertEqual(m["soc"].meta["ports"], {(8766, "tcp"): 8090, (8767, "tcp"): 8091})
         self.assertIn(
-            f"iptables -A INPUT -i eth0 -p tcp --dport {cps.OPERATOR_GUEST_PORT} -j DROP",
+            "iptables -A INPUT -i eth0 -p tcp --dport 8090 -j DROP",
             startups["soc"],
-            "the operator API would answer on MGMT: the HMI, the attacker's foothold, "
+            "the SOC's console would answer on MGMT: the HMI, the attacker's foothold, "
             "could approve or reject in the operator's place",
+        )
+        soc = next(n for n in topo.nodes if n.name == "soc")
+        self.assertIn(("nodes/soc/soc_console.html", "/soc_console.html"), soc.files)
+        # The lab itself is untouched by having been extended once.
+        again = next(n for n in cps.topology(cps.default_args()).nodes if n.name == "soc")
+        self.assertNotIn(("nodes/soc/soc_console.html", "/soc_console.html"), again.files)
+
+    def test_a_published_attacker_keeps_its_route_into_the_lab(self):
+        extras = {"attacker": cps.Extra(ports=["8768:8090/tcp"])}
+        _lab, _m, startups = cps._build(cps.topology(cps.default_args(), extras=extras))
+        self.assertIn(
+            f"ip route replace default via {cps.FW_IT_IP} dev eth0",
+            startups["attacker"],
+            "next to the bridged NIC's default route an `ip route add` fails, and the "
+            "attacker loses its way to the lab",
+        )
+        self.assertIn(
+            f"ip route add default via {cps.FW_IT_IP} dev eth0", self.startups["attacker"]
         )
 
     def test_a_person_cannot_be_asked_in_this_scenario(self):

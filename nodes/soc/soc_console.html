@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOC console</title>
+<!--
+  soc_console.html — the operator's console of the SOC, served by
+  soc_operator.py on the SOC node. It shows what the analytics sees and
+  proposes, and sends back what the operator answers and orders. It talks only
+  to the server it came from, with the token given in the URL fragment
+  (#token=…), which a browser never sends to anyone. Self-contained: no CDN.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f8fb; --surface: #fdfeff;
+  --ink: #0b0f14; --ink-2: #4a5360; --muted: #7f8894;
+  --grid: #dde3ea; --ring: rgba(11,15,20,0.12); --wash: rgba(11,15,20,0.04);
+  --team: #2a78d6;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0c0f13; --surface: #171b21;
+    --ink: #eef1f5; --ink-2: #bcc4ce; --muted: #7f8894;
+    --grid: #262c34; --ring: rgba(255,255,255,0.12); --wash: rgba(255,255,255,0.05);
+    --team: #4a92ea;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 16px;
+  padding-bottom: 12px; border-bottom: 3px solid var(--team); }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+.spacer { flex: 1; }
+button, input, a.btn { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; text-decoration: none; }
+button, a.btn { cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+button.ok { background: var(--good); border-color: var(--good); color: #fff; font-weight: 600; }
+button.no { border-color: var(--critical); color: var(--critical); font-weight: 600; }
+button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--ring); color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.grid2 > .card { margin-bottom: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--ring); padding: 6px 8px; }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeric: tabular-nums; vertical-align: top; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.wrap { overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; }
+.err { color: var(--critical); font-size: 12px; overflow-wrap: anywhere; }
+.sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; }
+.sug .hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.sug .hd b { font-size: 15px; }
+.sug dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0; }
+.sug dt { color: var(--ink-2); font-size: 12px; }
+.sug dd { margin: 0; overflow-wrap: anywhere; }
+code { font-size: 12px; overflow-wrap: anywhere; }
+details { margin: 6px 0; font-size: 13px; }
+summary { cursor: pointer; color: var(--ink-2); }
+.acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--wash); vertical-align: middle; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--ink-2); }
+#gate { max-width: 420px; margin: 80px auto; }
+#gate input { width: 100%; margin: 8px 0; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card" id="gate" style="display:none">
+    <h2>SOC console</h2>
+    <p class="sub">This console needs the blue team's token.</p>
+    <input id="gate-token" type="password" autocomplete="off" placeholder="token">
+    <button type="button" id="gate-go">Enter</button>
+    <div class="err" id="gate-err"></div>
+  </section>
+
+  <div id="app" style="display:none">
+    <header>
+      <h1>SOC console</h1>
+      <span class="badge" id="conn"><span class="dot" style="background:var(--muted)"></span> connecting</span>
+      <span class="badge" id="policy"></span>
+      <span class="spacer"></span>
+      <span class="sub" style="margin:0">SOC mode</span>
+      <span id="modes" role="group" aria-label="SOC mode">
+        <button type="button" data-mode="advise" aria-pressed="false" title="Every countermeasure waits for your verdict">Advise</button>
+        <button type="button" data-mode="auto" aria-pressed="false" title="The SOC runs what its policy decides">Automatic</button>
+      </span>
+      <label class="sub" for="who" style="margin:0">operator</label>
+      <input id="who" type="text" maxlength="80" autocomplete="off" spellcheck="false" style="width:130px">
+      <a class="btn" id="term" target="_blank" rel="noopener" style="display:none">Open terminal</a>
+    </header>
+    <div class="err" id="err"></div>
+
+    <section class="card">
+      <h2>Suggestions</h2>
+      <p class="sub" id="sug-sub"></p>
+      <div id="pending"></div>
+      <details id="closed-wrap"><summary>Answered and expired</summary>
+        <div class="scroll"><table id="closed"></table></div></details>
+    </section>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Countermeasures</h2>
+        <p class="sub">Apply or revert one on your own initiative. It runs on its host through the manager, like the SOC's own.</p>
+        <div class="scroll"><table id="cms"></table></div>
+      </section>
+      <section class="card">
+        <h2>Attack tree</h2>
+        <p class="sub">What the SOC believes the attacker has done, from the findings so far.</p>
+        <div class="scroll"><table id="tree"></table></div>
+      </section>
+    </div>
+
+    <div class="grid2">
+      <section class="card">
+        <h2>Findings</h2>
+        <p class="sub">What the sensors reported, newest first.</p>
+        <div class="scroll"><table id="findings"></table></div>
+      </section>
+      <section class="card">
+        <h2>Responses</h2>
+        <p class="sub">What ran, on which host, and who asked for it.</p>
+        <div class="scroll"><table id="actions"></table></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null) continue;
+    if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+}
+const num = (v, d = 2) => v == null ? "—" : (typeof v === "number" ? +v.toFixed(d) : v);
+const clock = t => t ? new Date(t * 1000).toLocaleTimeString() : "—";
+function dur(s) { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
+// The token: from the link the team was given (#token=…), kept for this tab only.
+let token = new URLSearchParams(location.hash.slice(1)).get("token");
+try { if (token) sessionStorage.setItem("soc-token", token); else token = sessionStorage.getItem("soc-token"); } catch (e) {}
+if (location.hash) try { history.replaceState(null, "", location.pathname); } catch (e) {}
+try { $("who").value = localStorage.getItem("soc-operator") || ""; } catch (e) {}
+$("who").addEventListener("change", e => { try { localStorage.setItem("soc-operator", e.target.value.trim()); } catch (err) {} });
+const operator = () => $("who").value.trim() || "operator";
+
+let S = null, skew = 0, sig = "";
+const sent = {};  // suggestion id -> verdict sent from this page, until the SOC closes it
+
+async function call(method, path, body) {
+  const res = await fetch(path, { method, cache: "no-store",
+    headers: { "Authorization": `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify({ ...body, operator: operator() }) : undefined });
+  if (res.status === 401) { gate("That token was not accepted."); throw new Error("unauthorized"); }
+  const doc = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(doc.error || String(res.status));
+  return doc;
+}
+async function order(method, path, body) {
+  $("err").textContent = "";
+  try { await call(method, path, body); } catch (e) { $("err").textContent = `Not done: ${e.message}`; }
+  refresh();
+}
+function gate(why) {
+  $("app").style.display = "none"; $("gate").style.display = ""; $("gate-err").textContent = why || "";
+}
+$("gate-go").addEventListener("click", () => {
+  token = $("gate-token").value.trim();
+  try { sessionStorage.setItem("soc-token", token); } catch (e) {}
+  $("gate").style.display = "none"; refresh();
+});
+$("gate-token").addEventListener("keydown", e => { if (e.key === "Enter") $("gate-go").click(); });
+document.querySelectorAll("#modes button").forEach(b =>
+  b.addEventListener("click", () => order("POST", "/mode", { mode: b.dataset.mode })));
+
+function covered(list) {
+  return (list || []).map(n => `${n.label || n.node}${n.attck ? ` [${n.attck}]` : ""}${n.belief != null ? ` (belief ${num(n.belief)})` : ""}`).join("; ");
+}
+function suggestion(a) {
+  const x = a.explanation || {}, cm = x.countermeasure || {}, tr = x.trigger || {};
+  const row = (k, v) => v ? [h("dt", {}, k), h("dd", {}, v)] : [];
+  const busy = a.state === "decided" || !!sent[a.request];
+  const answer = verdict => { sent[a.request] = verdict; order("POST", `/approvals/${encodeURIComponent(a.request)}`, { verdict }); };
+  const alts = (x.alternatives || []).map(p => h("li", {},
+    `${p.actions.length ? p.actions.join(" + ") : "do nothing"} — risk ${num(p.risk, 3)}, operational cost ${num(p.op)}, energy ${num(p.energy)}`));
+  return h("div", { class: "sug" },
+    h("div", { class: "hd" }, h("b", {}, cm.label || a.action),
+      h("span", { class: "muted" }, `${a.action}${cm.machine ? ` · runs on ${cm.machine}` : ""}`),
+      h("span", { class: "spacer" }), h("span", { "data-due": a.due_t ?? "" }, "")),
+    h("dl", {},
+      ...row("seen", tr.klass ? `${tr.klass}${tr.detector ? ` (${tr.detector} detector${tr.confidence != null ? `, confidence ${num(tr.confidence)}` : ""})` : ""}${tr.src ? ` from ${tr.src}` : ""}` : null),
+      ...row("prevents", covered(x.prevents)), ...row("undoes", covered(x.restores)),
+      ...row("why", x.rationale),
+      ...row("cost", [cm.op_cost != null ? `operational ${num(cm.op_cost)}` : null, cm.energy_cost ? `energy ${num(cm.energy_cost)}` : null,
+        cm.time_to_effect_s != null ? `effective in ${num(cm.time_to_effect_s, 1)} s` : null].filter(Boolean).join(" · ")),
+      ...row("proposed with", (x.decided_with || []).join(", "))),
+    h("details", {}, h("summary", {}, "What it runs, and what else was considered"),
+      ...(cm.commands || []).map(c => h("div", {}, h("code", {}, c))),
+      cm.d3fend ? h("div", { class: "muted" }, `D3FEND: ${cm.d3fend}`) : null,
+      alts.length ? h("ul", {}, alts) : null),
+    h("div", { class: "acts" },
+      h("button", { type: "button", class: "ok", disabled: busy ? "" : null, onclick: () => answer("approve") }, "Approve"),
+      h("button", { type: "button", class: "no", disabled: busy ? "" : null, onclick: () => answer("reject") }, "Reject"),
+      busy ? h("span", { class: "muted" }, "sent, the SOC is acting on it…") : null));
+}
+const OUTCOME = { granted: ["var(--good)", "approved"], rejected: ["var(--critical)", "rejected"], expired: ["var(--muted)", "expired, not applied"] };
+const STATE = { confirmed: "var(--critical)", suspected: "var(--warning)", inferred: "var(--muted)" };
+function table(id, heads, rows, empty) {
+  $(id).replaceChildren(h("thead", {}, h("tr", {}, heads.map(x => h("th", { class: x.startsWith("#") ? "num" : null }, x.replace(/^#/, ""))))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: heads.length, class: "empty" }, empty))));
+}
+
+function render() {
+  if (!S) return;
+  const ap = S.approvals || { pending: [], closed: [] };
+  for (const k of Object.keys(sent)) if (!ap.pending.some(a => a.request === k)) delete sent[k];
+  // Rebuilt only when something changed: a redraw every second would close the
+  // details the operator is reading and could swallow a click.
+  const s = JSON.stringify([S.mode, S.policy, ap.pending.map(a => [a.request, a.state]), ap.closed.length, sent,
+    S.countermeasures, S.tree, (S.findings || []).length, (S.actions || []).length]);
+  if (s !== sig) {
+    sig = s;
+    $("policy").textContent = `policy: ${S.policy}`;
+    document.querySelectorAll("#modes button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode)));
+    if (S.terminal) { $("term").href = S.terminal; $("term").style.display = ""; }
+    $("sug-sub").textContent = S.mode === "advise"
+      ? `The SOC is advising: nothing it proposes runs until you approve it, and a suggestion left unanswered for ${dur(S.advise_s)} expires unapplied.`
+      : "The SOC is acting on its own: it runs what its policy decides and reports it under Responses.";
+    $("pending").replaceChildren(...(ap.pending.length ? ap.pending.map(suggestion)
+      : [h("div", { class: "empty" }, "Nothing is waiting for an answer")]));
+    const closed = [...ap.closed].reverse();
+    $("closed-wrap").style.display = closed.length ? "" : "none";
+    table("closed", ["#at", "suggestion", "outcome", "by", "why it was suggested"], closed.map(a => {
+      const [c, label] = OUTCOME[a.state] || ["var(--muted)", a.state];
+      return h("tr", {}, h("td", { class: "num" }, clock(a.closed_t)), h("td", {}, a.action),
+        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`), h("td", {}, a.operator || "—"),
+        h("td", { class: "wrap" }, a.explanation?.rationale || "—")); }), "");
+    table("cms", ["countermeasure", "host", "state", ""], (S.countermeasures || []).map(c => h("tr", {},
+      h("td", {}, h("div", {}, c.label || c.id), h("details", {}, h("summary", {}, c.id),
+        ...(c.commands || []).map(x => h("div", {}, h("code", {}, x))))),
+      h("td", {}, c.machine),
+      h("td", {}, c.in_effect_since ? [h("span", { class: "dot", style: "background:var(--good)" }), ` in effect since ${clock(c.in_effect_since)}`] : h("span", { class: "muted" }, "not applied")),
+      h("td", { class: "num" },
+        h("button", { type: "button", onclick: () => order("POST", `/countermeasures/${encodeURIComponent(c.id)}`, { op: "apply" }) }, "Apply"), " ",
+        h("button", { type: "button", disabled: (c.revert || []).length ? null : "", title: (c.revert || []).length ? null : "This countermeasure has nothing to undo",
+          onclick: () => order("POST", `/countermeasures/${encodeURIComponent(c.id)}`, { op: "revert" }) }, "Revert")))),
+      "The SOC has not reported its countermeasures yet");
+    table("tree", ["step", "state", "#belief"], (S.tree || []).map(n => h("tr", {},
+      h("td", {}, n.label, n.attck ? h("span", { class: "muted" }, ` ${n.attck}`) : null),
+      h("td", {}, h("span", { class: "dot", style: `background:${STATE[n.state] || "var(--muted)"}` }), ` ${n.state || "—"}`),
+      h("td", { class: "num" }, h("span", { class: "meter" }, h("i", { style: `width:${Math.round(100 * (n.belief || 0))}%` })), ` ${num(n.belief)}`))),
+      "No finding yet: nothing is believed of an attack");
+    table("findings", ["#at", "class", "detector", "source", "#confidence"], [...(S.findings || [])].reverse().map(f => h("tr", {},
+      h("td", { class: "num" }, clock(f.t)), h("td", {}, f.klass), h("td", {}, f.detector || "—"),
+      h("td", {}, [f.src, f.name].filter(Boolean).join(" · ") || "—"), h("td", { class: "num" }, num(f.confidence)))), "No finding yet");
+    table("actions", ["#at", "action", "host", "asked by", "outcome"], [...(S.actions || [])].reverse().map(a => h("tr", {},
+      h("td", { class: "num" }, clock(a.t)), h("td", {}, `${a.op === "revert" ? "revert " : ""}${a.id}`), h("td", {}, a.machine || "—"),
+      h("td", {}, a.by || "soc"),
+      h("td", { class: "wrap" }, h("span", { class: "dot", style: `background:${a.ok ? "var(--good)" : "var(--critical)"}` }),
+        a.ok ? " done" : ` failed${a.commands?.[0]?.out ? `: ${a.commands[0].out}` : ""}`))), "Nothing has run yet");
+  }
+  const t = Date.now() / 1000 + skew;
+  document.querySelectorAll("#pending [data-due]").forEach(e => {
+    const due = parseFloat(e.dataset.due);
+    e.textContent = isFinite(due) ? (due > t ? `expires in ${dur(due - t)}` : "expiring…") : "";
+  });
+}
+
+async function refresh() {
+  if (!token) { gate(""); return; }
+  try {
+    S = await call("GET", "/state");
+    skew = (S.approvals?.now ?? Date.now() / 1000) - Date.now() / 1000;
+    $("app").style.display = "";
+    $("conn").replaceChildren(h("span", { class: "dot", style: "background:var(--good)" }), " live");
+  } catch (e) {
+    if (e.message !== "unauthorized") $("conn").replaceChildren(h("span", { class: "dot", style: "background:var(--critical)" }), " SOC unreachable");
+  }
+  render();
+}
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

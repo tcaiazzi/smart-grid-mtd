@@ -4,16 +4,19 @@
     TelemetryMirror  live copy of every started defense component's guest
                      telemetry onto the progress ledger (via its ``mirror``)
     PlantMirror      live physical state of the CPS twin onto the ledger
+    WebTerminal      a team's shell on a node, served to a browser
+    RecordedShell    every command typed on a node, onto the ledger
 
 Mirrors only read: they never write into the containers, and a failed pull
-never breaks a run.
+never breaks a run. The last two are how people — a red and a blue team in a
+playground — get into a lab without the range losing sight of what they do.
 """
 
 import json
 import logging
 import time
 
-from cyberrange.core.component import Artifact, Component, TelemetryCursor, tail_reader
+from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetryCursor, tail_reader
 
 log = logging.getLogger("cyberrange.planes.monitor.components")
 
@@ -113,3 +116,102 @@ class PlantMirror(Component):
             ctrl_mode=act.get("ctrl_mode"),
             switch_cmd=act.get("switch_cmd"),
         )
+
+
+# ── people in the lab ────────────────────────────────────────────────────────
+ACCESS = "bash /team-access.sh"  # nodes/common/team-access.sh, staged by the scenario
+
+
+class WebTerminal(GuestAgent):
+    """A shell on ``node`` served to a browser on guest ``port`` (ttyd), behind
+    ``user``:``password``. Each session is transcribed whole on the node, and
+    its commands are recorded like any other interactive shell's (RecordedShell
+    reads them)."""
+
+    TRANSCRIPT = "/var/log/terminal.typescript"
+
+    def __init__(self, node, port, user, password):
+        super().__init__(
+            node,
+            f"{ACCESS} terminal {port} {user} {password}",
+            "terminal.log",
+            plane=PLANE,
+            name=f"terminal:{node}",
+            artifacts=[Artifact(node, self.TRANSCRIPT, f"{node}.terminal.typescript")],
+        )
+
+
+class RecordedShell(Component):
+    """The commands typed in interactive shells on ``node`` (command_audit.sh),
+    put on the ledger as ``team_command`` as they are typed.
+
+    Whose shell it is is read from how it got there, never assumed:
+
+        ``team``      the host's own people: over SSH (from ``jump`` only, when
+                      given) or through the node's WebTerminal
+        ``intruder``  the other side, on a host it may take: a shell that
+                      descends from ``entry`` (a fragment of the command line
+                      of the service it gets in through), one such a service
+                      left behind as an orphan, or SSH from anywhere but
+                      ``jump``
+        CONTROL       anything else — the referee's own shell on the node
+
+    An intruder's commands, like a ``witnessed`` team's, also go to the ground
+    truth — the attack as it was really carried out. CONTROL's never do: a
+    referee looking around must not be scored as an attack."""
+
+    plane = PLANE
+    LOG = "/var/log/commands.jsonl"
+    CONTROL = "control"
+    TERMINAL = "ttyd"  # what WebTerminal serves the shell with (team-access.sh)
+
+    def __init__(self, node, team, intruder=None, witnessed=False, jump=None, entry=None):
+        self.node, self.team, self.intruder, self.witnessed = node, team, intruder, witnessed
+        self.jump, self.entry = jump, entry
+        self.name = f"shell:{node}"
+        self._cursor = None
+
+    def whose(self, ev):
+        """The team a recorded command belongs to."""
+        src, ancestry = ev.get("from"), ev.get("ancestry") or []
+        if src:
+            if self.jump in (None, src):
+                return self.team
+            return self.intruder or self.CONTROL
+        if self.intruder:
+            if self.entry and any(self.entry in a for a in ancestry):
+                return self.intruder
+        if any(a.split("/")[-1].startswith(self.TERMINAL) for a in ancestry):
+            return self.team
+        if self.intruder and ev.get("orphan"):
+            return self.intruder
+        return self.CONTROL
+
+    def start(self, ctx):
+        ctx.exec(self.node, f"{ACCESS} audit", wait=True)
+
+    def artifacts(self):
+        return [Artifact(self.node, self.LOG, f"{self.node}.commands.jsonl")]
+
+    def poll(self, ctx):
+        if self._cursor is None:
+            self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.LOG))
+        for ev in self._cursor.poll():
+            if ev.get("kind") != "command":  # command_end only adds the exit code
+                continue
+            team = self.whose(ev)
+            foreign = bool(self.intruder) and team == self.intruder
+            fields = dict(
+                team=team,
+                node=self.node,
+                cmd=ev.get("cmd"),
+                cwd=ev.get("cwd"),
+                via=ev.get("from") or None,
+                guest_t=ev.get("t"),
+            )
+            ctx.emit("team_command", **fields)
+            witnessed = self.witnessed and team == self.team
+            if (foreign or witnessed) and ctx.gt is not None:
+                ctx.gt.record(
+                    "command", t=ev.get("t"), **{k: fields[k] for k in ("team", "node", "cmd")}
+                )

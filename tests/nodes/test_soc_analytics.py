@@ -35,6 +35,7 @@ class FakeApi:
 
     def __init__(self):
         self.requests = []  # (agent_id, cm_id, request)
+        self.calls = []  # (agent_id, [op, cm_id, request])
         self.fail = None  # set to an ApiError to raise on the next call
 
     def agents(self):
@@ -44,6 +45,7 @@ class FakeApi:
         if self.fail:
             raise self.fail
         self.requests.append((agent_id, arguments[1], arguments[2]))
+        self.calls.append((agent_id, list(arguments)))
 
 
 class HandFollower:
@@ -264,11 +266,19 @@ class Advising(unittest.TestCase):
 
     def test_an_approved_suggestion_is_requested(self):
         svc, api, rec, now = self.suggested()
+        foll = svc.follower
         request = self.pending(svc)["block_flow"]["request"]
         now[0] = 112.5
         self.assertEqual(svc.desk.submit(request, "approve", "ada"), "ok")
         svc.step()
         self.assertEqual([cm for _a, cm, _r in api.requests], ["block_flow"])
+        foll.feed(
+            alert("100120", {"kind": "cps_response", "request": api.requests[0][2], "ok": True})
+        )
+        svc.step()
+        self.assertEqual(
+            rows(rec, "action")[-1]["by"], "ada", "who approved a response is not on its record"
+        )
         granted = [r for r in rows(rec, "approval") if r["state"] == "granted"]
         self.assertEqual(
             [(r["action"], r["operator"], r["waited_s"]) for r in granted],
@@ -316,6 +326,85 @@ class Advising(unittest.TestCase):
         svc.on_finding(model(1.0, "max_dsetpoint"))
         self.assertEqual([r["id"] for r in rows(rec, "action")], ["notify"])
         self.assertEqual(rows(rec, "approval"), [])
+
+    def outcome(self, svc, foll, api, ok=True):
+        """The host's record of the last response asked of the manager."""
+        _agent, cm_id, request = api.requests[-1]
+        body = {"kind": "cps_response", "id": cm_id, "request": request, "ok": ok}
+        foll.feed(alert("100120", body | {"started_t": 1.0, "done_t": 2.0, "commands": []}))
+        svc.step()
+
+    def test_the_operator_applies_and_reverts_by_hand(self):
+        svc, foll, api, rec, _now = service(policy="solver", approval="operator:60")
+        svc.desk.order("countermeasure", "ada", id="isolate_hmi", op="apply")
+        svc.step()
+        self.assertEqual(api.calls[-1][1][:2], ["apply", "isolate_hmi"])
+        self.outcome(svc, foll, api)
+        done = rows(rec, "action")[-1]
+        self.assertEqual(
+            (done["id"], done["op"], done["by"], done["ok"]), ("isolate_hmi", "apply", "ada", True)
+        )
+        view = {c["id"]: c for c in svc.view()["countermeasures"]}
+        self.assertIsNotNone(view["isolate_hmi"]["in_effect_since"])
+        svc.desk.order("countermeasure", "ada", id="isolate_hmi", op="revert")
+        svc.step()
+        self.assertEqual(api.calls[-1][1][:2], ["revert", "isolate_hmi"])
+        self.outcome(svc, foll, api)
+        self.assertEqual(rows(rec, "action")[-1]["op"], "revert")
+        view = {c["id"]: c for c in svc.view()["countermeasures"]}
+        self.assertIsNone(view["isolate_hmi"]["in_effect_since"])
+
+    def test_what_the_operator_reverted_is_not_proposed_again_until_they_apply_it(self):
+        svc, _api, _rec, _now = self.suggested()
+        action = next(iter(self.pending(svc)))
+        policy = svc.engine.policy
+        svc.desk.order("countermeasure", "ada", id=action, op="apply")
+        svc.step()
+        self.assertIn(action, policy.applied)
+        svc.desk.order("countermeasure", "ada", id=action, op="revert")
+        svc.step()
+        self.assertNotIn(action, policy.applied)
+        self.assertNotIn(
+            action,
+            policy.allowed,
+            "the SOC may redo at the next finding what its operator has just undone",
+        )
+        svc.desk.order("countermeasure", "ada", id=action, op="apply")
+        svc.step()
+        self.assertIn(action, policy.allowed, "the operator cannot change their mind")
+
+    def test_applying_by_hand_answers_the_suggestion_for_it(self):
+        svc, api, rec, _now = self.suggested()
+        svc.desk.order("countermeasure", "ada", id="block_flow", op="apply")
+        svc.step()
+        self.assertEqual([cm for _a, cm, _r in api.requests], ["block_flow"])
+        self.assertNotIn(
+            "block_flow", self.pending(svc), "approving it now would run the block a second time"
+        )
+
+    def test_the_operator_switches_the_soc_to_automatic_and_back(self):
+        svc, foll, api, rec, _now = service(approval="operator:60")
+        svc.desk.order("mode", "ada", mode="auto")
+        svc.step()
+        self.assertEqual(svc.view()["mode"], "auto")
+        foll.feed(alert("100100", finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0)))
+        svc.step()
+        self.assertTrue(api.requests, "an automatic SOC waited for a verdict")
+        self.assertEqual(rows(rec, "approval"), [])
+        svc.desk.order("mode", "ada", mode="advise")
+        svc.step()
+        self.assertEqual(svc.view()["mode"], "advise")
+        self.assertEqual([r["mode"] for r in rows(rec, "mode")], ["auto", "advise"])
+
+    def test_the_console_sees_what_the_soc_sees(self):
+        svc, _api, _rec, _now = self.suggested(policy="solver")
+        view = svc.desk.state()
+        self.assertEqual((view["policy"], view["mode"]), ("solver", "advise"))
+        self.assertEqual([f["klass"] for f in view["findings"]][0], "policy_violation")
+        self.assertIn("breaker_open", {n["node"] for n in view["tree"]})
+        self.assertTrue(view["decisions"])
+        self.assertTrue(view["approvals"]["pending"])
+        json.dumps(view)
 
     def test_the_approval_forms(self):
         self.assertEqual(A.parse_approval("operator:90"), ("operator", 90.0))

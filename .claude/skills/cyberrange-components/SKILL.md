@@ -17,6 +17,15 @@ Two kinds of code meet here, and the whole difficulty is keeping them apart:
 | May use | anything in `requirements.txt` | **the stdlib + what its node image installs** (`docker/<scenario>/Dockerfile`) |
 | Named by | its path, freely | its **guest path**, which is a contract |
 
+Guest-side code has a second home: `nodes/<tool>/` holds **node software** —
+the configuration and glue of a tool a node runs (Wazuh, the SOC's analytics
+and console, the red team's console, shell access). It reaches a node through
+the same manifests and obeys the same guest rules, but it is not the
+platform's: `nodes/` and `cyberrange/` never import each other (rule 8 of
+`CLAUDE.md`), and its component only stages and launches it. Prefer an existing
+open-source tool, installed by the node image, to code of our own. See
+`docs/structure.md`, "Beside the layers".
+
 ## Scope / Not this skill
 
 | This skill | Elsewhere |
@@ -93,7 +102,8 @@ no package-relative imports, no dependency the guest cannot have.
 1. **Pick the plane by what the thing *is*,** not by which scenario wants it:
    traffic = the legitimate system doing its job; attack = anything adversarial;
    defense = detection and response; monitor = observation that only ever reads.
-2. **Write the guest agent** under `planes/<plane>/agents/`, opening with
+2. **Write the guest agent** under `planes/<plane>/agents/` (or, when it is
+   the glue of a tool the node runs, under `nodes/<tool>/`), opening with
    `#!/usr/bin/env python3` and a docstring that says what it is, why it exists
    and the deploy fact ("Copied flat onto the sensor machine…, stdlib + numpy
    only"). Give it `--seed` if its behaviour is random.

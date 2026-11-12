@@ -174,6 +174,13 @@ class CpsScenario(Scenario):
         """SocAnalytics' operator_* arguments: none, the SOC here decides alone."""
         return {}
 
+    # What a scenario built on this one adds to the episode. Here: nothing.
+    def extra_services(self, ctx):
+        """Components started with the services, before normal operation."""
+
+    def engage(self, ctx):
+        """Called once the ground truth is open, when an attack may begin."""
+
     def topology(self, args):
         return T.topology(args, name=self.lab_name)
 
@@ -362,6 +369,7 @@ class CpsScenario(Scenario):
                     **self.operator_api(a),
                 )
             )
+            self.extra_services(ctx)
         ctx.start(monitor.PlantMirror("engine"))
         ctx.start(monitor.TelemetryMirror())
 
@@ -388,6 +396,7 @@ class CpsScenario(Scenario):
             approval=a.approval,
             it=it,
         )
+        self.engage(ctx)
         if not a.attack:
             return
         driver = ctx.start(self.attacker(a))

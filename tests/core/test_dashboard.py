@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 
 
-from cyberrange.core.dashboard import ProgressDashboard  # noqa: E402
+from cyberrange.core.dashboard import PAGE, ProgressDashboard  # noqa: E402
 from cyberrange.core.ledgers import summarize  # noqa: E402
 from cyberrange.core.progress import ProgressLog  # noqa: E402
 
@@ -275,6 +275,32 @@ class Summary(unittest.TestCase):
         ]
         s = summarize(evs, mtime=time.time())
         self.assertEqual((s["done"], s["failed"], s["status"]), (1, 0, "running"))
+
+
+class ControlOnlyWatches(unittest.TestCase):
+    """The platform's dashboard is the referee's view: it must have no way to
+    act on a lab, or it becomes a third team with everyone's access."""
+
+    def test_the_server_has_no_endpoint_that_writes(self):
+        with tempfile.TemporaryDirectory() as root:
+            dash = ProgressDashboard(root, port=0).start()
+            try:
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{dash.port}/api/ledgers", data=b"{}", method="POST"
+                )
+                with self.assertRaises(urllib.error.HTTPError) as refused:
+                    urllib.request.urlopen(req, timeout=5)
+                self.assertEqual(refused.exception.code, 501)
+            finally:
+                dash.shutdown()
+
+    def test_the_page_only_ever_reads(self):
+        with open(PAGE) as f:
+            page = f.read()
+        for write in ("method:", "POST", "Authorization"):
+            self.assertNotIn(
+                write, page, f"the control page can send something ({write!r}): it should only read"
+            )
 
 
 class CoreKnowsNoScenario(unittest.TestCase):

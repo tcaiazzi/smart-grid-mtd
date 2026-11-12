@@ -17,23 +17,24 @@ guest_paths.add(guest_paths.SOC)
 import soc_operator as O  # noqa: E402  (flat guest import, needs the path set above)
 
 TOKEN = "s3cret"
-CONSOLE = "http://127.0.0.1:8765"
+STATE = {"mode": "advise", "countermeasures": [{"id": "block_flow"}, {"id": "isolate_hmi"}]}
 
 
 class Api(unittest.TestCase):
     def setUp(self):
         self.desk = O.ApprovalDesk(clock=lambda: 100.0)
-        self.api = O.OperatorApi(self.desk, TOKEN, host="127.0.0.1", origins=[CONSOLE]).start()
+        self.api = O.OperatorApi(
+            self.desk, TOKEN, host="127.0.0.1", terminal="http://127.0.0.1:1/"
+        ).start()
         self.addCleanup(self.api.shutdown)
+        self.desk.publish(STATE)
         self.desk.open("abc", {"action": "block_flow", "due_t": 160.0, "explanation": {}})
 
-    def call(self, method, path, body=None, token=TOKEN, origin=None):
+    def call(self, method, path, body=None, token=TOKEN, raw=False):
         """-> (status, parsed body or None, headers)."""
         headers = {}
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        if origin:
-            headers["Origin"] = origin
         data = None
         if body is not None:
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -46,7 +47,7 @@ class Api(unittest.TestCase):
                 status, text, got = r.status, r.read(), r.headers
         except urllib.error.HTTPError as e:
             status, text, got = e.code, e.read(), e.headers
-        return status, (json.loads(text) if text else None), got
+        return status, (text if raw else json.loads(text) if text else None), got
 
     def test_the_pending_suggestions_are_listed(self):
         status, doc, _h = self.call("GET", "/approvals")
@@ -93,23 +94,53 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call("POST", "/approvals/abc", b"[1]")[0], 400)
         self.assertEqual(self.call("POST", "/approvals/abc", b"x" * (O.MAX_BODY + 1))[0], 400)
         self.assertEqual(self.call("POST", "/elsewhere/abc", {"verdict": "approve"})[0], 404)
-        self.assertEqual(self.call("GET", "/")[0], 404)
+        self.assertEqual(self.call("GET", "/nowhere")[0], 404)
         self.assertEqual(self.desk.take(), [])
 
-    def test_only_the_configured_console_gets_cors(self):
-        _s, _d, mine = self.call("GET", "/approvals", origin=CONSOLE)
-        self.assertEqual(mine["Access-Control-Allow-Origin"], CONSOLE)
-        _s, _d, theirs = self.call("GET", "/approvals", origin="http://evil.example")
-        self.assertIsNone(
-            theirs["Access-Control-Allow-Origin"],
-            "a page from any origin could read the SOC's suggestions in the operator's browser",
+    def test_the_page_is_served_but_holds_nothing(self):
+        status, page, _h = self.call("GET", "/", token=None, raw=True)
+        self.assertEqual(status, 200)
+        self.assertIn(b"SOC console", page)
+        self.assertNotIn(TOKEN.encode(), page, "the console page gives the token away")
+        self.assertEqual(self.call("GET", "/state", token=None)[0], 401)
+
+    def test_the_state_is_the_socs_view_with_its_suggestions(self):
+        status, doc, _h = self.call("GET", "/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(doc["mode"], "advise")
+        self.assertEqual([s["request"] for s in doc["approvals"]["pending"]], ["abc"])
+        self.assertEqual(doc["terminal"], "http://127.0.0.1:1/")
+
+    def test_a_countermeasure_is_ordered_by_hand(self):
+        body = {"op": "revert", "operator": "ada"}
+        self.assertEqual(self.call("POST", "/countermeasures/block_flow", body)[0], 200)
+        self.assertEqual(
+            self.desk.take_orders(),
+            [
+                {
+                    "kind": "countermeasure",
+                    "operator": "ada",
+                    "t": 100.0,
+                    "id": "block_flow",
+                    "op": "revert",
+                }
+            ],
+        )
+        self.assertEqual(self.call("POST", "/countermeasures/rm_rf", {"op": "apply"})[0], 404)
+        self.assertEqual(self.call("POST", "/countermeasures/block_flow", {"op": "run"})[0], 400)
+        self.assertEqual(
+            self.call("POST", "/countermeasures/block_flow", {"op": "apply"}, token="x")[0], 401
+        )
+        self.assertEqual(
+            self.desk.take_orders(), [], "an order was taken that should have been refused"
         )
 
-    def test_the_preflight_is_answered_without_credentials(self):
-        status, _doc, h = self.call("OPTIONS", "/approvals/abc", token=None, origin=CONSOLE)
-        self.assertEqual(status, 204)
-        self.assertIn("Authorization", h["Access-Control-Allow-Headers"])
-        self.assertIn("POST", h["Access-Control-Allow-Methods"])
+    def test_the_mode_is_ordered(self):
+        self.assertEqual(self.call("POST", "/mode", {"mode": "auto"})[0], 200)
+        self.assertEqual(self.call("POST", "/mode", {"mode": "off"})[0], 400)
+        self.assertEqual(
+            [(o["kind"], o["mode"]) for o in self.desk.take_orders()], [("mode", "auto")]
+        )
 
 
 class Desk(unittest.TestCase):

@@ -40,6 +40,11 @@ only what configures it. Today that is Wazuh on the CPS management network:
 profile, the active response that applies a countermeasure). The components
 that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
 
+Next to it: `nodes/soc/` (the SOC's analytics and its operator console),
+`nodes/redteam/` (the red team's console, on the attacker node) and
+`nodes/common/` (what any host a person works on needs: the web terminal and
+SSH set-up around `ttyd` and OpenSSH, and the record of the commands typed).
+
 The agents under `cyberrange/planes/*/agents/` predate this boundary: they are
 node software too, and are meant to move here.
 
@@ -76,9 +81,10 @@ rather than importing one scenario's knowledge graph.
 **A scenario may build on another scenario, never the reverse.** `cps-advisor`
 subclasses `CpsScenario` and deploys its lab under another name; `cps` knows
 nothing of it. What the derived scenario needs to vary is a hook or a class
-attribute on the base (`operator_api`, `check_approval`, `DEFAULT_*`), not a
-test on the scenario's name. Its `SOURCES` list only its own directory and its
-`GUEST_MANIFESTS` are empty, so the shared lab is counted once, under `cps`.
+attribute on the base (`extra_services`, `engage`, `operator_api`,
+`check_approval`, `DEFAULT_*`), not a test on the scenario's name. Its `SOURCES`
+list only its own directory and its `GUEST_MANIFESTS` only the files it adds to
+the nodes, so the shared lab is counted once, under `cps`.
 
 **A file counted twice is a false number in the paper.** `make platform-loc`
 sums each category in `SOURCES` independently, so a file matched by two

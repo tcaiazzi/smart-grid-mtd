@@ -1,6 +1,6 @@
 ---
 name: cyberrange-scenario
-description: "Write or change a scenario of this cyber range: the Scenario contract, the declarative Topology, episode phases, the cli.py entry point, the registry entry and the SOURCES/GUEST_MANIFESTS accounting. Use when: adding a scenario under cyberrange/scenarios/, editing scenario.py or topology.py of mqtt-mtd or cps, adding a node, link, address, route or zone to a lab, changing an episode's phases, options or validation, registering a scenario name, or deciding whether a new file belongs to core, a plane or a scenario."
+description: "Write or change a scenario of this cyber range: the Scenario contract, the declarative Topology, episode phases, the cli.py entry point, the registry entry and the SOURCES/GUEST_MANIFESTS accounting. Use when: adding a scenario under cyberrange/scenarios/, editing scenario.py or topology.py of mqtt-mtd, cps or cps-advisor, adding a node, link, address, route or zone to a lab, changing an episode's phases, options or validation, registering a scenario name, or deciding whether a new file belongs to core, a plane or a scenario."
 argument-hint: "What the scenario should do: nodes and zones, what runs on them, the episode's phases, what it must measure"
 user-invocable: true
 ---
@@ -35,7 +35,20 @@ the adapter inside `cyberrange/core/topology.py` — not for scenario work here.
   table) and §6 "Adding a scenario: checklist".
 - `docs/structure.md` — what belongs to a scenario versus a plane.
 - The closest existing scenario: `cyberrange/scenarios/cps/` is the smaller one,
-  `cyberrange/scenarios/mqtt_mtd/` the one with campaigns, analysis and training.
+  `cyberrange/scenarios/mqtt_mtd/` the one with campaigns, analysis and training,
+  `cyberrange/scenarios/cps_advisor/` the one built on another.
+
+## A scenario built on another
+
+When the experiment is an existing lab with a difference, subclass that
+scenario instead of copying it — `cps-advisor` subclasses `CpsScenario`. Give
+it its own `name` and `lab_name`, vary only what the base exposes as a hook or
+a class attribute (`extra_services`, `engage`, `operator_api`, `check_approval`,
+`DEFAULT_*`, `topology(args, name=, extras=)`), and add a hook to the base
+rather than a test on the scenario's name. The base must not know the derived
+one exists. Its `SOURCES` list only its own directory and its manifests only
+what it adds, so the shared lab is counted once. `docs/platform.md` §2 has the
+table.
 
 ## What a scenario owns
 

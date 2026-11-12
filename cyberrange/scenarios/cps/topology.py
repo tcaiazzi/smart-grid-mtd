@@ -26,6 +26,7 @@ Node roles are the knowledge graph's.
 """
 
 import types
+from dataclasses import dataclass, field
 
 from cyberrange.core.topology import Iface, Node, Route, Topology, build_lab as _build
 from cyberrange.scenarios.cps.guest_files import (
@@ -60,7 +61,10 @@ IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT = 5020
 APP_PORT = 8080
 DASHBOARD_GUEST_PORT = 8080
-OPERATOR_GUEST_PORT = 8090  # the SOC's operator API, when the SOC advises
+# What a team's node serves to the people of the team, when a scenario puts
+# people in the lab: its console and its web terminal.
+CONSOLE_GUEST_PORT = 8090
+TERMINAL_GUEST_PORT = 8091
 # Primary address per machine NIC — also the "addresses" meta on each Machine.
 # The sensor's OT NIC (eth0) is passive and deliberately has no address.
 ADDRESSES = {
@@ -88,13 +92,24 @@ def sensor_rules():
     return [f"iptables -A INPUT -i eth1 -p tcp --dport {DASHBOARD_GUEST_PORT} -j DROP"]
 
 
-def soc_rules():
-    """The SOC's operator API is for the operator's console, reached through
-    the bridged NIC only. Its server listens on every address, so without this
-    rule it would also answer on MGMT (eth0), where the HMI — the attacker's
-    foothold — could try its token and approve or reject in the operator's
-    place."""
-    return [f"iptables -A INPUT -i eth0 -p tcp --dport {OPERATOR_GUEST_PORT} -j DROP"]
+def closed_on(iface, *ports):
+    """A team's console and terminal are for its people, reached through the
+    node's bridged NIC only. Their servers listen on every address, so without
+    these rules they would also answer on the lab network behind ``iface``,
+    where the other side is: the HMI on MGMT could try the SOC's token and
+    approve in the operator's place, a host on IT could drive the attacker's
+    console."""
+    return [f"iptables -A INPUT -i {iface} -p tcp --dport {p} -j DROP" for p in ports]
+
+
+@dataclass
+class Extra:
+    """What a scenario built on this lab adds to one node: files to stage,
+    host ports to publish ("HOST:GUEST/tcp"), startup commands."""
+
+    files: list = field(default_factory=list)
+    ports: list = field(default_factory=list)
+    startup: list = field(default_factory=list)
 
 
 def firewall_rules():
@@ -112,79 +127,82 @@ def firewall_rules():
     ]
 
 
-def topology(args, name=LAB_NAME) -> Topology:
+def topology(args, name=LAB_NAME, extras=None) -> Topology:
     """The lab, named ``name``: a scenario that reuses it under another name can
-    run next to this one. With an ``operator_port`` in ``args`` the SOC's
-    operator API is published on that host port."""
+    run next to this one. ``extras`` ({node: Extra}) is what such a scenario
+    adds to the nodes; this lab is the same without it."""
     dashboard = int(getattr(args, "dashboard_port", 0) or 0)
-    operator = int(getattr(args, "operator_port", 0) or 0)
+    extras = extras or {}
+    nodes = _nodes(dashboard, extras)
+    for node in nodes:
+        extra = extras.get(node.name)
+        if extra is None:
+            continue
+        node.files = list(node.files) + list(extra.files)
+        node.startup = list(node.startup) + list(extra.startup)
+        if extra.ports:
+            node.mgmt_port = node.published_ports() + list(extra.ports)
+    return Topology(name, default_image=IMAGE, nodes=nodes)
 
+
+def _nodes(dashboard, extras):
     def gw(via):
         return [Route("default", via, "eth0")]
 
     def addr(name, i):
         return ADDRESSES[name].get(f"eth{i}")
 
-    return Topology(
-        name,
-        default_image=IMAGE,
-        nodes=[
-            Node(
-                "attacker",
-                [Iface(IT, addr("attacker", 0))],
-                role="it-host",
-                routes=gw(FW_IT_IP),
-                files=ATTACKER_CPS_FILES,
-            ),
-            Node(
-                "hmi",
-                # IT first: the response isolates the HMI by taking eth0 down,
-                # and must still reach it afterwards on eth1.
-                [Iface(IT, addr("hmi", 0)), Iface(MGMT, addr("hmi", 1))],
-                role="hmi",
-                routes=gw(FW_IT_IP),
-                files=HMI_FILES,
-            ),
-            Node(
-                "firewall",
-                [
-                    Iface(IT, addr("firewall", 0)),
-                    Iface(OT, addr("firewall", 1)),
-                    Iface(MGMT, addr("firewall", 2)),
-                ],
-                role="boundary",
-                startup=firewall_rules(),
-                files=FW_FILES,
-            ),
-            Node(
-                "plc", [Iface(OT, addr("plc", 0))], role="plc", routes=gw(FW_OT_IP), files=PLC_FILES
-            ),
-            Node(
-                "engine",
-                [Iface(OT, addr("engine", 0))],
-                role="plant",
-                routes=gw(FW_OT_IP),
-                files=ENGINE_FILES,
-            ),
-            Node(
-                "sensor",
-                [Iface(OT, promisc=True), Iface(MGMT, addr("sensor", 1))],
-                role="sensor",
-                startup=sensor_rules(),
-                files=SENSOR_FILES,
-                mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
-            ),
-            Node(
-                "soc",
-                [Iface(MGMT, addr("soc", 0))],
-                image=SOC_IMAGE,
-                role="soc",
-                startup=soc_rules() if operator else [],
-                files=SOC_FILES,
-                mgmt_port=f"{operator}:{OPERATOR_GUEST_PORT}/tcp" if operator else None,
-            ),
-        ],
-    )
+    def ports_of(name):
+        return list(getattr(extras.get(name), "ports", ()))
+
+    return [
+        Node(
+            "attacker",
+            [Iface(IT, addr("attacker", 0))],
+            role="it-host",
+            # A published port brings a bridged NIC with a default route of its
+            # own: the lab's must replace it, not fail next to it.
+            routes=[Route("default", FW_IT_IP, "eth0", replace=bool(ports_of("attacker")))],
+            files=ATTACKER_CPS_FILES,
+        ),
+        Node(
+            "hmi",
+            # IT first: the response isolates the HMI by taking eth0 down,
+            # and must still reach it afterwards on eth1.
+            [Iface(IT, addr("hmi", 0)), Iface(MGMT, addr("hmi", 1))],
+            role="hmi",
+            routes=gw(FW_IT_IP),
+            files=HMI_FILES,
+        ),
+        Node(
+            "firewall",
+            [
+                Iface(IT, addr("firewall", 0)),
+                Iface(OT, addr("firewall", 1)),
+                Iface(MGMT, addr("firewall", 2)),
+            ],
+            role="boundary",
+            startup=firewall_rules(),
+            files=FW_FILES,
+        ),
+        Node("plc", [Iface(OT, addr("plc", 0))], role="plc", routes=gw(FW_OT_IP), files=PLC_FILES),
+        Node(
+            "engine",
+            [Iface(OT, addr("engine", 0))],
+            role="plant",
+            routes=gw(FW_OT_IP),
+            files=ENGINE_FILES,
+        ),
+        Node(
+            "sensor",
+            [Iface(OT, promisc=True), Iface(MGMT, addr("sensor", 1))],
+            role="sensor",
+            startup=sensor_rules(),
+            files=SENSOR_FILES,
+            mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
+        ),
+        Node("soc", [Iface(MGMT, addr("soc", 0))], image=SOC_IMAGE, role="soc", files=SOC_FILES),
+    ]
 
 
 def default_args():

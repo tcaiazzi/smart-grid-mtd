@@ -1,16 +1,19 @@
 # Smart Grid AI-MTD
 
-AI-driven Moving Target Defense (MTD) for MQTT communications in a smart grid,
-emulated with [Kathará](https://github.com/KatharaFramework/Kathara).
+A cyber range for smart-grid security, emulated with
+[Kathará](https://github.com/KatharaFramework/Kathara). It began as AI-driven
+Moving Target Defense (MTD) for MQTT communications in a smart grid, which is
+still its first scenario.
 
 The repository is a **platform** for testing attacks and defences on emulated
-cyber-physical systems safely, reproducibly and observably, with two
+cyber-physical systems safely, reproducibly and observably, with three
 **scenarios** running on it:
 
 | Scenario | What it studies | Read |
 |---|---|---|
 | `mqtt-mtd` | The workshop paper's: MTD against ML traffic fingerprinting | [docs/scenario-mqtt.md](docs/scenario-mqtt.md) |
-| `cps` | A cyber-physical OT/Modbus plant: active IT→OT attack, DPI and IT sensors, SOAR response | [docs/scenario-cps.md](docs/scenario-cps.md) |
+| `cps` | A cyber-physical OT/Modbus plant: active IT→OT attack, DPI and IT sensors, a SOC (Wazuh + analytics) that decides and responds inside the lab | [docs/scenario-cps.md](docs/scenario-cps.md) |
+| `cps-advisor` | The `cps` lab with people in it: the SOC advises an operator instead of acting, and a red team can attack by hand against a blue team | [docs/scenario-cps-advisor.md](docs/scenario-cps-advisor.md), and for the players [docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md) |
 
 How the platform is built and how to add a scenario:
 **[docs/platform.md](docs/platform.md)**. Every reusable component of the four
@@ -19,30 +22,34 @@ planes: **[docs/components.md](docs/components.md)**. Where a file goes and why:
 
 ## Layout
 
-Everything lives in one package, `cyberrange/`, laid out as the three layers of
-the architecture:
+The platform lives in one package, `cyberrange/`, laid out as the three layers
+of the architecture; the software the lab's nodes run that is not the
+platform's lives beside it, in `nodes/`:
 
 ```
 core  <-  planes  <-  scenarios        imports point left; nothing points back
+nodes/                                 imports none of them, and none imports it
 ```
 
 | Directory | What it holds |
 |---|---|
 | `cyberrange/core/` | The platform: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry, progress ledger and dashboard |
 | `cyberrange/planes/traffic/` | Background trace replay, the nanogrid MQTT publishers, the plant and PLC |
-| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain and the tree-guided planner |
-| `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, SOAR, the QKD-simulated cert bootstrap |
-| `cyberrange/planes/monitor/` | Capture and the telemetry/plant mirrors |
+| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain, the tree-guided planner, the launcher of the red team's console |
+| `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, the launchers of Wazuh and of the SOC's analytics, the QKD-simulated cert bootstrap |
+| `cyberrange/planes/monitor/` | Capture, the telemetry/plant mirrors, the web terminals and the record of what people type in them |
 | `cyberrange/scenarios/<name>/` | One scenario, whole: topology, episode, CLI, campaign, deploy manifest, metrics, `analysis/`, `training/` |
+| `nodes/` | Node software: the Wazuh configuration and active response (`wazuh/`), the SOC's analytics, SOAR reasoning and operator console (`soc/`), the red team's console (`redteam/`), shell access and command recording (`common/`) |
 | `tests/`, `make/`, `scripts/`, `tools/`, `docs/` | Tests by area, the makefiles, the manual single-run script, cross-scenario tooling, documentation |
 
 Each plane exposes its reusable building blocks in `components.py`; a scenario
 composes them. One directory holds one scenario — which is what makes
 `make platform-loc` a true measure of what a new scenario costs.
 
-Files under a plane's `agents/` (and `cyberrange/planes/defense/qkd/`) are
-deployment data: they are copied flat into the Kathará containers and run there
-directly, so they cannot use package-relative imports. Each scenario lists what
+Files under a plane's `agents/` (and `cyberrange/planes/defense/qkd/`), and
+everything under `nodes/`, are deployment data: they are copied flat into the
+Kathará containers and run there directly, so they cannot use package-relative
+imports. Each scenario lists what
 it stages in its own `guest_files.py`; the contract is documented in
 `cyberrange/core/topology.py`. Everything else is a normal importable module,
 invoked with `-m` rather than by path.
@@ -55,11 +62,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Node images, one per scenario:
+Node images:
 
 ```bash
-docker build -t kathara/mqtt docker/mqtt/            # MQTT scenario
-make cps-image                                       # CPS scenario (pandapower + pymodbus)
+docker build -t kathara/mqtt docker/mqtt/   # MQTT scenario
+make cps-image                              # cps and cps-advisor: kathara/cps (plant nodes, Wazuh agent,
+                                            # ttyd) and kathara/soc (Wazuh manager, ttyd)
 ```
 
 The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in
@@ -93,7 +101,13 @@ mean [95% CI] across `--runs`. `make dashboard` follows it live.
 
 For anything beyond these five — the experiment pipeline step by step, the
 variables that shape a run, the output layout, the parameter ablation, the SOAR
-response loop — the two scenario documents are the reference.
+response loop — the scenario documents are the reference.
+
+Two more are for people rather than experiments. `PLAYGROUND=1` on a single-run
+target keeps its lab up after the episode, until Ctrl-C. `make cps-teams` is a
+red team against a blue team on the CPS lab: each team gets a console and a web
+terminal on its own node, and `make dashboard` is the referee's read-only view
+([docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md)).
 
 ## Working in this repository
 

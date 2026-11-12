@@ -39,7 +39,7 @@ deploying anything.
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from cyberrange.core import paths
 
@@ -75,7 +75,13 @@ class Node:
     routes: List[Route] = field(default_factory=list)
     startup: List[str] = field(default_factory=list)  # after addressing + routes
     files: List[Tuple[str, str]] = field(default_factory=list)  # (host path, guest path)
-    mgmt_port: Optional[str] = None  # "HOST:GUEST/tcp": bridged NIC + port forward
+    # "HOST:GUEST/tcp", or several of them: bridged NIC + port forwards.
+    mgmt_port: Union[str, Sequence[str], None] = None
+
+    def published_ports(self) -> List[str]:
+        if not self.mgmt_port:
+            return []
+        return [self.mgmt_port] if isinstance(self.mgmt_port, str) else list(self.mgmt_port)
 
     def addresses(self) -> Dict[str, str]:
         """{ethN: primary cidr} for every addressed NIC (passive NICs omitted)."""
@@ -133,9 +139,10 @@ def build_lab(topo: Topology):
         m = machines[n.name]
         for f in n.ifaces:
             lab.connect_machine_obj_to_link(m, f.link)
-        if n.mgmt_port:
+        if n.published_ports():
             m.add_meta("bridged", True)
-            m.add_meta("port", n.mgmt_port)
+            for port in n.published_ports():
+                m.add_meta("port", port)
         for host_path, guest_path in n.files:
             # Manifest host paths are repo-relative; resolve them against the
             # repo rather than the process CWD, so a run started from anywhere
@@ -196,9 +203,9 @@ def export_lab_conf(topo: Topology, out_dir: str, copy_files: bool = False) -> s
         image = topo.image_of(n)
         if image:
             lines.append(f'{n.name}[image]="{image}"')
-        if n.mgmt_port:
+        if n.published_ports():
             lines.append(f'{n.name}[bridged]="true"')
-            lines.append(f'{n.name}[port]="{n.mgmt_port}"')
+            lines += [f'{n.name}[port]="{port}"' for port in n.published_ports()]
         for host_path, guest_path in n.files:
             if copy_files:
                 dst = os.path.join(out_dir, n.name, guest_path.lstrip("/"))

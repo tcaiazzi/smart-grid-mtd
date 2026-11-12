@@ -64,8 +64,9 @@ Two channels must not be confused:
 The sensor's live page is instrumentation: an `INPUT` rule on the sensor drops
 it on the MGMT interface, so it is reachable through the bridged NIC only.
 
-What travels on the management network, when a response runs
-(`CPS_RESPOND` other than `off`), is **Wazuh** traffic:
+What travels on the management network, in every episode, is **Wazuh**
+traffic (a countermeasure is requested only when `CPS_RESPOND` is other than
+`off`):
 
 - the `soc` node runs the Wazuh **manager** (image `kathara/soc`);
 - sensor, HMI and firewall each run a Wazuh **agent**, registered with a
@@ -187,8 +188,8 @@ travel on the same telemetry bus and dashboard the MTD scenario uses.
 Every run follows the same sequence of phases:
 
 1. **deploy** — bring up the lab and configure the firewall;
-2. **services** — start the engine, the PLC, the HMI, the vulnerable app and
-   the sensor;
+2. **services** — start the Wazuh manager, the sensor, the engine, the PLC, the
+   HMI, the vulnerable app, the Wazuh agents and the SOC's analytics;
 3. **normal** — normal operation, 60 s by default; the behavioural model
    calibrates during the first 45 s;
 4. **attack** — run the attack chain in the chosen mode (absent in
@@ -219,6 +220,13 @@ host.
 | `CPS_LEARN` | 45 s | model calibration; **must end ≥ 5 s before the attack** |
 | `CPS_POST` | 30 s | post-attack observation |
 | `CPS_DETECTORS` | `rules,model` | which detectors run |
+| `CPS_STEP` | 1.0 s | the plant's physics step and the PLC's control interval |
+| `CPS_ATTACK_MODE` | `setpoint-overvoltage` | the scripted attack (§5) |
+| `CPS_RESPOND`, `CPS_APPROVAL` | `off`, `auto` | the SOC's policy and the simulated operator approval (§10) |
+| `CPS_ATTACK_DRIVER`, `CPS_PROFILE`, `CPS_GOAL`, `CPS_DWELL` | `scripted`, `opportunistic`, —, 0 | the tree-guided attacker (§10) |
+| `CPS_IT` | unset | `1` adds the IT-side sensor on the HMI (§10) |
+| `SEED` | unset | seeds the run; each role derives its own |
+| `PLAYGROUND` | unset | `1` keeps the lab up after the episode, until Ctrl-C ([platform.md](platform.md) §5) |
 | `DASHBOARD_PORT` | unset (off) | host port of the live findings dashboard off the sensor's mgmt NIC, e.g. 8090 |
 
 Every option of the run (`python -m cyberrange.scenarios.cps.cli --help`) is also
@@ -311,14 +319,14 @@ would have decided on a finished run's findings.
 How the knowledge graph and the attack tree are built, turned into a belief
 and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
 
-- **Knowledge graph** (`soar/kg.py`, networkx), built from the Kathará Lab
-  model: hosts, zones and the `addresses` meta that `core.topology.build_lab`
-  sets on every machine, plus services, the plant's registers, role permissions
-  (`ot_registers.ROLE_POLICY`) and the boundary FORWARD rules.
+- **Knowledge graph** (`nodes/soc/soar_kg.py`, networkx), built from the
+  inventory: hosts with their roles, zones and addresses, plus services, the
+  plant's registers, role permissions (`ot_registers.ROLE_POLICY`) and the
+  boundary FORWARD rules.
   `reachable(g, src, dst, port)` decides whether a host can reach a port on
   another from zones, addresses and rules. The CPS binding lives in
   `cyberrange/scenarios/cps/inventory.py` — the node software itself knows no scenario.
-- **Attack tree** (`soar/trees.py`), a template of the chain grounded on the
+- **Attack tree** (`nodes/soc/soar_trees.py`), a template of the chain grounded on the
   graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
   the sanctioned HMI→plant flow → one of three impacts: setpoint out of range
   (T0855), breaker open (T0855), MANUAL hijack (T0831). Preconditions are
@@ -337,14 +345,14 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   plant actually received the response) and raises no finding for them. The
   role is bound to the firewall's OT address, so a compromised firewall is a
   blind spot of the sensor.
-- **Mapping** (`soar/mapping.py`): findings become weighted evidence on tree
+- **Mapping** (`nodes/soc/soar_mapping.py`): findings become weighted evidence on tree
   nodes. Command-level evidence (a wrong write) is kept apart from consequence
   evidence (the voltage left the band); once a leaf is confirmed by a wrong
   write, voltage-derived evidence for the other leaves is discounted; an open
   breaker also makes the operator's routine dispatch "unsafe", which is not a
   hijack; the unobservable IT steps are *inferred* from an observed OT step.
   `CampaignState.snapshot()` is the belief handed to the policy.
-- **Policies** (`soar/policy.py`): `rules` is the static playbook and the
+- **Policies** (`nodes/soc/soar_policy.py`): `rules` is the static playbook and the
   baseline — confirmed leaf → fixed countermeasures, each fired once. `solver`
   picks the countermeasure subset minimising expected loss plus weighted
   operational, time and energy cost, by exhaustive enumeration over at most 32
@@ -422,9 +430,10 @@ run the same opportunistic attack reaches the plant with the OT sensor alone
 (`prevented`, no write). `cps-metrics` adds an `it` detection row and a
 `prevented before the plant was touched` line.
 
-The responder writes to the run directory `response.jsonl` — kinds
+The SOC's analytics writes `response.jsonl` on its node — kinds
 `response_up`, `tree_state`, `decision`, `approval` and `action` (with
-per-command return codes) — plus `kg.json` and `tree.json`. `cps-metrics` then
+per-command return codes) — and the run downloads it next to `kg.json` and
+`tree.json`, which the host lays down at deploy. `cps-metrics` then
 reports: MTM (first malicious write → plant back in band for good), decision
 latency, accuracy against the countermeasures each mode needs plus
 over-response, attacker writes that still succeeded after the block, false
@@ -455,6 +464,9 @@ deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
 | Attack chain | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
 | Sensor and model | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
 | SOAR: graph, tree, mapping, policies | `nodes/soc/soar_*.py` (node software), bound to this lab by `cyberrange/scenarios/cps/inventory.py` |
+| SOC analytics (the decision loop) | `nodes/soc/soc_analytics.py`; offline on the host through `cyberrange/scenarios/cps/soc_tool.py` and `responder.py` (`make cps-replay`) |
+| Wazuh: manager rules, agent profile, active response | `nodes/wazuh/manager/`, `nodes/wazuh/agent/` |
+| The same lab with people in the loop | [scenario-cps-advisor.md](scenario-cps-advisor.md) |
 | Lab and orchestration | `cyberrange/scenarios/cps/` (topology, episode) on `cyberrange/core/`; CLI `cli.py`, campaigns `campaign.py` |
 | Metrics and dashboard panel | `cyberrange/scenarios/cps/metrics.py`, `panel.js`; the dashboard itself is `cyberrange/core/dashboard.py` |
 | The platform underneath | [platform.md](platform.md), [structure.md](structure.md) |

@@ -24,9 +24,9 @@ on the host. No guest agent imports it, so it may use networkx.
 
 ```
  Topology (scenarios/cps/topology.py)
-   │  build_lab → Kathará Lab model, every machine carrying its "addresses" meta
+   │  inventory(args) → hosts, roles, addresses, services, boundary rules   (inventory.py)
    ▼
- Knowledge graph  ──────────────┐  build_kg(lab, firewall_rules, services, roles, plant_service)
+ Knowledge graph  ──────────────┐  build_kg(inventory)                      (soar_kg.py)
    │                            │
    │ cps_context(g)             │ cps_context(g)
    ▼                            ▼
@@ -38,7 +38,8 @@ on the host. No guest agent imports it, so it may use networkx.
    ▼
  Policy: belief → Decision (actions + justification)            (policy.py)
    ▼
- Responder: runs the actions' commands on the lab hosts         (responder.py)
+ SOC analytics: asks the Wazuh manager for each action; the     (soc_analytics.py,
+ agent on the target host runs its allowlisted commands          cps_response.py)
 ```
 
 The graph describes **what the lab is**. The tree describes **how it can be
@@ -51,16 +52,16 @@ lab being deployed, and stay fixed until the run ends (§4).
 
 ### 2.1 Inputs
 
-`build_kg` is generic: it turns any declared lab into a graph and knows nothing
-about the CPS scenario. The scenario supplies the inputs in
+`build_kg(inventory)` is generic: it turns any described lab into a graph and
+knows nothing about the CPS scenario. The scenario supplies the inventory, one
+JSON-serialisable document, in
 [scenarios/cps/inventory.py](../cyberrange/scenarios/cps/inventory.py):
 
-| Input | Source | Becomes |
+| Inventory key | Source | Becomes |
 |---|---|---|
-| `lab` | `topology.build_lab()`, or the `ctx.lab` being deployed | hosts, zones, addresses |
-| `fw_rules` | `topology.firewall_rules()`, the iptables commands the firewall's startup runs | `flow_rule` nodes |
+| `hosts` | the declared `Topology`: each `Node`'s name, `role`, image and interfaces (`name`, `zone`, `cidr`) | hosts, zones, addresses; the `role` attribute of each host, `may_write` edges |
+| `boundary` | the boundary host and `topology.firewall_rules()`, the iptables commands its startup runs | `flow_rule` nodes |
 | `services` | `topology.services()`: `{host: [(name, proto, port, app)]}` | `service` nodes |
-| `roles` | `topology.roles()`, the `role` of each declared `Node` | the `role` attribute of each host, `may_write` edges |
 | `plant_service` | `("engine", "modbus")` | which service exposes the registers |
 
 The registers and the access policy are not inputs: they come from the plant
@@ -554,7 +555,7 @@ In the example above, the solver's first decision does the following:
 `--approval` controls it:
 - `auto` applies it;
 - `deny` removes it from what the policies may choose;
-- `delay:<s>` queues it, and the responder applies it after the delay.
+- `delay:<s>` queues it, and the SOC requests it after the delay.
 
 `operator:<s>` is a different regime, the one of the `cps-advisor` scenario
 (`docs/scenario-cps-advisor.md`): **every** countermeasure, not only
@@ -597,8 +598,8 @@ against the defender's belief and decisions.
 |---|---|---|
 | `kg.json` | `write_structure` | the graph (node-link JSON) |
 | `tree.json` | `write_structure` | attack tree, `defense` index, countermeasures with their commands |
-| `response.jsonl` | the responder | `response_up`, `tree_state` (full snapshot, on change), `decision`, `approval`, `action` (per command: `rc`, output tail, issued/done times) |
-| `progress.jsonl` | the responder via `ctx.emit` | compact `tree_state`, `decision`, `action`: what the dashboard replays |
+| `response.jsonl` | the SOC analytics, on its node; downloaded with the run | `response_up`, `tree_state` (full snapshot, on change), `decision`, `approval`, `action` (per command: `rc`, output tail, issued/done times) |
+| `progress.jsonl` | `SocAnalytics.mirror`, through the `TelemetryMirror` | compact `tree_state`, `decision`, `action`: what the dashboard replays |
 | `ground_truth.jsonl` | the attacker | `attack_start`, `plan_step`, `rce`, `modbus_write`, `attack_end` |
 
 `make cps-metrics` (`scenarios/cps/metrics.py`) scores the response against

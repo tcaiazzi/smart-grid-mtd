@@ -10,6 +10,7 @@ Detection and response, proactive and reactive:
     SocAnalytics       the SOC's decision loop on the manager's node: alerts ->
                        attack tree -> policy -> responses asked of the manager,
                        or put to an operator when the SOC only advises
+    JumpHost           SSH from the defenders' node to the hosts they manage
 
 Every guest sensor writes telemetry.jsonl-shaped events (mtd_telemetry.py) and
 declares it as a TelemetrySource; ``mirror`` maps its events onto the
@@ -198,10 +199,10 @@ class SocAnalytics(GuestAgent):
     the one thing a node cannot discover, passed base64 on the command line.
 
     With ``approval`` "operator:<s>" the SOC advises: its countermeasures wait
-    on its own operator API (soc_operator.py) for a person's verdict. The API
-    listens on ``operator_port`` with ``operator_token``, and answers browser
-    consoles served from ``operator_origins``. The platform only mirrors the
-    suggestions to the ledger; the verdict goes from the console to the SOC."""
+    at its own operator console (soc_operator.py) for a person's verdict. The
+    console is served on ``operator_port`` behind ``operator_token`` and links
+    ``operator_terminal``, the operator's shell on the node. The platform only
+    mirrors what happens there to the ledger; it never answers for the person."""
 
     RESPONSE = "/response.jsonl"
     KG, TREE = "/kg.json", "/tree.json"
@@ -218,13 +219,14 @@ class SocAnalytics(GuestAgent):
         it=False,
         operator_port=None,
         operator_token=None,
-        operator_origins=(),
+        operator_terminal=None,
     ):
         inv = base64.b64encode(json.dumps(inventory).encode()).decode()
         operator = ""
         if operator_port:
             operator = f" --operator-port {operator_port} --operator-token {operator_token}"
-            operator += "".join(f" --operator-origin {o}" for o in operator_origins)
+            if operator_terminal:
+                operator += f" --operator-terminal {operator_terminal}"
         super().__init__(
             node,
             f"python3 soc_analytics.py --inventory-b64 {inv} --policy {policy} "
@@ -262,12 +264,46 @@ class SocAnalytics(GuestAgent):
                 id=ev.get("id"),
                 ok=ev.get("ok"),
                 machine=ev.get("machine"),
+                op=ev.get("op") or "apply",
+                by=ev.get("by") or "soc",
                 guest_t=ev.get("done_t"),
             )
+        if kind == "mode":
+            return "soc_mode", {"mode": ev.get("mode"), "operator": ev.get("operator")}
         if kind == "approval":
             fields = {k: ev[k] for k in self.APPROVAL_FIELDS if ev.get(k) is not None}
             return "approval", fields | {"guest_t": ev.get("t")}
         return None
+
+
+class JumpHost(Component):
+    """SSH from ``node``, where the defenders work, to the ``hosts`` they
+    manage ({name: address to listen on}). The node makes its own key pair;
+    the platform carries the public key to the hosts, as it provisions their
+    agents' keys and allowlists. Each host accepts that key only, on that
+    address only, and records what is typed there (team-access.sh)."""
+
+    plane = PLANE
+    name = "jump_host"
+    ACCESS = "bash /team-access.sh"
+
+    def __init__(self, node, hosts):
+        self.node, self.hosts = node, dict(hosts)
+
+    def start(self, ctx):
+        names = " ".join(f"{name}={ip}" for name, ip in self.hosts.items())
+        out = ctx.exec_text(self.node, f"{self.ACCESS} jump {names}")
+        key = next((ln.strip() for ln in out.splitlines() if ln.startswith("ssh-")), "")
+        if not key:
+            # No key, no way in: starting sshd with an empty authorized_keys
+            # would leave a listener that serves nobody.
+            log.warning("%s made no SSH key; the hosts are not reachable from it", self.node)
+            return
+        for name, ip in self.hosts.items():
+            ctx.exec(name, f"{self.ACCESS} sshd {ip} '{key}'", console_log="sshd.log")
+
+    def artifacts(self):
+        return [Artifact(name, "/sshd.log", f"{name}.sshd.log") for name in self.hosts]
 
 
 # ── MQTT smart grid ───────────────────────────────────────────────────────────

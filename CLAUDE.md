@@ -95,5 +95,6 @@ repo drifts. Run `make fmt` before committing. What the formatter cannot decide:
 ## Where the rest is
 
 `docs/structure.md` (where a file goes and why) · `docs/platform.md` (the scenario
-contract) · `docs/components.md` (every component) · the `cyberrange-*` skills for
-step-by-step work.
+contract) · `docs/components.md` (every component) · `docs/playground-red-vs-blue.md`
+(the red-vs-blue playground, for the people playing it) · the `cyberrange-*` skills
+for step-by-step work.

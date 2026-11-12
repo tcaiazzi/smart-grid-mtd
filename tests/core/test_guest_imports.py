@@ -41,6 +41,11 @@ from cyberrange.scenarios.cps.guest_files import (  # noqa: E402
     SENSOR_FILES,
     SOC_FILES,
 )
+from cyberrange.scenarios.cps_advisor.guest_files import (  # noqa: E402
+    RED_FILES,
+    SOC_CONSOLE_FILES,
+    TEAM_FILES,
+)
 from cyberrange.scenarios.mqtt_mtd.guest_files import (  # noqa: E402
     ROUTER_FILES,
     SCMC_FILES,
@@ -60,9 +65,9 @@ MACHINES = {
     "firewall": FW_FILES,
     "plc": PLC_FILES,
     "sensor": SENSOR_FILES,
-    "soc": SOC_FILES,
-    "hmi": HMI_FILES,
-    "attacker_cps": ATTACKER_CPS_FILES,
+    "soc": SOC_FILES + SOC_CONSOLE_FILES + TEAM_FILES,
+    "hmi": HMI_FILES + TEAM_FILES,
+    "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
 }
 
 

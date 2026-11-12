@@ -5,6 +5,7 @@ Every attack records what it really did in the run's ground truth (host-only):
     VulnApp              the deliberately vulnerable diagnostics web app (CPS foothold)
     ScriptedChain        fixed per-mode chain: RCE -> pivot -> unauthorized Modbus writes
     PlannedAttacker      reactive, tree-guided attacker (cyberrange/planes/attack/planner)
+    RedConsole           the same steps, run by a person from a console on the attacker
     PassiveFingerprinter sniff -> CNN fingerprint of the nanogrid -> pick the IP to block
     DeliveryAttack       blackhole episodes + benign faults (cyberrange/detection_scenario)
 
@@ -12,12 +13,13 @@ Attack components that act during a phase expose ``attack(ctx)`` (blocking);
 the scenario calls it inside its attack phase.
 """
 
+import base64
 import json
 import logging
 import os
 
 from cyberrange.planes.attack import active_attack
-from cyberrange.core.component import Artifact, Component, GuestAgent
+from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetryCursor, tail_reader
 
 log = logging.getLogger("cyberrange.planes.attack.components")
 
@@ -29,6 +31,8 @@ class VulnApp(GuestAgent):
     """The diagnostics web app with a command injection; ``access_log`` makes
     its requests observable to the IT sensor."""
 
+    SCRIPT = "vuln_app.py"  # names the process a shell got through it descends from
+
     def __init__(self, node, port, access_log=None):
         access = f" --access-log {access_log}" if access_log else ""
         arts = (
@@ -38,7 +42,7 @@ class VulnApp(GuestAgent):
         )
         super().__init__(
             node,
-            f"python3 vuln_app.py --host 0.0.0.0 --port {port}{access}",
+            f"python3 {self.SCRIPT} --host 0.0.0.0 --port {port}{access}",
             "vuln_app.log",
             plane=PLANE,
             name="vuln_app",
@@ -154,6 +158,101 @@ class PlannedAttacker(_ExploitDriver):
         )
         emit_attack_writes(ctx)
         return summary
+
+
+def manual_steps(tree, target_url, engine_ip, engine_port, interval=0.5):
+    """The steps a person may run, as data for the red team's console: every
+    executable, feasible node of the attack ``tree`` (a document), in the order
+    the steps build on each other, each with the command that realises it."""
+    from cyberrange.planes.attack.planner import steps as S
+    from cyberrange.planes.attack.planner import tree_doc
+
+    ctx = {
+        "target_url": target_url,
+        "engine_ip": engine_ip,
+        "engine_port": engine_port,
+        "interval": interval,
+    }
+    nodes = [n for n in tree_doc.walk(tree) if S.is_step(n["id"]) and tree_doc.feasible(n)]
+    nodes.sort(key=lambda n: S.STAGE_INDEX[S.stage_of(n["id"])])
+    known = {n["id"] for n in nodes}
+    return [
+        {
+            "id": n["id"],
+            "label": n.get("label") or n["id"],
+            "attck": n.get("attck"),
+            "attck_name": n.get("attck_name"),
+            "stage": S.stage_of(n["id"]),
+            "detectability": S.DETECTABILITY.get(n["id"]),
+            "needs": [p for p in tree_doc.prerequisites(tree, n["id"]) if p in known],
+            "command": S.step_command(n["id"], ctx),
+        }
+        for n in nodes
+    ]
+
+
+class RedConsole(GuestAgent):
+    """The red team's console on the attacker node (nodes/redteam/red_console.py):
+    a person runs the attack's ``steps`` (see manual_steps) one at a time.
+
+    What they run is the attack, so it is this component that writes the
+    ground truth: it follows the console's record and turns every step into
+    what a driven attack would have recorded — attack_start at the first one,
+    the Modbus writes, the foothold — plus the step itself."""
+
+    RECORD = "/red_actions.jsonl"
+    MODE = "manual"
+
+    def __init__(self, node, port, token, steps, terminal=None):
+        packed = base64.b64encode(json.dumps(steps).encode()).decode()
+        super().__init__(
+            node,
+            f"python3 red_console.py --port {port} --token {token} --steps-b64 {packed}"
+            + (f" --terminal {terminal}" if terminal else ""),
+            "red_console.log",
+            plane=PLANE,
+            name="red_console",
+            artifacts=[Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")],
+        )
+        self._cursor = None
+        self._started = False
+
+    def poll(self, ctx):
+        if ctx.gt is None:
+            return  # nothing may be lost: the steps are read once the truth is open
+        if self._cursor is None:
+            self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.RECORD))
+        for row in self._cursor.poll():
+            if row.get("kind") != "red_step":
+                continue
+            if not self._started:
+                self._started = True
+                ctx.gt.record("attack_start", t=row.get("t"), mode=self.MODE)
+            step = dict(step=row.get("step"), ok=row.get("ok"), operator=row.get("operator"))
+            ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
+            ctx.emit("red_step", guest_t=row.get("t"), **step)
+            for e in row.get("phases") or []:
+                if e.get("phase") != "modbus_write":
+                    continue
+                write = dict(
+                    register=e.get("register"),
+                    register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
+                    value=e.get("value"),
+                    ok=e.get("ok"),
+                )
+                ctx.gt.record(
+                    "modbus_write",
+                    t=e.get("t_send", e.get("t")),
+                    mode=self.MODE,
+                    attempt=e.get("attempt"),
+                    source="pivot",
+                    unauthorized=True,
+                    **write,
+                )
+                ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
+            kind = active_attack.STAGE_TO_GT.get(row.get("step"))
+            if kind and row.get("ok"):
+                ctx.gt.record(kind, t=row.get("t"), mode=self.MODE)
 
 
 # ── MQTT smart grid ───────────────────────────────────────────────────────────

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Red team console</title>
+<!--
+  red_console.html — the red team's console, served by red_console.py on the
+  attacker node. It lists the steps of the attack and runs the one asked for.
+  It talks only to the server it came from, with the token given in the URL
+  fragment (#token=…). Self-contained: no CDN.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f8fb; --surface: #fdfeff;
+  --ink: #0b0f14; --ink-2: #4a5360; --muted: #7f8894;
+  --grid: #dde3ea; --ring: rgba(11,15,20,0.12); --wash: rgba(11,15,20,0.04);
+  --team: #d03b3b;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0c0f13; --surface: #171b21;
+    --ink: #eef1f5; --ink-2: #bcc4ce; --muted: #7f8894;
+    --grid: #262c34; --ring: rgba(255,255,255,0.12); --wash: rgba(255,255,255,0.05);
+    --team: #e25c5c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 16px;
+  padding-bottom: 12px; border-bottom: 3px solid var(--team); }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+.spacer { flex: 1; }
+button, input, a.btn { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; text-decoration: none; }
+button, a.btn { cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+button.ok { background: var(--good); border-color: var(--good); color: #fff; font-weight: 600; }
+button.no { border-color: var(--critical); color: var(--critical); font-weight: 600; }
+button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--ring); color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.grid2 > .card { margin-bottom: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--ring); padding: 6px 8px; }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeric: tabular-nums; vertical-align: top; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.wrap { overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); padding: 18px 0; text-align: center; }
+.err { color: var(--critical); font-size: 12px; overflow-wrap: anywhere; }
+.sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; }
+.sug .hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.sug .hd b { font-size: 15px; }
+.sug dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0; }
+.sug dt { color: var(--ink-2); font-size: 12px; }
+.sug dd { margin: 0; overflow-wrap: anywhere; }
+code { font-size: 12px; overflow-wrap: anywhere; }
+details { margin: 6px 0; font-size: 13px; }
+summary { cursor: pointer; color: var(--ink-2); }
+.acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--wash); vertical-align: middle; overflow: hidden; }
+.meter > i { display: block; height: 100%; background: var(--ink-2); }
+#gate { max-width: 420px; margin: 80px auto; }
+#gate input { width: 100%; margin: 8px 0; padding: 6px 10px; }
+pre { margin: 6px 0 0; padding: 8px 10px; background: var(--wash); border-radius: 6px; font-size: 12px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card" id="gate" style="display:none">
+    <h2>Red team console</h2>
+    <p class="sub">This console needs the red team's token.</p>
+    <input id="gate-token" type="password" autocomplete="off" placeholder="token">
+    <button type="button" id="gate-go">Enter</button>
+    <div class="err" id="gate-err"></div>
+  </section>
+
+  <div id="app" style="display:none">
+    <header>
+      <h1>Red team console</h1>
+      <span class="badge" id="conn"><span class="dot" style="background:var(--muted)"></span> connecting</span>
+      <span class="spacer"></span>
+      <label class="sub" for="who" style="margin:0">operator</label>
+      <input id="who" type="text" maxlength="80" autocomplete="off" spellcheck="false" style="width:130px">
+      <a class="btn" id="term" target="_blank" rel="noopener" style="display:none">Open terminal</a>
+    </header>
+    <div class="err" id="err"></div>
+
+    <section class="card">
+      <h2>Attack steps</h2>
+      <p class="sub">The steps of the attack tree, in the order they build on each other. A step marked "not ready" has a prerequisite that has not succeeded yet; you may still try it. Anything else is yours to do from the terminal.</p>
+      <div class="scroll"><table id="steps"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>What you ran</h2>
+      <p class="sub">Newest first, with what each step printed.</p>
+      <div id="history"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null) continue;
+    if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+}
+const clock = t => t ? new Date(t * 1000).toLocaleTimeString() : "—";
+
+let token = new URLSearchParams(location.hash.slice(1)).get("token");
+try { if (token) sessionStorage.setItem("red-token", token); else token = sessionStorage.getItem("red-token"); } catch (e) {}
+if (location.hash) try { history.replaceState(null, "", location.pathname); } catch (e) {}
+try { $("who").value = localStorage.getItem("red-operator") || ""; } catch (e) {}
+$("who").addEventListener("change", e => { try { localStorage.setItem("red-operator", e.target.value.trim()); } catch (err) {} });
+
+let S = null, sig = "", running = null;
+
+async function call(method, path, body) {
+  const res = await fetch(path, { method, cache: "no-store",
+    headers: { "Authorization": `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined });
+  if (res.status === 401) { gate("That token was not accepted."); throw new Error("unauthorized"); }
+  const doc = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(doc.error || String(res.status));
+  return doc;
+}
+function gate(why) { $("app").style.display = "none"; $("gate").style.display = ""; $("gate-err").textContent = why || ""; }
+$("gate-go").addEventListener("click", () => {
+  token = $("gate-token").value.trim();
+  try { sessionStorage.setItem("red-token", token); } catch (e) {}
+  $("gate").style.display = "none"; refresh();
+});
+$("gate-token").addEventListener("keydown", e => { if (e.key === "Enter") $("gate-go").click(); });
+
+async function launch(id) {
+  running = id; sig = ""; render(); $("err").textContent = "";
+  try { await call("POST", `/steps/${encodeURIComponent(id)}`, { operator: $("who").value.trim() || "operator" }); }
+  catch (e) { $("err").textContent = `Not run: ${e.message}`; }
+  running = null; sig = ""; refresh();
+}
+const NOISE = d => d == null ? "—" : d >= 0.7 ? "loud" : d >= 0.35 ? "noticeable" : "quiet";
+
+function render() {
+  if (!S) return;
+  const s = JSON.stringify([S.steps.map(x => [x.id, x.ready, x.last]), S.history.length, running]);
+  if (s === sig) return;
+  sig = s;
+  if (S.terminal) { $("term").href = S.terminal; $("term").style.display = ""; }
+  $("steps").replaceChildren(
+    h("thead", {}, h("tr", {}, ["step", "technique", "how loud", "last try", ""].map(x => h("th", {}, x)))),
+    h("tbody", {}, S.steps.map(x => h("tr", {},
+      h("td", {}, h("div", {}, x.label || x.id), h("details", {}, h("summary", {}, x.id), h("code", {}, x.command))),
+      h("td", {}, x.attck ? `${x.attck}${x.attck_name ? ` ${x.attck_name}` : ""}` : "—"),
+      h("td", {}, NOISE(x.detectability)),
+      h("td", {}, x.last ? [h("span", { class: "dot", style: `background:${x.last.ok ? "var(--good)" : "var(--critical)"}` }),
+        ` ${x.last.ok ? "worked" : "failed"} at ${clock(x.last.t)}`] : h("span", { class: "muted" }, "not tried")),
+      h("td", { class: "num" }, x.ready ? null : h("span", { class: "muted" }, "not ready "),
+        h("button", { type: "button", disabled: running ? "" : null, onclick: () => launch(x.id) },
+          running === x.id ? "Running…" : "Run"))))));
+  const hist = [...S.history].reverse();
+  $("history").replaceChildren(...(hist.length ? hist.map(r => h("details", {},
+    h("summary", {}, h("span", { class: "dot", style: `background:${r.ok ? "var(--good)" : "var(--critical)"}` }),
+      ` ${clock(r.t)} · ${r.step} · ${r.ok ? "worked" : `failed (exit ${r.rc})`} · ${r.duration_s}s${r.operator ? ` · ${r.operator}` : ""}`),
+    h("pre", {}, r.output || "(no output)"))) : [h("div", { class: "empty" }, "Nothing has run yet")]));
+}
+async function refresh() {
+  if (!token) { gate(""); return; }
+  try {
+    S = await call("GET", "/state");
+    $("app").style.display = "";
+    $("conn").replaceChildren(h("span", { class: "dot", style: "background:var(--good)" }), " live");
+  } catch (e) {
+    if (e.message !== "unauthorized") $("conn").replaceChildren(h("span", { class: "dot", style: "background:var(--critical)" }), " console unreachable");
+  }
+  render();
+}
+refresh();
+setInterval(refresh, 1500);
+</script>
+</body>
+</html>

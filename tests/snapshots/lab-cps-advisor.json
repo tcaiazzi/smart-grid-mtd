@@ -34,7 +34,9 @@
    "/ot_registers.py",
    "/wazuh-agent-setup.sh",
    "/wazuh-agent.conf",
-   "/cps_response.py"
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
   ],
   "settings": {
    "0": "IT",
@@ -62,7 +64,9 @@
    "/mtd_telemetry.py",
    "/wazuh-agent-setup.sh",
    "/wazuh-agent.conf",
-   "/cps_response.py"
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
   ],
   "settings": {
    "0": "IT",
@@ -99,7 +103,9 @@
    "/mtd_dashboard.html",
    "/wazuh-agent-setup.sh",
    "/wazuh-agent.conf",
-   "/cps_response.py"
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
   ],
   "settings": {
    "0": "OT",
@@ -123,17 +129,24 @@
    "/soar_trees.py",
    "/soar_mapping.py",
    "/soar_policy.py",
-   "/ot_registers.py"
+   "/ot_registers.py",
+   "/soc_console.html",
+   "/team-access.sh",
+   "/command_audit.sh"
   ],
   "settings": {
    "0": "MGMT",
    "bridged": "true",
    "image": "kathara/soc",
-   "port": "8766:8090/tcp"
+   "port": [
+    "8766:8090/tcp",
+    "8767:8091/tcp"
+   ]
   },
   "startup": [
    "ip address add 10.30.0.20/24 dev eth0",
-   "iptables -A INPUT -i eth0 -p tcp --dport 8090 -j DROP"
+   "iptables -A INPUT -i eth0 -p tcp --dport 8090 -j DROP",
+   "iptables -A INPUT -i eth0 -p tcp --dport 8091 -j DROP"
   ]
  }
 }
