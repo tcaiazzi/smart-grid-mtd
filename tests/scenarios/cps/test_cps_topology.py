@@ -131,6 +131,28 @@ class Topology(unittest.TestCase):
         self.assertTrue(m["sensor"].meta.get("bridged"))
         self.assertEqual(m["sensor"].meta["ports"], {(8090, "tcp"): cps.DASHBOARD_GUEST_PORT})
 
+    def test_operator_api_is_published_only_when_asked_and_closed_on_mgmt(self):
+        self.assertIsNone(self.m["soc"].meta.get("bridged"))
+        self.assertEqual(
+            [c for c in self.startups["soc"] if "iptables" in c],
+            [],
+            "the cps lab changed its SOC node for an API it does not run",
+        )
+        _lab, m, startups = cps.build_lab(
+            types.SimpleNamespace(dashboard_port=0, operator_port=8766)
+        )
+        self.assertEqual(m["soc"].meta["ports"], {(8766, "tcp"): cps.OPERATOR_GUEST_PORT})
+        self.assertIn(
+            f"iptables -A INPUT -i eth0 -p tcp --dport {cps.OPERATOR_GUEST_PORT} -j DROP",
+            startups["soc"],
+            "the operator API would answer on MGMT: the HMI, the attacker's foothold, "
+            "could approve or reject in the operator's place",
+        )
+
+    def test_a_person_cannot_be_asked_in_this_scenario(self):
+        with self.assertRaises(SystemExit):
+            CpsScenario().check_approval("operator:60")
+
 
 if __name__ == "__main__":
     unittest.main()

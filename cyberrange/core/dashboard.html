@@ -113,6 +113,24 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
 .gview svg.graph { display: block; width: 100%; height: auto; }
 .gwrap .tip { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
 td.wrap { white-space: normal; min-width: 280px; }
+.opbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.opbar input { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 8px; width: 160px; }
+.sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; }
+.sug .hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.sug .hd b { font-size: 15px; }
+.sug .left { font-variant-numeric: tabular-nums; }
+.sug dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0; }
+.sug dt { color: var(--ink-2); font-size: 12px; }
+.sug dd { margin: 0; overflow-wrap: anywhere; }
+.sug code { font-size: 12px; overflow-wrap: anywhere; }
+.sug details { margin: 6px 0; font-size: 13px; }
+.sug summary { cursor: pointer; color: var(--ink-2); }
+.sug .acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.sug button.ok { background: var(--good); border-color: var(--good); color: #fff; font-weight: 600; }
+.sug button.no { border-color: var(--critical); color: var(--critical); font-weight: 600; }
+.sug button:disabled { opacity: .5; cursor: default; }
 </style>
 </head>
 <body>
@@ -173,6 +191,17 @@ td.wrap { white-space: normal; min-width: 280px; }
     <div class="scroll"><table id="g-decisions"></table></div>
   </section>
 
+  <section class="card" id="op-card" style="margin-top:16px;display:none">
+    <h2>Operator suggestions</h2>
+    <p class="sub" id="op-sub"></p>
+    <div class="opbar" id="op-bar">
+      <label class="sub" for="op-name" style="margin:0">answering as</label>
+      <input id="op-name" type="text" maxlength="80" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="op-pending"></div>
+    <div class="scroll"><table id="op-history"></table></div>
+  </section>
+
   <section class="card" style="margin-top:16px">
     <h2>Results</h2>
     <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
@@ -200,7 +229,7 @@ function runOf(id) {
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
       states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
-      mtd: [], gaps: [], alerts2: [] };
+      mtd: [], gaps: [], alerts2: [], approvals: {}, operator: null, playground: false };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -212,7 +241,10 @@ function resetRunDetail(r, ev) {
     phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, timed: p.timed, start_t: null, end_t: null, ok: null })),
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
-    states: [], decisions: [], actions: [], respond: ev.respond || null });
+    states: [], decisions: [], actions: [], respond: ev.respond || null,
+    // A run whose defender only advises says where its operator is answered.
+    approvals: {}, operator: ev.operator_url ? { url: ev.operator_url, token: ev.operator_token } : null,
+    playground: !!ev.playground });
 }
 
 function apply(ev) {
@@ -259,6 +291,15 @@ function apply(ev) {
     case "tree_state": r.states.push({ t: ev.guest_t || ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
     case "decision": r.decisions.push({ t: ev.guest_t || ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
     case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine }); break;
+    // A suggestion put to the operator, then its outcome: one entry per request,
+    // the later event completing the earlier (which carries the explanation).
+    case "approval": {
+      if (!ev.request) break;
+      const a = r.approvals[ev.request] || (r.approvals[ev.request] = { request: ev.request, asked_t: ev.guest_t || ev.t });
+      for (const k of ["action", "state", "due_t", "explanation", "operator", "waited_s"]) if (ev[k] != null) a[k] = ev[k];
+      a.t = ev.guest_t || ev.t;
+      break;
+    }
     case "run_retry": r.status = "retrying"; r.error = ev.error; break;
     case "run_end":
       r.end_t = ev.t; r.duration = ev.duration_s; r.error = ev.error;
@@ -370,7 +411,7 @@ function render() {
   const lst = ledgerStatus();
   $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
   if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
-  renderTiles(lst); renderQueue(); renderDetail(); renderResults(); renderGraph();
+  renderTiles(lst); renderQueue(); renderDetail(); renderResults(); renderGraph(); renderOperator();
 }
 
 function counts() {
@@ -400,8 +441,9 @@ function renderTiles(lst) {
     tile("Runs done", `${c.ok + c.skipped} / ${c.total}`, c.skipped ? `${c.skipped} reused from an earlier attempt` : (S.kind === "run" ? "standalone run" : "")),
     tile("Failed", String(c.failed), c.failed ? "see the queue for errors" : "none"),
     tile("Elapsed", start ? dur((end || t) - start) : "—", start ? `started ${clock(start)}` : ""),
-    tile("Time left", live ? dur(rem) : (lst === "interrupted" ? "stopped" : "—"),
-      live ? `ETA ${clock(t + rem)}` : (end ? `ended ${clock(end)}` : "")),
+    // A playground run has no end of its own: it is closed by hand.
+    tile("Time left", live ? (curRun?.playground ? "open" : dur(rem)) : (lst === "interrupted" ? "stopped" : "—"),
+      live ? (curRun?.playground ? "playground: until closed with Ctrl-C" : `ETA ${clock(t + rem)}`) : (end ? `ended ${clock(end)}` : "")),
     tile("Now", curRun ? curRun.id : (S.step?.unit && live ? S.step.unit : "idle"),
       curPhase ? `phase: ${curPhase.name.replace("_", " ")}` : (S.step?.step && live ? `step: ${S.step.step}` : "")),
   );
@@ -614,6 +656,104 @@ function renderGraph() {
       policy ? "No decision yet" : "No responder in this run"))));
 }
 
+// ── operator: the defender's suggestions, answered here ─────────────────────
+// The suggestions come from the ledger like everything else on this page. The
+// verdict does not go back through this page's server, which only reads: it is
+// sent straight to the operator API the run declared (run_start.operator_url),
+// the defender's own interface, as any other console of it would.
+let opSig = "";
+const opSent = {};  // request id -> { verdict, error } of an answer sent from this page
+function operatorName() { return $("op-name").value.trim() || "operator"; }
+async function sendVerdict(r, request, verdict) {
+  opSent[request] = { verdict, error: null };
+  renderOperator();
+  try {
+    const res = await fetch(`${r.operator.url}/approvals/${encodeURIComponent(request)}`, {
+      method: "POST", cache: "no-store",
+      headers: { "Authorization": `Bearer ${r.operator.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ verdict, operator: operatorName() }) });
+    if (!res.ok) {
+      let why = `${res.status}`;
+      try { why = (await res.json()).error || why; } catch (e) {}
+      throw new Error(why);
+    }
+  } catch (e) { opSent[request] = { verdict: null, error: `not sent: ${e.message || e}` }; }
+  renderOperator();
+}
+function coveredNodes(list) {
+  return (list || []).map(n => `${n.label || n.node}${n.attck ? ` [${n.attck}]` : ""}${n.belief != null ? ` (belief ${num(n.belief, 2)})` : ""}`).join("; ");
+}
+function suggestionCard(r, a, canAnswer) {
+  const x = a.explanation || {}, cm = x.countermeasure || {}, tr = x.trigger || {}, sent = opSent[a.request];
+  const row = (k, v) => v ? [h("dt", {}, k), h("dd", {}, v)] : [];
+  const cost = x.cost_terms && x.cost_terms.total != null
+    ? `expected loss ${num(x.cost_terms.total, 3)} (residual ${num(x.cost_terms.residual, 3)}, future ${num(x.cost_terms.future, 3)})` : null;
+  const alts = (x.alternatives || []).map(p => h("li", {},
+    `${p.actions.length ? p.actions.join(" + ") : "do nothing"} — risk ${num(p.risk, 3)}, operational cost ${num(p.op, 2)}, energy ${num(p.energy, 2)}`));
+  const waiting = !!sent?.verdict;
+  return h("div", { class: "sug" },
+    h("div", { class: "hd" },
+      h("b", {}, cm.label || a.action), h("span", { class: "muted" }, `${a.action}${cm.machine ? ` · runs on ${cm.machine}` : ""}`),
+      h("span", { class: "spacer" }), h("span", { class: "left", "data-due": a.due_t ?? "" }, "")),
+    h("dl", {},
+      ...row("seen", tr.klass ? `${tr.klass}${tr.detector ? ` (${tr.detector} detector` + (tr.confidence != null ? `, confidence ${num(tr.confidence, 2)})` : ")") : ""}${tr.src ? ` from ${tr.src}` : ""}` : null),
+      ...row("prevents", coveredNodes(x.prevents)),
+      ...row("undoes", coveredNodes(x.restores)),
+      ...row("why", x.rationale),
+      ...row("cost", [cm.op_cost != null ? `operational ${num(cm.op_cost, 2)}` : null, cm.energy_cost ? `energy ${num(cm.energy_cost, 2)}` : null,
+        cm.time_to_effect_s != null ? `effective in ${num(cm.time_to_effect_s, 1)} s` : null].filter(Boolean).join(" · ")),
+      ...row("proposed with", (x.decided_with || []).join(", "))),
+    h("details", {}, h("summary", {}, "What it runs, and what else was considered"),
+      h("div", {}, ...(cm.commands || []).map(c => h("div", {}, h("code", {}, c)))),
+      cm.d3fend ? h("div", { class: "muted" }, `D3FEND: ${cm.d3fend}`) : null,
+      cost ? h("div", { class: "muted" }, cost) : null,
+      alts.length ? h("ul", {}, alts) : null),
+    h("div", { class: "acts" },
+      canAnswer ? h("button", { type: "button", class: "ok", disabled: waiting ? "" : null, onclick: () => sendVerdict(r, a.request, "approve") }, "Approve") : null,
+      canAnswer ? h("button", { type: "button", class: "no", disabled: waiting ? "" : null, onclick: () => sendVerdict(r, a.request, "reject") }, "Reject") : null,
+      waiting ? h("span", { class: "muted" }, `${sent.verdict === "approve" ? "approval" : "rejection"} sent, waiting for the defender…`) : null,
+      sent?.error ? h("span", { class: "err", style: "margin:0" }, sent.error) : null,
+      canAnswer ? null : h("span", { class: "muted" }, "this run is not live: nothing can be answered")));
+}
+const OUTCOME = { granted: ["var(--good)", "approved"], rejected: ["var(--critical)", "rejected"], expired: ["var(--axis)", "expired, not applied"] };
+function renderOperator() {
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  const all = r ? Object.values(r.approvals).sort((a, b) => a.asked_t - b.asked_t) : [];
+  $("op-card").style.display = r && (r.operator || all.length) ? "" : "none";
+  if (!r) { opSig = ""; return; }
+  // A ledger gone stale leaves its run "running" for ever: the lab behind it is gone.
+  const live = r.status === "running" && ledgerStatus() === "running", canAnswer = live && !!r.operator;
+  const pending = all.filter(a => a.state === "requested"), closed = all.filter(a => a.state !== "requested").reverse();
+  // Rebuilt only when something changed: a card redrawn every second would
+  // close the details the operator is reading and swallow a click.
+  const sig = JSON.stringify([cur.id, id, canAnswer, all.map(a => [a.request, a.state]), opSent]);
+  if (sig !== opSig) {
+    opSig = sig;
+    $("op-sub").textContent = r.operator
+      ? `The defender of this run only advises: nothing below runs until it is approved, and a suggestion left unanswered expires. Answers go to its operator API at ${r.operator.url}.`
+      : "Suggestions the defender put to an operator in this run.";
+    $("op-bar").style.display = canAnswer ? "" : "none";
+    $("op-pending").replaceChildren(...(pending.length ? pending.map(a => suggestionCard(r, a, canAnswer))
+      : [h("div", { class: "empty" }, live ? "Nothing is waiting for an answer" : "Nothing was left waiting")]));
+    const w0 = r.writes[0]?.t ?? r.start_t;
+    $("op-history").replaceChildren(...(closed.length ? [
+      h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "suggestion"),
+        h("th", {}, "outcome"), h("th", {}, "by"), h("th", { class: "num" }, "answered in"), h("th", {}, "why it was suggested"))),
+      h("tbody", {}, closed.map(a => { const [c, label] = OUTCOME[a.state] || ["var(--axis)", a.state]; return h("tr", {},
+        h("td", { class: "num" }, w0 ? `${a.t - w0 >= 0 ? "+" : ""}${num(a.t - w0, 2)} s` : clock(a.t)),
+        h("td", {}, a.action || "—"),
+        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`),
+        h("td", {}, a.operator || "—"),
+        h("td", { class: "num" }, a.state === "expired" || a.waited_s == null ? "—" : `${num(a.waited_s, 1)} s`),
+        h("td", { class: "wrap" }, a.explanation?.rationale || "—")); }))] : []));
+  }
+  const t = now();
+  document.querySelectorAll("#op-pending [data-due]").forEach(e => {
+    const due = parseFloat(e.dataset.due);
+    e.textContent = isFinite(due) ? (due > t ? `expires in ${dur(due - t)}` : "expiring…") : "";
+  });
+}
+
 // ── polling ─────────────────────────────────────────────────────────────────
 async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); }
 
@@ -663,6 +803,8 @@ $("theme").addEventListener("click", () => {
   try { localStorage.setItem("platform-dash-theme", document.documentElement.dataset.theme); } catch (e) {}
 });
 try { const th = localStorage.getItem("platform-dash-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+try { $("op-name").value = localStorage.getItem("platform-dash-operator") || ""; } catch (e) {}
+$("op-name").addEventListener("change", e => { try { localStorage.setItem("platform-dash-operator", e.target.value.trim()); } catch (err) {} });
 window.addEventListener("resize", () => renderDetail());
 
 (async function loop() {

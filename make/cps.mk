@@ -57,14 +57,14 @@ cps-lab:                   ## deploy the lab, normal operation only
 	$(PYTHON) -m $(M_CPS_RUN) --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_IT_FLAG)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_IT_FLAG) $(PLAYGROUND_FLAG)
 
 cps-attack:                ## deploy the lab and drive the active attack chain (CPS_ATTACK_MODE)
 	$(PYTHON) -m $(M_CPS_RUN) --out-dir $(CPS_OUT) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --post-attack-duration $(CPS_POST) \
 		--step-interval $(CPS_STEP) --attack --attack-mode $(CPS_ATTACK_MODE) \
-		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_ATTACK_FLAGS) $(CPS_IT_FLAG)
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_ATTACK_FLAGS) $(CPS_IT_FLAG) $(PLAYGROUND_FLAG)
 
 cps-campaign:              ## run a campaign: CPS_MODES x CPS_SEEDS, scored + aggregated (resumable)
 	$(PYTHON) -m $(M_CPS_CAMPAIGN) --name $(CPS_CAMPAIGN) \

@@ -358,6 +358,9 @@ make cps-replay  CPS_OUT=output/cps/v2b-manual-hijack CPS_RESPOND=solver  # offl
 make cps-campaign CPS_CAMPAIGN=c-solver CPS_RESPOND=solver                # one policy per campaign
 ```
 
+A real operator who approves or rejects each countermeasure is the
+`cps-advisor` scenario (`docs/scenario-cps-advisor.md`); here approval is only
+simulated.
 `CPS_APPROVAL` controls countermeasures that need an operator: `auto`, `deny`
 (never proposed) or `delay:<s>` (simulated operator latency).
 

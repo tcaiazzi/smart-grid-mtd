@@ -28,7 +28,8 @@ from typing import Optional
 import soar_mapping as mapping
 import soar_trees as trees
 
-APPROVAL_MODES = ("auto", "deny")  # plus "delay:<seconds>", handled by the responder
+# Plus "delay:<seconds>" and "operator:<seconds>", handled by the responder.
+APPROVAL_MODES = ("auto", "deny")
 
 
 @dataclass
@@ -71,6 +72,15 @@ class _Base:
 
     def mark_applied(self, ids):
         self.applied.update(ids)
+
+    def mark_withdrawn(self, ids, declined=False):
+        """Countermeasures proposed that will not run after all: an operator
+        turned them down, or never answered. They leave ``applied``, so the
+        policy stops counting on their effect. A ``declined`` one is not
+        proposed again; one that merely lapsed may be, on new evidence."""
+        self.applied.difference_update(ids)
+        if declined:
+            self.allowed.difference_update(ids)
 
     def _order(self, ids):
         return sorted(ids, key=lambda a: (self.cms[a].order, a))

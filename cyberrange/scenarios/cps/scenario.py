@@ -3,12 +3,13 @@
 Episode: services (sensor, plant, PLC, HMI, web app[, IT sensor]) → normal
 operation (the sensor's model calibrates on the first --learn-seconds) →
 [attack: scripted chain or tree-guided planner → post-attack observation].
-An optional SOAR responder runs alongside as a host thread.
+The response is decided in the lab, by the SOC's analytics on the soc node;
+with --respond off it only watches.
 
 Composition (plane components):
     traffic   PhysicalProcess, PlcController, HmiClient
     attack    VulnApp, ScriptedChain | PlannedAttacker
-    defense   OtSensor, [ItSensor], [SoarResponder]
+    defense   OtSensor, [ItSensor], WazuhManager, WazuhAgent, SocAnalytics
     monitor   PlantMirror, TelemetryMirror
 """
 
@@ -50,11 +51,18 @@ class CpsScenario(Scenario):
     name = "cps"
     lab_name = T.LAB_NAME
     overhead_s = OVERHEAD_S
+    # Defaults a scenario built on this lab may set differently.
+    DEFAULT_OUT_DIR = "output/cps/run-1"
+    DEFAULT_RESPOND = "off"
+    DEFAULT_APPROVAL = "auto"
+    APPROVAL_HELP = (
+        "operator approval for high-impact countermeasures: auto | deny | delay:<seconds>"
+    )
 
     # ── options ──────────────────────────────────────────────────────────────
     def add_arguments(self, ap):
         g = ap.add_argument_group("cps scenario")
-        g.add_argument("--out-dir", default="output/cps/run-1")
+        g.add_argument("--out-dir", default=self.DEFAULT_OUT_DIR)
         g.add_argument("--step-interval", type=float, default=1.0)
         g.add_argument("--normal-duration", type=float, default=60.0)
         g.add_argument(
@@ -119,7 +127,7 @@ class CpsScenario(Scenario):
         r = ap.add_argument_group("cps response")
         r.add_argument(
             "--respond",
-            default="off",
+            default=self.DEFAULT_RESPOND,
             choices=RESPONSE_POLICIES,
             help="response policy driving countermeasures in the lab (SOAR)",
         )
@@ -129,11 +137,7 @@ class CpsScenario(Scenario):
             default=0.5,
             help="seconds between the responder's telemetry pulls",
         )
-        r.add_argument(
-            "--approval",
-            default="auto",
-            help="operator approval for high-impact countermeasures: auto | deny | delay:<seconds>",
-        )
+        r.add_argument("--approval", default=self.DEFAULT_APPROVAL, help=self.APPROVAL_HELP)
 
     def validate(self, args):
         """Fail fast on a run whose model would calibrate on attack traffic."""
@@ -155,14 +159,23 @@ class CpsScenario(Scenario):
             raise SystemExit(
                 f"--attacker-profile targeted needs --attack-goal ({', '.join(GOALS)})"
             )
-        spec = getattr(args, "approval", "auto") or "auto"
+        self.check_approval(getattr(args, "approval", "auto") or "auto")
+
+    def check_approval(self, spec):
+        """A person's verdict needs the SOC's operator API published and a
+        console to answer from, which this scenario's lab does not set up: here
+        approval is automatic, denied, or simulated by a delay."""
         if spec not in ("auto", "deny") and not (
             spec.startswith("delay:") and spec.split(":", 1)[1].replace(".", "", 1).isdigit()
         ):
             raise SystemExit(f"--approval must be auto, deny or delay:<seconds>, got {spec!r}")
 
+    def operator_api(self, args):
+        """SocAnalytics' operator_* arguments: none, the SOC here decides alone."""
+        return {}
+
     def topology(self, args):
-        return T.topology(args)
+        return T.topology(args, name=self.lab_name)
 
     def episode_phases(self, args):
         ph = [
@@ -346,6 +359,7 @@ class CpsScenario(Scenario):
                     approval=a.approval,
                     interval=a.respond_interval,
                     it=it,
+                    **self.operator_api(a),
                 )
             )
         ctx.start(monitor.PlantMirror("engine"))

@@ -20,6 +20,28 @@ def _write(p, rows):
             f.write(json.dumps(r) + "\n")
 
 
+def _ask(t, request, action, **fields):
+    """A suggestion put to the operator, as the SOC records it."""
+    return {
+        "t": t,
+        "kind": "approval",
+        "request": request,
+        "action": action,
+        "state": "requested",
+        **fields,
+    }
+
+
+def _answer(t, request, action, state, **fields):
+    return {
+        "t": t,
+        "kind": "approval",
+        "request": request,
+        "action": action,
+        "state": state,
+    } | fields
+
+
 class CpsMetrics(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="cps-metrics-"))
@@ -308,6 +330,46 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertAlmostEqual(r["decision_latency_s"], 0.4, places=3)
         self.assertAlmostEqual(r["hmi_unavailable_s"], end_t - (self.write_t + 1.0), places=3)
         self.assertIn("## Response (policy: rules", format_report(compute_metrics(str(self.d))))
+
+    def test_operator_metrics_when_the_soc_advised(self):
+        t = self.write_t
+        why = {"rationale": "breaker_open confirmed -> block_flow"}
+        _write(
+            self.d / "response.jsonl",
+            [
+                {"t": 2000.0, "kind": "response_up", "policy": "rules", "approval": "operator:60"},
+                _ask(t + 1.0, "r1", "block_flow", explanation=why),
+                _ask(t + 1.0, "r2", "force_auto", explanation=why),
+                _ask(t + 1.0, "r3", "isolate_hmi", explanation=why),
+                _answer(t + 5.0, "r1", "block_flow", "granted", waited_s=4.0, operator="ada"),
+                _answer(t + 9.0, "r2", "force_auto", "rejected", waited_s=8.0, operator="ada"),
+                _answer(t + 61.0, "r3", "isolate_hmi", "expired", waited_s=60.0),
+            ],
+        )
+        op = compute_metrics(str(self.d))["response"]["operator"]
+        self.assertEqual(
+            op,
+            {
+                "suggestions": 3,
+                "suggestions_approved": 1,
+                "suggestions_rejected": 1,
+                "suggestions_expired": 1,
+                "operator_latency_median_s": 6.0,  # a lapsed suggestion had no answer
+            },
+        )
+        self.assertIn("operator: 3 suggestions", format_report(compute_metrics(str(self.d))))
+
+    def test_no_operator_metrics_when_the_soc_decided_alone(self):
+        _write(
+            self.d / "response.jsonl",
+            [
+                {"t": 2000.0, "kind": "response_up", "policy": "rules", "approval": "delay:5"},
+                # The simulated operator's rows carry no request id: nobody answered them.
+                {"t": 2031.0, "kind": "approval", "action": "isolate_hmi", "state": "requested"},
+                {"t": 2036.0, "kind": "approval", "action": "isolate_hmi", "state": "granted"},
+            ],
+        )
+        self.assertIsNone(compute_metrics(str(self.d))["response"]["operator"])
 
     def test_response_inaccurate_and_false(self):
         _write(

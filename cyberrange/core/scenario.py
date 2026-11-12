@@ -8,7 +8,8 @@ A scenario declares its topology, its options and its episode; the core
     validate(args)          fail fast (raise SystemExit) before anything deploys
     topology(args)          core.topology.Topology
     phases(args)            [PhaseSpec] in run order, with planned durations (ETA);
-                            the core emits deploy / download / undeploy itself
+                            the core emits deploy / download / undeploy itself,
+                            and "open" for a run held up with --playground
     run_info(args)          extra fields for the run_start ledger event
     out_dir(args)           where the run writes (default: args.out_dir)
     run_id(args)            ledger id of the run (default: basename of out_dir)
@@ -23,6 +24,7 @@ import os
 from dataclasses import asdict, dataclass
 
 DEFAULT_OVERHEAD_S = {"deploy": 3.0, "download": 0.5, "undeploy": 1.0}
+OPEN_PHASE = "open"  # a playground run, held up after its episode until Ctrl-C
 
 
 @dataclass
@@ -55,9 +57,13 @@ class Scenario:
 
     def phases(self, args):
         o = self.overhead_s
+        # A playground run stays up after its episode, for as long as it is left
+        # open: a phase with no planned length, so it adds nothing to the ETA.
+        held = [PhaseSpec(OPEN_PHASE, 0.0)] if getattr(args, "playground", False) else []
         return (
             [PhaseSpec("deploy", o["deploy"])]
             + list(self.episode_phases(args))
+            + held
             + [PhaseSpec("download", o["download"]), PhaseSpec("undeploy", o["undeploy"])]
         )
 

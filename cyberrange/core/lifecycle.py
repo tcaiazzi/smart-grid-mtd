@@ -1,6 +1,7 @@
 """lifecycle.py — one run of any scenario, the same way every time.
 
-    run_start → build lab → structure → deploy → episode → stop components
+    run_start → build lab → structure → deploy → episode → [open, until Ctrl-C,
+              with --playground] → stop components
               → download artifacts (also of a failed episode) → undeploy (always)
               → check_run → run_end
 
@@ -16,6 +17,7 @@ import traceback
 
 from cyberrange.core.progress import ProgressLog
 from cyberrange.core.context import RunContext
+from cyberrange.core.scenario import OPEN_PHASE
 from cyberrange.core.streams import PROGRESS
 from cyberrange.core.topology import build_lab, write_json
 
@@ -71,6 +73,7 @@ def run(scenario, args, progress=None, manager=None):
     else:
         emit = progress
     phases = scenario.phases(args)
+    playground = bool(getattr(args, "playground", False))
     emit(
         "run_start",
         scenario=scenario.name,
@@ -78,6 +81,7 @@ def run(scenario, args, progress=None, manager=None):
         phases=[p.to_dict() for p in phases],
         planned_s=scenario.planned_s(args),
         poll_s=getattr(args, "poll_interval", 0),
+        playground=playground,
         **scenario.run_info(args),
     )
 
@@ -106,6 +110,10 @@ def run(scenario, args, progress=None, manager=None):
             episode_ok = False
             try:
                 scenario.episode(ctx)
+                if playground:
+                    log.info("Playground: lab %r stays up, Ctrl-C to close it", topo.name)
+                    with ctx.phase(OPEN_PHASE):
+                        ctx.hold()
                 episode_ok = True
             finally:
                 ctx.stop_all()

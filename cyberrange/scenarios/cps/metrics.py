@@ -31,6 +31,9 @@ Response (only when <out>/response.jsonl exists — the SOAR prototype):
                              the boundary block took effect
   - false_responses        : countermeasures before the attack (or in a normal run)
   - hmi_unavailable_s      : operator HMI cut off by the response
+  - operator               : when the SOC advised (approval operator:<s>) —
+                             suggestions, how many were approved / rejected /
+                             expired, and the median time a person took to answer
 
 Run: `python -m cyberrange.scenarios.cps.metrics --out-dir output/cps/run-1`.
 """
@@ -126,6 +129,7 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
 
 
 HMI_CUTTING = ("block_flow", "isolate_hmi")
+OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
 
 
 def expected_response(gt):
@@ -157,6 +161,26 @@ def _explained(decision):
     return bool(decision.get("rationale")) and all(
         (covers.get(a) or {}).get("prevents") or (covers.get(a) or {}).get("restores") for a in acts
     )
+
+
+def _operator(resp):
+    """How the operator answered the SOC's suggestions, when the SOC advised
+    (approval operator:<s>). None otherwise: a run where the SOC decided alone
+    has no suggestions, and zeros would read as an operator who ignored them."""
+    rows = [r for r in resp if r.get("kind") == "approval" and r.get("request")]
+    if not rows:
+        return None
+    closed = {s: [r for r in rows if r.get("state") == s] for s in OPERATOR_OUTCOMES}
+    return {
+        "suggestions": sum(1 for r in rows if r.get("state") == "requested"),
+        "suggestions_approved": len(closed["granted"]),
+        "suggestions_rejected": len(closed["rejected"]),
+        "suggestions_expired": len(closed["expired"]),
+        # The time a person took to answer; a lapsed suggestion had no answer.
+        "operator_latency_median_s": _median(
+            r.get("waited_s") for r in closed["granted"] + closed["rejected"]
+        ),
+    }
 
 
 def _response(resp, gt, findings, attack_start, mode, end_t):
@@ -211,6 +235,7 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
             if block_t is not None and end_t is not None
             else 0.0
         ),
+        "operator": _operator(resp),
     }
 
 
@@ -456,6 +481,14 @@ def format_report(m: dict) -> str:
         lines.append(
             f"- false responses: {r['false_responses']}; HMI unavailable: {r['hmi_unavailable_s']}s"
         )
+        op = r.get("operator")
+        if op:
+            lines.append(
+                f"- operator: {op['suggestions']} suggestions — approved "
+                f"{op['suggestions_approved']}, rejected {op['suggestions_rejected']}, "
+                f"expired {op['suggestions_expired']}; median time to answer: "
+                f"{op['operator_latency_median_s']}s"
+            )
     return "\n".join(lines) + "\n"
 
 

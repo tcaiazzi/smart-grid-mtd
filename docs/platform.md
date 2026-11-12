@@ -11,6 +11,7 @@ metrics.
                  ┌───────────────── scenarios ─────────────────┐
                  │  mqtt-mtd (MQTT smart grid, MTD vs CNN)      │
                  │  cps      (OT/Modbus, active attack, SOAR)   │
+                 │  cps-advisor (cps, the SOC advises a person) │
                  └───────────────┬──────────────────────────────┘
                      compose     │
    ┌──── plane components (cyberrange/planes/<x>/components.py) ────┐
@@ -151,6 +152,7 @@ Event kinds common to every scenario are documented in
 `cyberrange/core/streams.py`. Scenario-specific kinds are:
 
 - **CPS:** `plant`, `finding`, `alert`, `model_fitted`, `attack_write`, `plan_step`, `tree_state`, `decision`, `action`.
+- **CPS advisor:** the CPS kinds plus `approval` (a suggestion put to the operator, then its outcome).
 - **MQTT:** `mtd_action`, `data_gap`, `detection`, `detector_alert`.
 
 ## 4. Campaigns (`core.campaign`)
@@ -178,7 +180,8 @@ make dashboard            # every scenario's runs and campaigns under output/ (1
 make cps-dashboard        # only the CPS runs
 ```
 
-`cyberrange/core/dashboard.py` only reads. It shows two kinds of content.
+`cyberrange/core/dashboard.py` only reads: the server has no endpoint that
+changes anything, in the lab or on disk. It shows two kinds of content.
 
 **Common to every scenario:**
 
@@ -199,7 +202,34 @@ hooks are `queue` (its columns of the run table), `detail` (the selected run),
 next to the mean [95% CI] one) and `graph` (its structure views):
 
 - **CPS:** the plant voltage chart, findings, and the topology, knowledge graph and attack tree with the response decisions over time.
+- **CPS advisor:** the CPS panel (its `panel.js` delegates to it).
 - **MQTT:** MTD actions per knob coloured by outcome, delivery gaps, and the coordinator's actions table.
+
+### A run kept open: `--playground`
+
+Every scenario's run takes `--playground` (`PLAYGROUND=1` on the single-run
+`make` targets). After its episode the run does not tear down: the lab, the
+components and the live mirrors stay up, in a phase named `open`, until Ctrl-C.
+The interrupt is how such a run ends, so it is followed by the usual teardown
+(stop, download, undeploy, `check_run`) and the run is recorded as `ok`. A
+second Ctrl-C during the teardown interrupts it for real.
+
+It is for trying things by hand — a lab to attack, a defender to watch — and it
+is not an experiment: the run's length is whatever it was left open, so its
+duration-dependent metrics do not compare with a campaign's. Campaigns never
+set it.
+
+### Answering a defender that asks
+
+A run may declare, in `run_start`, an `operator_url` and `operator_token`: the
+interface on which its defender takes a person's verdicts. The page then shows
+an *Operator suggestions* card, built from the `approval` events of the ledger —
+what is proposed, why, until when — with **Approve** and **Reject**. The verdict
+does not go through the dashboard's server: the browser sends it straight to
+the declared interface, which belongs to the lab's own software (for
+`cps-advisor`, the SOC's operator API, `nodes/soc/soc_operator.py`). The page is
+one console of that interface among possible others; the platform still never
+writes into a lab.
 
 ## 6. Adding a scenario: checklist
 

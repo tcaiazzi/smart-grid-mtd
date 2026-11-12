@@ -209,8 +209,9 @@ class Misc(unittest.TestCase):
         self.assertEqual(cur.lines, 3)
 
     def test_registry(self):
-        self.assertEqual(registry.names(), ["cps", "mqtt-mtd"])
+        self.assertEqual(registry.names(), ["cps", "cps-advisor", "mqtt-mtd"])
         self.assertEqual(registry.get("cps").lab_name, "cps")
+        self.assertEqual(registry.get("cps-advisor").lab_name, "cps-advisor")
         self.assertEqual(registry.get("mqtt-mtd").lab_name, "test")
 
 

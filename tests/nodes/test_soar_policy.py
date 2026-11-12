@@ -105,6 +105,34 @@ class Policies(unittest.TestCase):
         d2 = p2.decide(st.snapshot(1.0), 1.0)
         self.assertNotIn("isolate_hmi", d2.actions)
 
+    def test_a_declined_action_gives_way_to_the_alternative(self):
+        p = policy.SolverPolicy(self.cms, self.tree)
+        st = mapping.CampaignState(self.tree, self.g)
+        for f in SCENARIOS["breaker-open"]:
+            st.update(f)
+        snap = st.snapshot(1.0)
+        d = p.decide(snap, 1.0)
+        self.assertIn("block_flow", d.actions)
+        p.mark_applied(d.actions)
+        p.mark_withdrawn(["block_flow"], declined=True)
+        d2 = p.decide(snap, 2.0)
+        self.assertIsNotNone(d2, "with its path cut turned down the solver offered nothing else")
+        self.assertNotIn("block_flow", d2.actions, "a declined action was proposed again")
+        self.assertIn("isolate_hmi", d2.actions)
+
+    def test_a_lapsed_action_may_be_proposed_again(self):
+        for kind in ("rules", "solver"):
+            p = policy.make_policy(kind, self.cms, self.tree)
+            st = mapping.CampaignState(self.tree, self.g)
+            for f in SCENARIOS["breaker-open"]:
+                st.update(f)
+            snap = st.snapshot(1.0)
+            d = p.decide(snap, 1.0)
+            p.mark_applied(d.actions)
+            self.assertIsNone(p.decide(snap, 2.0), kind)
+            p.mark_withdrawn(["block_flow"])
+            self.assertEqual(p.decide(snap, 3.0).actions, ["block_flow"], kind)
+
     def test_solver_pairs_restore_with_path_cut(self):
         # Seen live (manual-hijack, seed 1): only the model fires before the
         # restore, and the early restore suppresses the voltage findings that

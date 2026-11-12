@@ -5,11 +5,11 @@ Detection and response, proactive and reactive:
     QkdCertBootstrap   mutual-TLS bundle over the QKD-simulated channel
     OtSensor           passive Modbus DPI (rules + learned model) on the OT link
     ItSensor           host sensor on the HMI (web log, processes, connections)
-    SoarResponder      host-side response loop: findings -> attack tree -> policy
-                       -> countermeasures in the lab
     WazuhManager       the SOC's manager on the management network
     WazuhAgent         a host reporting to it and running its active responses
-    WazuhEnforcer      applies a countermeasure through the manager, not by exec
+    SocAnalytics       the SOC's decision loop on the manager's node: alerts ->
+                       attack tree -> policy -> responses asked of the manager,
+                       or put to an operator when the SOC only advises
 
 Every guest sensor writes telemetry.jsonl-shaped events (mtd_telemetry.py) and
 declares it as a TelemetrySource; ``mirror`` maps its events onto the
@@ -195,17 +195,40 @@ class SocAnalytics(GuestAgent):
 
     ``policy`` is off | rules | solver; with ``off`` it watches and requests
     nothing. ``inventory`` is the lab as the SOC is told it (cps.inventory):
-    the one thing a node cannot discover, passed base64 on the command line."""
+    the one thing a node cannot discover, passed base64 on the command line.
+
+    With ``approval`` "operator:<s>" the SOC advises: its countermeasures wait
+    on its own operator API (soc_operator.py) for a person's verdict. The API
+    listens on ``operator_port`` with ``operator_token``, and answers browser
+    consoles served from ``operator_origins``. The platform only mirrors the
+    suggestions to the ledger; the verdict goes from the console to the SOC."""
 
     RESPONSE = "/response.jsonl"
     KG, TREE = "/kg.json", "/tree.json"
+    # What a suggestion's ledger event carries, of the SOC's approval record.
+    APPROVAL_FIELDS = ("request", "action", "state", "due_t", "explanation", "operator", "waited_s")
 
-    def __init__(self, node, inventory, policy="off", approval="auto", interval=0.5, it=False):
+    def __init__(
+        self,
+        node,
+        inventory,
+        policy="off",
+        approval="auto",
+        interval=0.5,
+        it=False,
+        operator_port=None,
+        operator_token=None,
+        operator_origins=(),
+    ):
         inv = base64.b64encode(json.dumps(inventory).encode()).decode()
+        operator = ""
+        if operator_port:
+            operator = f" --operator-port {operator_port} --operator-token {operator_token}"
+            operator += "".join(f" --operator-origin {o}" for o in operator_origins)
         super().__init__(
             node,
             f"python3 soc_analytics.py --inventory-b64 {inv} --policy {policy} "
-            f"--approval {approval} --interval {interval}" + (" --it" if it else ""),
+            f"--approval {approval} --interval {interval}" + (" --it" if it else "") + operator,
             "soc_analytics.log",
             plane=PLANE,
             name="soc_analytics",
@@ -241,6 +264,9 @@ class SocAnalytics(GuestAgent):
                 machine=ev.get("machine"),
                 guest_t=ev.get("done_t"),
             )
+        if kind == "approval":
+            fields = {k: ev[k] for k in self.APPROVAL_FIELDS if ev.get(k) is not None}
+            return "approval", fields | {"guest_t": ev.get("t")}
         return None
 
 

@@ -38,6 +38,11 @@ def build_parser(scenario, description=None):
         default=2.0,
         help="seconds between live pulls of guest state into the ledger (0 = no live view)",
     )
+    common.add_argument(
+        "--playground",
+        action="store_true",
+        help="after the episode, keep the lab and its components up until Ctrl-C",
+    )
     scenario.add_arguments(ap)
     return ap
 

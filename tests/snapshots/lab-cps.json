@@ -118,6 +118,7 @@
    "/wazuh-manager-setup.sh",
    "/cps_rules.xml",
    "/soc_analytics.py",
+   "/soc_operator.py",
    "/soar_kg.py",
    "/soar_trees.py",
    "/soar_mapping.py",

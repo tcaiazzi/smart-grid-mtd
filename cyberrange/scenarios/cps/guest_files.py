@@ -28,6 +28,7 @@ SOC_FILES = [
     ("nodes/wazuh/manager/wazuh-manager-setup.sh", "/wazuh-manager-setup.sh"),
     ("nodes/wazuh/manager/cps_rules.xml", "/cps_rules.xml"),
     ("nodes/soc/soc_analytics.py", "/soc_analytics.py"),
+    ("nodes/soc/soc_operator.py", "/soc_operator.py"),
     ("nodes/soc/soar_kg.py", "/soar_kg.py"),
     ("nodes/soc/soar_trees.py", "/soar_trees.py"),
     ("nodes/soc/soar_mapping.py", "/soar_mapping.py"),

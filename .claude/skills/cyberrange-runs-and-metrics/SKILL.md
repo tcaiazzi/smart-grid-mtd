@@ -32,6 +32,18 @@ where; `docs/scenario-mqtt.md` and `docs/scenario-cps.md` have the variables.
 them. Use it before a long run, and to find out what a target actually expands
 to.
 
+### A run to play with, not to score
+
+- `PLAYGROUND=1` on a single-run target (`--playground` on any scenario's CLI)
+  keeps the lab up after the episode, in a phase named `open`, until Ctrl-C;
+  the run then tears down normally and ends `ok`. Its length is arbitrary, so
+  do not compare its duration-dependent metrics with a campaign's. Campaigns
+  never set it.
+- `make cps-advisor` (with `make cps-advisor-dashboard` in another terminal)
+  runs the CPS lab with a SOC that only suggests: the countermeasures wait on
+  the dashboard's *Operator suggestions* card for Approve / Reject. It needs a
+  person, so it has no campaign. See `docs/scenario-cps-advisor.md`.
+
 ## Before the first run
 
 - `.venv/bin/python` — the repo is never installed, so always the venv binary.

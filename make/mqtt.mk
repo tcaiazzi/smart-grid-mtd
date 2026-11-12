@@ -205,7 +205,8 @@ attack: $(ATTACK_MODEL)
 	$(PYTHON) -m $(M_MQTT_RUN) --attack $(ATTACK_DURATION) --post-attack $(POST_ATTACK) \
 		--block-policy $(BLOCK_POLICY) $(if $(BLOCK_THRESHOLD),--block-threshold $(BLOCK_THRESHOLD)) $(MTD_FLAG) $(MTD_PARAMS_FLAG) $(RL_FLAG) \
 		--bg-replay-mbps $(BG_REPLAY_MBPS) $(SEED_FLAG) $(DASHBOARD_FLAG) $(DETECTOR_FLAG) \
-		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE)
+		--results-dir $(ATTACK_OUT_DIR) --model $(ATTACK_MODEL) --scaler $(ATTACK_SCALER) --trace $(TEST_TRACE) \
+		$(PLAYGROUND_FLAG)
 
 # Cross-model: the foreign model must be trained already — don't silently
 # rebuild it on the wrong dataset.
@@ -219,7 +220,7 @@ baseline:
 	$(MAKE) attack NO_MTD=1
 
 demo:
-	$(PYTHON) -m $(M_MQTT_RUN)
+	$(PYTHON) -m $(M_MQTT_RUN) $(PLAYGROUND_FLAG)
 
 experiment: datasets train attack
 

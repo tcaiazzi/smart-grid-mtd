@@ -319,7 +319,7 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 | **Artifacts** | `<node>.it_sensor.log`, `<node>.it_telemetry.jsonl` |
 | **Needs** | `VulnApp(access_log=…)` on the same node. Give `HmiClient` a `diag_url` too, so normal use is learned. |
 
-### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False)`
+### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False, operator_port=None, operator_token=None, operator_origins=())`
 
 The SOC's decision, as a guest agent on the manager's node
 (`nodes/soc/soc_analytics.py`). It reads the manager's alerts, folds each
@@ -332,11 +332,12 @@ every episode; `policy="off"` watches and requests nothing.
 | | |
 |---|---|
 | **`policy`** | `off` (watch only), `rules` (a playbook per impact) or `solver` (the minimal-cost set that covers the active tree, with causal pairing) |
-| **`approval`** | `auto`, `deny`, or `delay:<s>` (operator approval for high-impact countermeasures) |
+| **`approval`** | `auto`, `deny`, or `delay:<s>` (operator approval for high-impact countermeasures, simulated); `operator:<s>` makes the SOC an advisor: every countermeasure waits up to `<s>` for a person's verdict, then expires unapplied |
+| **`operator_*`** | With `operator:<s>`: the port and bearer token of the SOC's operator API (`nodes/soc/soc_operator.py`: `GET /approvals`, `POST /approvals/<id>`), and the browser origins it answers CORS for. The scenario publishes the port (`Node.mgmt_port`) and closes it on MGMT. |
 | **`it`** | Also allow the IT countermeasures. Set it when `ItSensor` runs. |
 | **Countermeasures** | `notify`, `block_flow` (firewall drops HMI→plant Modbus), `isolate_hmi`, `force_auto` (the firewall writes AUTO + nominal setpoint to the plant), `restore_breaker`; with `it`: `kill_proc_tree`, `block_web_src` |
 | **Writes** | `response.jsonl` (`response_up`, `tree_state`, `decision`, `approval`, `action` with per-leg times `alert_t`/`issued_t`/`node_started_t`/`node_done_t`), `kg.json`, `tree.json` on the node |
-| **Ledger** | `tree_state`, `decision` (with justification), `action` |
+| **Ledger** | `tree_state`, `decision` (with justification), `action`, `approval` (a suggestion with its explanation, then `granted` / `rejected` / `expired`) |
 
 Offline, the same tool runs on the host through `soc_tool` (a subprocess, no
 import): `cps-replay` shows what a policy *would* have done on a finished run,

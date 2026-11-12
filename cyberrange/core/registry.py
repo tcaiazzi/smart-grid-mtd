@@ -9,6 +9,7 @@ import importlib
 SCENARIOS = {
     "mqtt-mtd": "cyberrange.scenarios.mqtt_mtd.scenario:MqttMtdScenario",
     "cps": "cyberrange.scenarios.cps.scenario:CpsScenario",
+    "cps-advisor": "cyberrange.scenarios.cps_advisor.scenario:CpsAdvisorScenario",
 }
 
 

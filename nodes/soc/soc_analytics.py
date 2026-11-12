@@ -8,7 +8,7 @@ manager's alerts, folds every sensor finding into the campaign state
 the chosen countermeasures from the manager as active responses on the agents
 of the hosts concerned. Nothing outside the lab takes part in the loop.
 
-Copied flat onto the SOC node with the soar_* modules and ot_registers.py (see
+Copied flat onto the SOC node with the soar_* modules, soc_operator.py and ot_registers.py (see
 the scenario's guest_files.py). Stdlib + networkx (through soar_kg).
 
 Three ways to run it, one engine:
@@ -18,6 +18,10 @@ Three ways to run it, one engine:
           kg.json, tree.json   the structure it reasons on
           response.jsonl       response_up, tree_state, decision, approval, action
         With --policy off it keeps the campaign state and requests nothing.
+        With --approval operator:<s> it advises: every countermeasure waits
+        for a person on the operator API (soc_operator.py, --operator-port,
+        --operator-token), with the reasons for it; unanswered after <s> it
+        is dropped, never applied.
 
     soc_analytics.py --describe --inventory FILE --out-dir DIR [--it]
         kg.json and tree.json only (each tree node says whether it is feasible).
@@ -47,6 +51,7 @@ import soar_kg as kgmod
 import soar_mapping as mapping
 import soar_policy as policy
 import soar_trees as trees
+import soc_operator
 
 POLICIES = ("off", "rules", "solver")
 ALERTS = "/var/ossec/logs/alerts/alerts.json"
@@ -58,18 +63,25 @@ OUTCOME_TIMEOUT_S = 15.0
 
 
 def parse_approval(spec):
-    """'auto' | 'deny' | 'delay:<s>' -> (mode, delay_s)."""
+    """'auto' | 'deny' | 'delay:<s>' | 'operator:<s>' -> (mode, seconds).
+
+    ``delay`` grants what needs approval by itself after <s>; ``operator``
+    runs nothing until a person approves it, and drops it after <s>."""
     spec = (spec or "auto").strip()
     if spec in ("auto", "deny"):
         return spec, 0.0
-    if spec.startswith("delay:"):
+    mode, _, seconds = spec.partition(":")
+    if mode in ("delay", "operator"):
         try:
-            d = float(spec.split(":", 1)[1])
+            d = float(seconds)
         except ValueError:
             d = -1
-        if d >= 0:
-            return "delay", d
-    raise ValueError(f"approval must be auto, deny or delay:<seconds>, got {spec!r}")
+        # An operator with no time to answer would only ever see expired suggestions.
+        if d > 0 or (d == 0 and mode == "delay"):
+            return mode, d
+    raise ValueError(
+        f"approval must be auto, deny, delay:<seconds> or operator:<seconds>, got {spec!r}"
+    )
 
 
 class JsonlRecorder:
@@ -124,6 +136,7 @@ class ResponseEngine:
         self.state = mapping.CampaignState(self.tree, g)
         self.record = record or (lambda kind, **f: None)
         self._last_sig = None
+        self.snapshot = None  # the belief the last decision was taken on
 
     def on_event(self, ev, now=None):
         """Fold one finding; returns a Decision or None."""
@@ -137,11 +150,15 @@ class ResponseEngine:
             body = dict(snap)
             body["belief_t"] = body.pop("t")
             self.record("tree_state", t=stamp, **body)
+        return self._decide(snap, stamp, now, ev)
+
+    def _decide(self, snap, stamp, now, ev):
         if self.policy is None:
             return None
         d = self.policy.decide(snap, now)
         if d is None:
             return None
+        self.snapshot = snap
         self.policy.mark_applied([a for a in d.actions if a != "notify"])
         body = d.to_dict()
         body.pop("t")
@@ -154,6 +171,71 @@ class ResponseEngine:
             **body,
         )
         return d
+
+    def withdraw(self, actions, declined=False):
+        """``actions`` were decided but will not run (see _Base.mark_withdrawn)."""
+        if self.policy is not None:
+            self.policy.mark_withdrawn(actions, declined=declined)
+
+    def reconsider(self, ev, now=None):
+        """Decide again on the belief as it stands, with no new finding: what
+        is the best response now that something proposed was turned down?
+        ``ev`` is the finding behind the proposal being replaced."""
+        snap = self.state.snapshot(ev.get("t"))
+        return self._decide(snap, now if now is not None else time.time(), now, ev)
+
+    def explain(self, d, action, ev):
+        """Why ``action``, in the terms an operator decides on: what was seen,
+        what the action stops or undoes and how sure the SOC is of it, what it
+        costs, what it runs and where, and what else was on the table."""
+        cm = self.cms[action]
+        labels = {n.id: n for n in self.tree.walk()}
+        beliefs = (self.snapshot or {}).get("nodes") or {}
+
+        def nodes(ids):
+            out = []
+            for n in ids:
+                node, b = labels.get(n), beliefs.get(n) or {}
+                out.append(
+                    {
+                        "node": n,
+                        "label": getattr(node, "label", n),
+                        "attck": getattr(node, "attck", None),
+                        "attck_name": getattr(node, "attck_name", None),
+                        "state": b.get("state"),
+                        "belief": b.get("score"),
+                    }
+                )
+            return out
+
+        covers = d.covers.get(action) or {}
+        entities = ev.get("entities") or {}
+        return {
+            "policy": d.policy,
+            "rationale": d.rationale,
+            "trigger": {
+                "klass": ev.get("klass"),
+                "detector": ev.get("detector"),
+                "confidence": ev.get("confidence"),
+                "src": entities.get("src"),
+                "t": ev.get("t"),
+            },
+            "prevents": nodes(covers.get("prevents") or []),
+            "restores": nodes(covers.get("restores") or []),
+            "active_impacts": list(d.active_impacts),
+            "countermeasure": {
+                "label": cm.label,
+                "d3fend": cm.d3fend,
+                "machine": cm.machine,
+                "commands": list(cm.apply),
+                "op_cost": cm.op_cost,
+                "energy_cost": cm.energy_cost,
+                "time_to_effect_s": cm.time_to_effect_s,
+            },
+            "decided_with": [a for a in d.actions if a != action],
+            "cost_terms": dict(d.cost_terms),
+            "alternatives": list(d.pareto),
+        }
 
 
 # ── the manager: its alerts in, its active responses out ─────────────────────
@@ -283,12 +365,16 @@ class Service:
         approval="auto",
         clock=time.time,
         outcome_timeout=OUTCOME_TIMEOUT_S,
+        desk=None,
     ):
         self.engine, self.follower, self.api, self.record = engine, follower, api, record
-        self.approval, self.approval_delay = parse_approval(approval)
+        # The seconds are a delay before granting, or an operator's time to answer.
+        self.approval, self.approval_s = parse_approval(approval)
         self.clock, self.outcome_timeout = clock, float(outcome_timeout)
+        self.desk = desk or soc_operator.ApprovalDesk(clock)
         self._agents = {}
         self._awaiting_approval = []  # (due_t, action id, context)
+        self._suggested = {}  # suggestion id -> what waits for the operator's verdict
         self._requested = {}  # request id -> context of an action awaiting its outcome
 
     def step(self):
@@ -304,21 +390,78 @@ class Service:
             else:
                 self.on_outcome(ev)
         self._grant_due()
+        self._verdicts()
+        self._lapse()
         self._expire()
 
     def on_finding(self, ev, alert_t=None):
         d = self.engine.on_event(ev, now=self.clock())
-        if d is None:
-            return
+        if d is not None:
+            self._dispatch(d, ev, alert_t)
+
+    def _dispatch(self, d, ev, alert_t):
         for action in d.actions:
             ctx = {"decided_t": d.t, "alert_t": alert_t}
             cm = self.engine.cms[action]
-            if cm.requires_approval and self.approval == "delay":
-                due = self.clock() + self.approval_delay
+            # notify runs nothing anywhere: there is nothing for a person to approve.
+            if self.approval == "operator" and cm.machine:
+                self._suggest(action, ctx, d, ev)
+            elif cm.requires_approval and self.approval == "delay":
+                due = self.clock() + self.approval_s
                 self.record("approval", action=action, state="requested", due_t=round(due, 3))
                 self._awaiting_approval.append((due, action, ctx))
             else:
                 self.request(action, ctx)
+
+    # ── advising: the operator decides ───────────────────────────────────────
+
+    def _suggest(self, action, ctx, d, ev):
+        """Put ``action`` to the operator instead of running it."""
+        now = self.clock()
+        suggestion = {
+            "action": action,
+            "requested_t": round(now, 3),
+            "due_t": round(now + self.approval_s, 3),
+            "explanation": self.engine.explain(d, action, ev),
+        }
+        request = os.urandom(8).hex()
+        self._suggested[request] = {"ctx": ctx, "ev": ev, **suggestion}
+        self.desk.open(request, suggestion)
+        self.record("approval", t=now, request=request, state="requested", **suggestion)
+
+    def _close(self, request, state, s, **fields):
+        now = self.clock()
+        fields["waited_s"] = round(now - s["requested_t"], 3)
+        self.desk.close(request, state, **fields)
+        self.record("approval", t=now, request=request, action=s["action"], state=state, **fields)
+
+    def _verdicts(self):
+        for v in self.desk.take():
+            s = self._suggested.pop(v["request"], None)
+            if s is None:
+                continue  # it lapsed between the operator's click and this step
+            who = {"operator": v.get("operator"), "verdict_t": v.get("t")}
+            if v["verdict"] == "approve":
+                self._close(v["request"], "granted", s, **who)
+                self.request(s["action"], s["ctx"])
+                continue
+            self._close(v["request"], "rejected", s, **who)
+            self.engine.withdraw([s["action"]], declined=True)
+            # The policy counted on the action it proposed; without it, the
+            # best response may be another one, and the operator should see it.
+            d = self.engine.reconsider(s["ev"], now=self.clock())
+            if d is not None:
+                self._dispatch(d, s["ev"], s["ctx"].get("alert_t"))
+
+    def _lapse(self):
+        """A suggestion nobody answered in time is dropped, not applied: no
+        answer is not consent."""
+        now = self.clock()
+        for request, s in list(self._suggested.items()):
+            if s["due_t"] <= now:
+                del self._suggested[request]
+                self._close(request, "expired", s)
+                self.engine.withdraw([s["action"]])
 
     def _grant_due(self):
         now = self.clock()
@@ -496,7 +639,18 @@ def serve(args, g):
         it=args.it,
     )
     engine = ResponseEngine(args.policy, g, args.approval, record=record, it=args.it)
-    service = Service(engine, AlertFollower(args.alerts), ManagerApi(), record, args.approval)
+    desk = soc_operator.ApprovalDesk()
+    service = Service(
+        engine, AlertFollower(args.alerts), ManagerApi(), record, args.approval, desk=desk
+    )
+    if parse_approval(args.approval)[0] == "operator":
+        try:
+            api = soc_operator.OperatorApi(
+                desk, args.operator_token, args.operator_port, origins=args.operator_origin
+            ).start()
+        except ValueError as e:
+            raise SystemExit(f"--approval {args.approval}: {e} (--operator-token)") from e
+        print(f"operator API on port {api.port}", flush=True)
     halt = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: halt.set())
     while not halt.is_set():
@@ -513,7 +667,17 @@ def main():
     ap.add_argument("--inventory", default=None, help="the SOC's inventory, a JSON file")
     ap.add_argument("--inventory-b64", default=None, help="the same, base64 on the command line")
     ap.add_argument("--policy", default="off", choices=POLICIES)
-    ap.add_argument("--approval", default="auto", help="auto | deny | delay:<seconds>")
+    ap.add_argument(
+        "--approval", default="auto", help="auto | deny | delay:<seconds> | operator:<seconds>"
+    )
+    ap.add_argument("--operator-port", type=int, default=8090, help="operator API port")
+    ap.add_argument("--operator-token", default=None, help="bearer token of the operator API")
+    ap.add_argument(
+        "--operator-origin",
+        action="append",
+        default=[],
+        help="a console origin allowed to call the operator API from a browser (repeatable)",
+    )
     ap.add_argument("--it", action="store_true", help="IT findings and countermeasures too")
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between alert polls")
     ap.add_argument("--alerts", default=ALERTS, help="the manager's alerts.json")

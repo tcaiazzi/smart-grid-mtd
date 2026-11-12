@@ -223,6 +223,108 @@ class Approval(unittest.TestCase):
             self.assertTrue(any(a["state"] == "granted" for a in rows(rec, "approval")))
 
 
+class Advising(unittest.TestCase):
+    """--approval operator:<s>: the SOC proposes, a person disposes."""
+
+    def suggested(self, policy="rules"):
+        svc, foll, api, rec, now = service(policy=policy, approval="operator:60")
+        foll.feed(
+            alert("100100", finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0)),
+            alert("100100", model(1.1, "v_max")),
+        )
+        svc.step()
+        return svc, api, rec, now
+
+    def pending(self, svc):
+        return {s["action"]: s for s in svc.desk.listing()["pending"]}
+
+    def test_nothing_is_asked_of_the_manager_before_a_verdict(self):
+        svc, api, rec, _now = self.suggested()
+        self.assertEqual(
+            api.requests, [], "an advising SOC ran a countermeasure nobody had approved"
+        )
+        asked = {r["action"] for r in rows(rec, "approval") if r["state"] == "requested"}
+        self.assertEqual(asked, {"block_flow", "restore_breaker"})
+        self.assertEqual(set(self.pending(svc)), asked)
+
+    def test_a_suggestion_says_why(self):
+        svc, _api, rec, _now = self.suggested(policy="solver")
+        row = next(r for r in rows(rec, "approval") if r["action"] == "block_flow")
+        why = row["explanation"]
+        self.assertTrue(why["rationale"])
+        self.assertEqual(why["trigger"]["src"], HMI)
+        self.assertTrue(why["prevents"], "the suggestion names nothing it would prevent")
+        self.assertTrue(all(n["label"] for n in why["prevents"]))
+        self.assertEqual(why["countermeasure"]["machine"], "firewall")
+        self.assertTrue(why["countermeasure"]["commands"])
+        self.assertIn("total", why["cost_terms"])
+        self.assertTrue(why["alternatives"])
+        self.assertEqual(row["due_t"], 160.0)
+        json.dumps(row)  # it travels as JSON, to the ledger and to the console
+
+    def test_an_approved_suggestion_is_requested(self):
+        svc, api, rec, now = self.suggested()
+        request = self.pending(svc)["block_flow"]["request"]
+        now[0] = 112.5
+        self.assertEqual(svc.desk.submit(request, "approve", "ada"), "ok")
+        svc.step()
+        self.assertEqual([cm for _a, cm, _r in api.requests], ["block_flow"])
+        granted = [r for r in rows(rec, "approval") if r["state"] == "granted"]
+        self.assertEqual(
+            [(r["action"], r["operator"], r["waited_s"]) for r in granted],
+            [("block_flow", "ada", 12.5)],
+        )
+        self.assertNotIn("block_flow", self.pending(svc))
+
+    def test_a_rejected_suggestion_never_runs_and_is_not_proposed_again(self):
+        svc, api, rec, now = self.suggested()
+        request = self.pending(svc)["block_flow"]["request"]
+        svc.desk.submit(request, "reject", "ada")
+        svc.step()
+        now[0] = 130.0
+        svc.on_finding(finding("policy_violation", 30.0, HMI, "switch_cmd", value=1.0))
+        svc.step()
+        self.assertEqual([cm for _a, cm, _r in api.requests if cm == "block_flow"], [])
+        states = [r["state"] for r in rows(rec, "approval") if r["action"] == "block_flow"]
+        self.assertEqual(states, ["requested", "rejected"])
+
+    def test_the_solver_offers_the_alternative_to_a_rejected_action(self):
+        svc, _api, rec, _now = self.suggested(policy="solver")
+        self.assertNotIn("isolate_hmi", self.pending(svc))
+        svc.desk.submit(self.pending(svc)["block_flow"]["request"], "reject")
+        svc.step()
+        self.assertIn(
+            "isolate_hmi",
+            self.pending(svc),
+            "the path cut was turned down and the operator was offered no other",
+        )
+
+    def test_an_unanswered_suggestion_lapses_unapplied(self):
+        svc, api, rec, now = self.suggested()
+        request = self.pending(svc)["block_flow"]["request"]
+        now[0] = 161.0
+        svc.step()
+        self.assertEqual(api.requests, [], "silence was taken for consent")
+        expired = {r["action"] for r in rows(rec, "approval") if r["state"] == "expired"}
+        self.assertEqual(expired, {"block_flow", "restore_breaker"})
+        self.assertEqual(svc.desk.listing()["pending"], [])
+        # A verdict that arrives after the deadline finds nothing to decide.
+        self.assertEqual(svc.desk.submit(request, "approve"), "unknown")
+
+    def test_notify_is_not_put_to_the_operator(self):
+        svc, _foll, api, rec, _now = service(approval="operator:60")
+        svc.on_finding(model(1.0, "max_dsetpoint"))
+        self.assertEqual([r["id"] for r in rows(rec, "action")], ["notify"])
+        self.assertEqual(rows(rec, "approval"), [])
+
+    def test_the_approval_forms(self):
+        self.assertEqual(A.parse_approval("operator:90"), ("operator", 90.0))
+        self.assertEqual(A.parse_approval("delay:0"), ("delay", 0.0))
+        for bad in ("operator", "operator:0", "operator:x", "delay:-1", "maybe"):
+            with self.assertRaises(ValueError, msg=bad):
+                A.parse_approval(bad)
+
+
 class AlertFollowerAndEvent(unittest.TestCase):
     def test_follows_only_complete_lines(self):
         with tempfile.TemporaryDirectory() as d:

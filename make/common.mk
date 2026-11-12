@@ -13,6 +13,9 @@ PYTHON ?= .venv/bin/python
 OUTPUT_ROOT      ?= output
 SEED             ?=
 SEED_FLAG        := $(if $(SEED),--seed $(SEED))
+# PLAYGROUND=1 keeps a single run's lab up after its episode, until Ctrl-C.
+PLAYGROUND       ?=
+PLAYGROUND_FLAG  := $(if $(PLAYGROUND),--playground)
 
 # -- Python entry points ------------------------------------------------------
 # Platform
@@ -35,6 +38,8 @@ M_CPS_RUN         := cyberrange.scenarios.cps.cli
 M_CPS_CAMPAIGN    := cyberrange.scenarios.cps.campaign
 M_CPS_RESPONDER   := cyberrange.scenarios.cps.responder
 M_CPS_METRICS     := cyberrange.scenarios.cps.metrics
+# CPS advisor scenario
+M_CPS_ADVISOR_RUN := cyberrange.scenarios.cps_advisor.cli
 
 # ── Platform (every scenario) ────────────────────────────────────────────────
 SCENARIO ?= cps

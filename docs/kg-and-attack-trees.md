@@ -556,6 +556,13 @@ In the example above, the solver's first decision does the following:
 - `deny` removes it from what the policies may choose;
 - `delay:<s>` queues it, and the responder applies it after the delay.
 
+`operator:<s>` is a different regime, the one of the `cps-advisor` scenario
+(`docs/scenario-cps-advisor.md`): **every** countermeasure, not only
+`isolate_hmi`, is put to a person and runs only if approved. A rejected one is
+removed from what the policy may choose and the policy decides again on the
+same belief, so the solver offers its next-best set; one left unanswered for
+`<s>` seconds expires unapplied and may be proposed again on new evidence.
+
 ## 7. The attacker walks the same tree
 
 `AttackPlanner` ([planes/attack/planner/planner.py](../cyberrange/planes/attack/planner/planner.py))

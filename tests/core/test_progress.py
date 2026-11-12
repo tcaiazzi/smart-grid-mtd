@@ -346,6 +346,55 @@ class RunLifecycle(unittest.TestCase):
         )
         self.assertLess(started.index("download"), started.index("undeploy"))
 
+    def _interrupt_the_open_phase(self, after_polls=2):
+        """Ctrl-C a playground run from inside its open phase, after some polls."""
+        real_hold = RunContext.hold
+
+        def hold(ctx, *a, **k):
+            real_poll, polls = ctx.poll, []
+
+            def poll():
+                real_poll()
+                polls.append(1)
+                if len(polls) >= after_polls:
+                    raise KeyboardInterrupt
+
+            ctx.poll = poll
+            return real_hold(ctx, *a, **k)
+
+        RunContext.hold = hold
+        self.addCleanup(setattr, RunContext, "hold", real_hold)
+
+    def test_playground_holds_the_lab_until_interrupted_then_tears_down(self):
+        self._interrupt_the_open_phase()
+        args = self._args(attack=False)
+        args.playground = True
+        col, mgr = Collector(), FakeManager()
+        with fake_downloads():
+            rc = cps.run(args, progress=col, manager=mgr)
+        self.assertEqual(rc, 0)
+        phases = [(e["name"], e["state"]) for e in col.events if e["kind"] == "phase"]
+        names = ["deploy", "services", "normal", "open", "download", "undeploy"]
+        self.assertEqual(phases, [(n, s) for n in names for s in ("start", "end")])
+        self.assertEqual([p["name"] for p in col.events[0]["phases"]], names)
+        self.assertTrue(col.events[0]["playground"])
+        self.assertEqual(
+            col.events[-1]["status"],
+            "ok",
+            "closing a playground with Ctrl-C was recorded as an interrupted run",
+        )
+        self.assertEqual(
+            mgr.undeployed,
+            ["cps", "cps"],
+            "a closed playground left its containers and networks running",
+        )
+
+    def test_a_run_is_not_held_open_unless_asked(self):
+        col = Collector()
+        self._run(FakeManager(), progress=col, attack=False)
+        self.assertFalse(col.events[0]["playground"])
+        self.assertNotIn("open", [e.get("name") for e in col.events if e["kind"] == "phase"])
+
     def test_lab_is_undeployed_when_the_deploy_fails(self):
         mgr = FakeManager(fail_deploy=True)
         with self.assertRaises(RuntimeError):

@@ -60,6 +60,7 @@ IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT = 5020
 APP_PORT = 8080
 DASHBOARD_GUEST_PORT = 8080
+OPERATOR_GUEST_PORT = 8090  # the SOC's operator API, when the SOC advises
 # Primary address per machine NIC — also the "addresses" meta on each Machine.
 # The sensor's OT NIC (eth0) is passive and deliberately has no address.
 ADDRESSES = {
@@ -87,6 +88,15 @@ def sensor_rules():
     return [f"iptables -A INPUT -i eth1 -p tcp --dport {DASHBOARD_GUEST_PORT} -j DROP"]
 
 
+def soc_rules():
+    """The SOC's operator API is for the operator's console, reached through
+    the bridged NIC only. Its server listens on every address, so without this
+    rule it would also answer on MGMT (eth0), where the HMI — the attacker's
+    foothold — could try its token and approve or reject in the operator's
+    place."""
+    return [f"iptables -A INPUT -i eth0 -p tcp --dport {OPERATOR_GUEST_PORT} -j DROP"]
+
+
 def firewall_rules():
     """Standing boundary ruleset: default-drop forwarding, keep established
     flows, and allow ONLY the sanctioned HMI -> engine Modbus flow — so nothing
@@ -102,8 +112,12 @@ def firewall_rules():
     ]
 
 
-def topology(args) -> Topology:
+def topology(args, name=LAB_NAME) -> Topology:
+    """The lab, named ``name``: a scenario that reuses it under another name can
+    run next to this one. With an ``operator_port`` in ``args`` the SOC's
+    operator API is published on that host port."""
     dashboard = int(getattr(args, "dashboard_port", 0) or 0)
+    operator = int(getattr(args, "operator_port", 0) or 0)
 
     def gw(via):
         return [Route("default", via, "eth0")]
@@ -112,7 +126,7 @@ def topology(args) -> Topology:
         return ADDRESSES[name].get(f"eth{i}")
 
     return Topology(
-        LAB_NAME,
+        name,
         default_image=IMAGE,
         nodes=[
             Node(
@@ -161,7 +175,13 @@ def topology(args) -> Topology:
                 mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
             ),
             Node(
-                "soc", [Iface(MGMT, addr("soc", 0))], image=SOC_IMAGE, role="soc", files=SOC_FILES
+                "soc",
+                [Iface(MGMT, addr("soc", 0))],
+                image=SOC_IMAGE,
+                role="soc",
+                startup=soc_rules() if operator else [],
+                files=SOC_FILES,
+                mgmt_port=f"{operator}:{OPERATOR_GUEST_PORT}/tcp" if operator else None,
             ),
         ],
     )

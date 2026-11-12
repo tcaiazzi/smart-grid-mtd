@@ -274,3 +274,16 @@ class RunContext:
                 return
             time.sleep(min(poll_s, remaining))
             self.poll()
+
+    def hold(self, poll_s=None, idle_s=1.0):
+        """Keep the lab as the episode left it, polling the started components,
+        until Ctrl-C. The interrupt is how a playground run ends, so it is
+        absorbed here and the run goes on to its normal teardown."""
+        poll_s = float(getattr(self.args, "poll_interval", 0) or 0) if poll_s is None else poll_s
+        try:
+            while True:
+                time.sleep(poll_s if poll_s > 0 else idle_s)
+                if poll_s > 0:
+                    self.poll()
+        except KeyboardInterrupt:
+            log.info("Playground closed by Ctrl-C")
