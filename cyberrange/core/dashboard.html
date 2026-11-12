@@ -256,9 +256,9 @@ function apply(ev) {
     case "alert": r.alerts.push(ev); break;
     case "model_fitted": r.threshold = ev.threshold; break;
     case "attack_write": r.writes.push({ t: ev.write_t || ev.t, register: ev.register_name || ev.register, value: ev.value }); break;
-    case "tree_state": r.states.push({ t: ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
-    case "decision": r.decisions.push({ t: ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
-    case "action": r.actions.push({ t: ev.t, id: ev.id, ok: ev.ok, machine: ev.machine }); break;
+    case "tree_state": r.states.push({ t: ev.guest_t || ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
+    case "decision": r.decisions.push({ t: ev.guest_t || ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
+    case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine }); break;
     case "run_retry": r.status = "retrying"; r.error = ev.error; break;
     case "run_end":
       r.end_t = ev.t; r.duration = ev.duration_s; r.error = ev.error;

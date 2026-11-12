@@ -83,7 +83,7 @@ help:
 	@echo "  sweep               MTD parameter ablation (E0-E4), resumable -> $(OUTPUT_ROOT)/sweep/ (GROUPS=e1,e2  DRY=1)"
 	@echo ""
 	@echo "Cyber-physical (OT/Modbus) scenario:"
-	@echo "  cps-image           Build the OT node image (kathara/cps)"
+	@echo "  cps-image           Build the OT node images (kathara/cps, kathara/soc)"
 	@echo "  cps-selftest        CPS tests only, no Kathará"
 	@echo "  cps-engine          How to run engine + PLC locally over loopback Modbus"
 	@echo "  cps-lab             Deploy the lab, normal operation only"

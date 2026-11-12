@@ -53,7 +53,7 @@ variable in `make/common.mk`, which is where every entry point is named once.
 
 A plane or the core imports something above it — usually a lazy import inside a
 method, added "just to make it work". *Legitimate fix:* take the dependency as a
-constructor argument, the way `SoarResponder` receives its response loop and
+constructor argument, the way `PlannedAttacker` receives its attack tree and
 `DeliveryAttack` its fault injector; or, for the dashboard, declare it on the
 scenario (`panel_js`, `structure`) and let the registry resolve it.
 *Forbidden:* adding it to the `ALLOWED` set to move on. That set is empty and

@@ -31,13 +31,16 @@ from cyberrange.core.topology import Iface, Node, Route, Topology, build_lab as 
 from cyberrange.scenarios.cps.guest_files import (
     ATTACKER_CPS_FILES,
     ENGINE_FILES,
+    FW_FILES,
     HMI_FILES,
     PLC_FILES,
     SENSOR_FILES,
+    SOC_FILES,
 )
 
 LAB_NAME = "cps"
 IMAGE = "kathara/cps"
+SOC_IMAGE = "kathara/soc"  # the Wazuh manager; too heavy to put on every node
 # Zones (collision domains)
 IT, OT, MGMT = "IT", "OT", "MGMT"
 # Addresses
@@ -68,6 +71,12 @@ ADDRESSES = {
     "sensor": {"eth1": f"{SENSOR_MGMT_IP}/24"},
     "soc": {"eth0": f"{SOC_IP}/24"},
 }
+
+
+# Hosts that run a Wazuh agent, with the id the manager knows each by. The
+# engine and the PLC have none: the plant is watched from the wire and acted on
+# from the boundary.
+WAZUH_AGENTS = {"sensor": "001", "hmi": "002", "firewall": "003"}
 
 
 def sensor_rules():
@@ -131,6 +140,7 @@ def topology(args) -> Topology:
                 ],
                 role="boundary",
                 startup=firewall_rules(),
+                files=FW_FILES,
             ),
             Node(
                 "plc", [Iface(OT, addr("plc", 0))], role="plc", routes=gw(FW_OT_IP), files=PLC_FILES
@@ -150,19 +160,26 @@ def topology(args) -> Topology:
                 files=SENSOR_FILES,
                 mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
             ),
-            Node("soc", [Iface(MGMT, addr("soc", 0))], role="soc"),
+            Node(
+                "soc", [Iface(MGMT, addr("soc", 0))], image=SOC_IMAGE, role="soc", files=SOC_FILES
+            ),
         ],
     )
 
 
+def default_args():
+    """The arguments the topology reads, at their defaults."""
+    return types.SimpleNamespace(dashboard_port=0)
+
+
 def build_lab(args=None):
     """(lab, machines, startups) of the CPS lab, not deployed."""
-    return _build(topology(args or types.SimpleNamespace(dashboard_port=0)))
+    return _build(topology(args or default_args()))
 
 
 def roles():
     """{machine: knowledge-graph role}, from the topology."""
-    return {n.name: n.role for n in topology(types.SimpleNamespace()).nodes}
+    return {n.name: n.role for n in topology(default_args()).nodes}
 
 
 def services():

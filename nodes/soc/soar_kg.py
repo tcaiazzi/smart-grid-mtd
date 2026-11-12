@@ -1,8 +1,20 @@
-"""kg.py — knowledge graph v0 of the cyber-physical lab.
+#!/usr/bin/env python3
+"""soar_kg.py — knowledge graph of the lab the SOC watches.
 
-Built from the Kathará Lab model (machines, their interfaces/collision domains
-and the "addresses" meta that core.topology.build_lab sets), the boundary
-firewall ruleset and the OT plant contract (cyberrange/planes/defense/ot_registers.py).
+Built from the SOC's inventory (the hosts with their roles, interfaces and
+addresses, the services, the boundary firewall's ruleset) and the OT plant
+contract (ot_registers.py). The inventory is what a SOC is configured with; the
+graph is what it reasons on.
+
+Copied flat onto the SOC node next to soc_analytics.py (see the scenario's
+guest_files.py). Stdlib + networkx.
+
+Inventory:
+    {"name": lab name,
+     "hosts": [{"name", "role", "image", "ifaces": [{"name", "zone", "cidr"|null}]}],
+     "services": {host: [[name, proto, port, app], ...]},
+     "boundary": {"host": name, "rules": [iptables command, ...]},
+     "plant_service": [host, service name]}
 
 Node ids are typed by prefix:
     zone:<name>             collision domain (IT / OT / MGMT)
@@ -28,7 +40,7 @@ import shlex
 
 import networkx as nx
 
-from cyberrange.planes.defense import ot_registers as reg
+import ot_registers as reg
 
 # Role of the boundary device: the only host allowed to forward between zones.
 BOUNDARY_ROLE = "boundary"
@@ -37,48 +49,41 @@ BOUNDARY_ROLE = "boundary"
 # ── Construction ─────────────────────────────────────────────────────────────
 
 
-def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall", plant_service=None):
-    """Knowledge graph of a Kathará Lab model.
+def build_kg(inventory):
+    """Knowledge graph of the lab described by ``inventory`` (see the module
+    docstring). Role names matching ROLE_POLICY get may_write edges to the
+    registers that role may write; the plant service exposes the registers."""
+    services = inventory.get("services") or {}
+    roles = {h["name"]: h.get("role") or "unknown" for h in inventory["hosts"]}
+    g = nx.MultiDiGraph(name=inventory.get("name", "lab"))
 
-    lab            Kathará Lab (not deployed); each Machine may carry an
-                   ``addresses`` meta {iface: "ip/prefix"}.
-    fw_rules       iptables command strings enforced by ``firewall``.
-    services       {host: [(name, proto, port, app), ...]}.
-    roles          {host: role}; role names matching ROLE_POLICY get may_write
-                   edges to the registers that role is allowed to write.
-    plant_service  (host, service_name) of the Modbus server whose registers
-                   are the plant contract; its svc node exposes them.
-    """
-    services = services or {}
-    roles = roles or {}
-    g = nx.MultiDiGraph(name=getattr(lab, "name", "lab"))
-
-    for name, mach in sorted(lab.machines.items()):
+    for host in sorted(inventory["hosts"], key=lambda h: h["name"]):
+        name = host["name"]
         hid = f"host:{name}"
-        g.add_node(
-            hid, type="host", name=name, image=mach.get_image(), role=roles.get(name, "unknown")
-        )
-        for idx, iface in sorted(mach.interfaces.items()):
-            zone = iface.link.name
-            zid = f"zone:{zone}"
+        g.add_node(hid, type="host", name=name, image=host.get("image"), role=roles[name])
+        ifaces = sorted(host.get("ifaces") or [], key=lambda i: i["name"])
+        for itf in ifaces:
+            zid = f"zone:{itf['zone']}"
             if zid not in g:
-                g.add_node(zid, type="zone", name=zone)
-            _edge(g, hid, zid, "in_zone", iface=f"eth{idx}")
-        for ifname, cidr in sorted((mach.meta.get("addresses") or {}).items()):
-            itf = ipaddress.ip_interface(cidr)
-            iid = f"ip:{itf.ip}"
+                g.add_node(zid, type="zone", name=itf["zone"])
+            _edge(g, hid, zid, "in_zone", iface=itf["name"])
+        # A passive interface has a zone and no address: in the zone, not reachable in it.
+        for itf in ifaces:
+            if not itf.get("cidr"):
+                continue
+            addr = ipaddress.ip_interface(itf["cidr"])
+            iid = f"ip:{addr.ip}"
             g.add_node(
                 iid,
                 type="ip",
-                addr=str(itf.ip),
-                prefix=itf.network.prefixlen,
-                network=str(itf.network),
-                iface=ifname,
+                addr=str(addr.ip),
+                prefix=addr.network.prefixlen,
+                network=str(addr.network),
+                iface=itf["name"],
                 host=name,
             )
             _edge(g, hid, iid, "has_ip")
-            zone = mach.interfaces[int(ifname[3:])].link.name
-            _edge(g, iid, f"zone:{zone}", "in_zone")
+            _edge(g, iid, f"zone:{itf['zone']}", "in_zone")
         for sname, proto, port, app in services.get(name, []):
             sid = f"svc:{name}/{sname}"
             g.add_node(
@@ -86,9 +91,10 @@ def build_kg(lab, fw_rules, services=None, roles=None, firewall="firewall", plan
             )
             _edge(g, hid, sid, "runs")
 
-    _add_registers(g, plant_service)
+    boundary = inventory.get("boundary") or {}
+    _add_registers(g, inventory.get("plant_service"))
     _add_role_permissions(g, roles)
-    _add_rules(g, firewall, fw_rules)
+    _add_rules(g, boundary.get("host"), boundary.get("rules") or [])
     return g
 
 
@@ -169,7 +175,7 @@ def parse_forward_rules(rules):
 
 def _add_rules(g, firewall, fw_rules):
     fid = f"host:{firewall}"
-    if fid not in g:
+    if not firewall or fid not in g:
         return
     default, rules = parse_forward_rules(fw_rules)
     g.nodes[fid]["role"] = BOUNDARY_ROLE

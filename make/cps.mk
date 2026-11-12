@@ -3,7 +3,7 @@
 # the SOAR response loop.
 
 # ── Cyber-physical (OT/Modbus) scenario — doc steps 1–4 ──────────────────────
-# Variables for the OT scenario. The lab needs the kathara/cps image (cps-image).
+# Variables for the OT scenario. The lab needs the kathara/cps and kathara/soc images (cps-image).
 CPS_OUT          ?= $(OUTPUT_ROOT)/cps/run-1
 CPS_NORMAL       ?= 60
 CPS_LEARN        ?= 45
@@ -41,8 +41,9 @@ CPS_IT_FLAG       := $(if $(CPS_IT),--it-telemetry)
 CPS_TESTS := tests/scenarios/cps tests/planes \
 	tests/core/test_progress.py tests/core/test_dashboard.py
 
-cps-image:                 ## build the OT node image (pandapower + pymodbus)
+cps-image:                 ## build the OT node images: kathara/cps (nodes + Wazuh agent), kathara/soc (Wazuh manager)
 	docker build -t kathara/cps docker/cps/
+	docker build -t kathara/soc docker/soc/
 
 cps-selftest:              ## CPS physics, Modbus, PLC, sensor rules+model, attack chain, metrics — NO Kathará
 	$(PYTHON) -m pytest -q $(CPS_TESTS)

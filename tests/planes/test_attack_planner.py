@@ -8,10 +8,26 @@ Run: `.venv/bin/python -m unittest tests.test_attack_planner`.
 import unittest
 
 
+from tests.helpers import guest_paths
+
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
+
+import soar_kg as _kg  # noqa: E402  (node code, to build the tree document under test)
+import soar_trees as _trees  # noqa: E402
+
 from cyberrange.planes.attack.planner import steps as S  # noqa: E402
 from cyberrange.planes.attack.planner.planner import AttackPlanner  # noqa: E402
-from cyberrange.planes.defense.soar import trees  # noqa: E402
-from cyberrange.scenarios.cps import kg as cps_kg
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
+
+
+def _attack_tree():
+    """The attack tree as the document the planner reads (tree.json's
+    ``attack_tree``), built from the node's own code."""
+    g = _kg.build_kg(cps_inv.inventory())
+    return _trees.to_json(_trees.cps_attack_tree(g), _trees.cps_countermeasures(g), g)[
+        "attack_tree"
+    ]
+
 
 CTX = {
     "target_url": "http://10.10.0.20:8080",
@@ -54,11 +70,10 @@ class Steps(unittest.TestCase):
 
 class Planner(unittest.TestCase):
     def setUp(self):
-        self.g = cps_kg.build()
-        self.tree = trees.cps_attack_tree(self.g)
+        self.tree = _attack_tree()
 
     def plan(self, profile="opportunistic", goal=None, block=(), dwell=0.0, seed=1):
-        p = AttackPlanner(self.tree, self.g, profile=profile, goal=goal, seed=seed)
+        p = AttackPlanner(self.tree, profile=profile, goal=goal, seed=seed)
         rec = Recorder(block=block)
         summary = p.run(rec, record=lambda **f: None, dwell=dwell)
         return summary, rec
@@ -104,7 +119,7 @@ class Planner(unittest.TestCase):
 
     def test_dwell_between_steps(self):
         waits = []
-        p = AttackPlanner(self.tree, self.g, seed=1)
+        p = AttackPlanner(self.tree, seed=1)
         p.run(Recorder(), sleep=lambda s: waits.append(s), dwell=2.0)
         self.assertTrue(waits and all(w == 2.0 for w in waits))
 
@@ -143,7 +158,7 @@ class PlannedDriver(unittest.TestCase):
         from cyberrange.planes.attack import active_attack
 
         self.drive = active_attack.drive_attack_planned
-        self.g = cps_kg.build()
+        self.tree = _attack_tree()
 
     def run_driver(self, block=(), profile="opportunistic", goal=None):
         mgr, gt, ledger = FakeManager(block=block), GT(), []
@@ -151,7 +166,7 @@ class PlannedDriver(unittest.TestCase):
             mgr,
             {"attacker": "attacker"},
             gt,
-            self.g,
+            self.tree,
             target_url="http://10.10.0.20:8080",
             engine_ip="10.20.0.20",
             engine_port=5020,

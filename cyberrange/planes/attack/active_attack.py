@@ -136,7 +136,7 @@ def drive_attack_planned(
     manager,
     machines,
     gt,
-    kg,
+    tree,
     target_url,
     engine_ip,
     engine_port,
@@ -153,13 +153,12 @@ def drive_attack_planned(
     it on the attacker container, recording ground truth (attack_start, per-step
     plan_step, rce, modbus_write, attack_end). Returns the planner summary.
 
-    Imported lazily so the host module needs networkx/soar only on this path."""
+    ``tree`` is the attack tree as a document (planner.tree_doc): the scenario
+    hands it over, so this host module needs no knowledge graph of its own."""
     from cyberrange.planes.attack.planner import steps as S
     from cyberrange.planes.attack.planner.planner import AttackPlanner
-    from cyberrange.planes.defense.soar import trees
 
-    tree = trees.cps_attack_tree(kg)
-    planner = AttackPlanner(tree, kg, profile=profile, goal=goal, seed=seed, max_steps=max_steps)
+    planner = AttackPlanner(tree, profile=profile, goal=goal, seed=seed, max_steps=max_steps)
     ctx = {
         "target_url": target_url,
         "engine_ip": engine_ip,

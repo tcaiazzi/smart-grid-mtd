@@ -1,22 +1,26 @@
-"""Attack tree + countermeasures of the CPS chain (cyberrange.planes.defense.soar.trees),
-grounded on the knowledge graph — no Docker.
+"""Attack tree + countermeasures of the CPS chain (nodes/soc/soar_trees.py),
+grounded on the knowledge graph — the node's code, run on the host.
 
-Run: `.venv/bin/python -m unittest tests.test_soar_trees`.
+Run: `.venv/bin/python -m pytest tests/nodes/test_soar_trees.py`.
 """
 
 import json
-import types
 import unittest
 
+from tests.helpers import guest_paths
 
-from cyberrange.planes.defense.soar import kg, trees  # noqa: E402
-from cyberrange.scenarios.cps import kg as cps_kg
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
+
+import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
+import soar_trees as trees  # noqa: E402
+
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 
 
 class CPSTrees(unittest.TestCase):
     def setUp(self):
-        self.g = cps_kg.build()
+        self.g = kg.build_kg(cps_inv.inventory())
         self.tree = trees.cps_attack_tree(self.g)
         self.cms = trees.cps_countermeasures(self.g)
 
@@ -42,11 +46,7 @@ class CPSTrees(unittest.TestCase):
 
     def test_without_allow_rule_the_pivot_is_infeasible(self):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]
-        services, roles = cps_kg.catalog()
-        lab, _m, _s = cps.build_lab(types.SimpleNamespace(dashboard_port=0))
-        g2 = kg.build_kg(
-            lab, rules, services=services, roles=roles, plant_service=("engine", "modbus")
-        )
+        g2 = kg.build_kg(cps_inv.inventory(rules=rules))
         idx = trees.index(self.tree)
         self.assertFalse(trees.feasible(idx["via_hmi"], g2))
         self.assertFalse(trees.feasible(self.tree, g2))
@@ -72,7 +72,12 @@ class CPSTrees(unittest.TestCase):
         # Inserted before the ESTABLISHED accept, with the KG's addresses.
         self.assertIn("iptables -I FORWARD 1", by["block_flow"].apply[0])
         self.assertIn(f"-s {cps.HMI_IP} -d {cps.ENGINE_IP}", by["block_flow"].apply[0])
-        self.assertIn("127.0.0.1", by["force_auto"].apply[0])
+        # The plant is restored from the boundary device over the OT link: it
+        # holds no agent, and loopback would mean a command run inside it.
+        for cid in ("force_auto", "restore_breaker"):
+            self.assertEqual(by[cid].machine, "firewall", cid)
+            self.assertIn(f"ot_write.py {cps.ENGINE_IP} {cps.MODBUS_PORT}", by[cid].apply[0])
+        self.assertEqual(trees.cps_context(self.g)["responder_ip"], cps.FW_OT_IP)
         self.assertTrue(by["isolate_hmi"].requires_approval)
         # Every impact leaf can be undone by some countermeasure.
         restorable = {n for c in self.cms for n in c.restores}

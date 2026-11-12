@@ -22,8 +22,11 @@ model (detector="model") — ot_model.py: per-window behavioural features scored
   by a robust anomaly model calibrated online on the first --learn-seconds.
 
 The PLC's regulation and the HMI operator's safe manual dispatches raise
-nothing. Alerts are edge-triggered (raised once per key) and cleared when the
-condition goes away, so recovery is measurable.
+nothing. Neither do the writes of the automated response (--responder-ip): they
+are recorded as ``ot_response_write`` events instead, and kept out of the
+model's features. Modbus carries no authentication, so that role is an address:
+whoever can write from it is not seen. Alerts are edge-triggered (raised once
+per key) and cleared when the condition goes away, so recovery is measurable.
 
 Copied flat onto the sensor machine (see the scenario's guest_files.py).
 Stdlib + numpy only: Ethernet/IPv4/TCP/Modbus are parsed by hand (no scapy).
@@ -312,13 +315,18 @@ class ProcessRules:
         self.excursion_obs = 0
         self.last_in_band_t = None
 
-    def note_write(self, t, src, dst, unit, address, value):
+    def note_write(self, t, src, dst, unit, address, value, suspect=True):
+        """``suspect=False`` records the new state without listing the write as
+        a possible cause of an excursion: the responder writes while the plant
+        is still out of band, and would be blamed for the attack it answers."""
         if address not in reg.SENSITIVE_ACTUATORS:
             return
         prev = self.hr_state.get(address)
         self.hr_state[address] = value
         if address == reg.HR_CTRL_MODE and value is not None:
             self.ctrl_mode = int(round(value))
+        if not suspect:
+            return
         if value is not None and prev is not None and abs(value - prev) < 1e-9:
             return  # no change -> not a suspect
         self.last_writes.append((t, src, dst, unit, address, value))
@@ -418,6 +426,7 @@ class OTSensor:
         learn_seconds=45.0,
         window_s=1.0,
         model_k=6.0,
+        responder_ip=None,
     ):
         self.iface = iface
         self.engine_ip = engine_ip
@@ -429,6 +438,9 @@ class OTSensor:
             self.policy[authorized_writer] = "plc"
         if hmi_ip:
             self.policy[hmi_ip] = "hmi"
+        self.responder_ip = responder_ip
+        if responder_ip:
+            self.policy[responder_ip] = "responder"
         self.detectors = set(detectors)
         self.rules = ProcessRules()
         self._pending = {}  # (client_ip, client_port, txn) -> (fc, address, t)
@@ -443,6 +455,7 @@ class OTSensor:
                 setpoint_register=reg.HR_DG_SETPOINT,
                 mode_register=reg.HR_CTRL_MODE,
                 manual_value=reg.CTRL_MANUAL,
+                responder_ip=responder_ip,
             )
             self.model = RobustAnomalyModel(k=model_k)
         self._model_quiet = 0
@@ -537,10 +550,18 @@ class OTSensor:
                 address = req["address"] + offset
                 w = {"unit": unit, "fc": fc, "address": address, "values": [raw]}
                 value = reg.actuator_value(address, raw)
-                self.rules.note_write(t, src, dst, unit, address, value)
+                responder = src == self.responder_ip
+                self.rules.note_write(t, src, dst, unit, address, value, suspect=not responder)
                 if self.featurizer:
                     self._model_windows(self.featurizer.observe_write(t, src, address, value))
-                    self._model_early(t)
+                    if not responder:
+                        self._model_early(t)
+                if responder:
+                    # The response seen on the wire: when the plant actually
+                    # received it, on the same clock as the findings.
+                    self.telemetry.emit(
+                        "ot_response_write", src=src, dst=dst, register=address, value=value
+                    )
                 if "rules" in self.detectors:
                     f = classify_write(src, dst, w, self.authorized_writer, policy=self.policy)
                     if f:
@@ -709,6 +730,11 @@ def main():
     )
     ap.add_argument("--hmi-ip", default=None, help="the HMI's IP (role 'hmi')")
     ap.add_argument(
+        "--responder-ip",
+        default=None,
+        help="address the automated response writes from (role 'responder')",
+    )
+    ap.add_argument(
         "--detectors", default="rules,model", help="comma list of detectors to run: rules, model"
     )
     ap.add_argument(
@@ -739,6 +765,7 @@ def main():
         learn_seconds=args.learn_seconds,
         window_s=args.window,
         model_k=args.model_k,
+        responder_ip=args.responder_ip,
     ).run(duration=args.duration)
 
 

@@ -17,10 +17,17 @@ SOURCES = {
         "cyberrange/scenarios/cps/*.py"
     ],
     "dashboard panel": ["cyberrange/scenarios/cps/panel.js"],
-    "host-side domain logic (SOAR, attack drivers, planner)": [
-        "cyberrange/planes/defense/soar/*.py",
+    "host-side domain logic (attack drivers, planner)": [
         "cyberrange/planes/attack/active_attack.py",
         "cyberrange/planes/attack/planner/*.py",
     ],
 }
-GUEST_MANIFESTS = ("ENGINE_FILES", "PLC_FILES", "SENSOR_FILES", "HMI_FILES", "ATTACKER_CPS_FILES")
+GUEST_MANIFESTS = (
+    "ENGINE_FILES",
+    "FW_FILES",
+    "PLC_FILES",
+    "SENSOR_FILES",
+    "SOC_FILES",
+    "HMI_FILES",
+    "ATTACKER_CPS_FILES",
+)

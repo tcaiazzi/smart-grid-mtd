@@ -131,9 +131,9 @@ These are failure modes, not style notes. Most of them are silent.
   runs the old code. Use `git mv` and let the deploy contract test check that
   each staged basename exists exactly once.
 - **Importing a scenario from a component.** The lazy import inside a method is
-  the tempting version. Take it as a constructor argument instead — `SoarResponder`
-  receives its response loop and its knowledge-graph builder, `DeliveryAttack`
-  receives its fault injector — and the component stays reusable.
+  the tempting version. Take it as a constructor argument instead — `PlannedAttacker`
+  receives its attack tree, `DeliveryAttack` receives its fault injector — and
+  the component stays reusable.
   `tests/core/test_layering.py` enforces this.
 - **Unseeded randomness.** `ctx.role_seed("<role>")` derives a distinct,
   reproducible seed per role from the run seed; `seed_arg(seed)` renders it onto

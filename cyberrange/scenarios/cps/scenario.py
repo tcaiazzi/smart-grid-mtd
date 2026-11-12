@@ -20,6 +20,7 @@ from cyberrange.planes.attack import components as attack
 from cyberrange.planes.defense import components as defense
 from cyberrange.planes.monitor import components as monitor
 from cyberrange.core.scenario import PhaseSpec, Scenario
+from cyberrange.scenarios.cps import inventory
 from cyberrange.scenarios.cps import topology as T
 from cyberrange.planes.traffic import components as traffic
 
@@ -154,12 +155,11 @@ class CpsScenario(Scenario):
             raise SystemExit(
                 f"--attacker-profile targeted needs --attack-goal ({', '.join(GOALS)})"
             )
-        from cyberrange.scenarios.cps.responder import parse_approval
-
-        try:
-            parse_approval(getattr(args, "approval", "auto"))
-        except ValueError as e:
-            raise SystemExit(f"--approval: {e}")
+        spec = getattr(args, "approval", "auto") or "auto"
+        if spec not in ("auto", "deny") and not (
+            spec.startswith("delay:") and spec.split(":", 1)[1].replace(".", "", 1).isdigit()
+        ):
+            raise SystemExit(f"--approval must be auto, deny or delay:<seconds>, got {spec!r}")
 
     def topology(self, args):
         return T.topology(args)
@@ -187,13 +187,12 @@ class CpsScenario(Scenario):
         )
 
     def write_structure(self, ctx):
-        """kg.json / tree.json for the dashboard, from the lab being deployed."""
-        from cyberrange.scenarios.cps import kg as cps_kg
-        from cyberrange.scenarios.cps import responder as cps_responder
+        """kg.json / tree.json for the dashboard and the attacker's planner. The
+        SOC node builds these itself at run time; here, at deploy, the host runs
+        the same tool (soc_tool) on the lab's inventory to lay them down first."""
+        from cyberrange.scenarios.cps import soc_tool
 
-        cps_responder.write_structure(
-            ctx.out_dir, cps_kg.build(ctx.lab), it=bool(ctx.args.it_telemetry)
-        )
+        soc_tool.describe(ctx.out_dir, it=bool(ctx.args.it_telemetry), args=ctx.args)
 
     def metrics(self, run_dir):
         from cyberrange.scenarios.cps.metrics import compute_metrics
@@ -208,26 +207,32 @@ class CpsScenario(Scenario):
 
     def structure(self):
         """kg + attack tree rebuilt from the declared topology, for runs that
-        predate kg.json. Pulls in networkx and the Kathará lab model, so it is
-        only reached when a run has no recorded structure."""
-        from cyberrange.planes.defense.soar import kg as soar_kg
-        from cyberrange.planes.defense.soar import trees as soar_trees
-        from cyberrange.scenarios.cps import kg as cps_kg
+        predate kg.json. The host runs the SOC's own tool (soc_tool) on the
+        lab's inventory, in a subprocess, rather than importing it."""
+        from cyberrange.scenarios.cps import soc_tool
 
-        g = cps_kg.build()
-        return {
-            "kg": soar_kg.to_json(g),
-            "tree": soar_trees.to_json(
-                soar_trees.cps_attack_tree(g), soar_trees.cps_countermeasures(g)
-            ),
-        }
+        return soc_tool.structure()
 
     # ── composition ──────────────────────────────────────────────────────────
+    def _structure(self, ctx):
+        """The structure the run recorded at deploy (soc_tool.describe)."""
+        import json
+
+        with open(os.path.join(ctx.out_dir, "tree.json")) as f:
+            return json.load(f)
+
+    def _attack_tree(self, ctx):
+        """The attack tree as a document. The attacker reads it; it does not
+        build the defender's graph."""
+        return self._structure(ctx)["attack_tree"]
+
+    def _countermeasures(self, ctx):
+        """The countermeasures of the lab, with their commands and target host."""
+        return self._structure(ctx)["countermeasures"]
+
     def attacker(self, args):
         target = f"http://{T.HMI_IP}:{T.APP_PORT}"
         if args.attack_driver == "planner":
-            from cyberrange.scenarios.cps import kg as cps_kg
-
             return attack.PlannedAttacker(
                 args.attacker_profile,
                 target,
@@ -237,7 +242,7 @@ class CpsScenario(Scenario):
                 dwell=args.dwell,
                 max_steps=args.max_steps,
                 interval=args.attack_interval,
-                kg=cps_kg.build,
+                tree=self._attack_tree,
             )
         return attack.ScriptedChain(
             args.attack_mode,
@@ -251,7 +256,19 @@ class CpsScenario(Scenario):
     def episode(self, ctx):
         a = ctx.args
         it = bool(a.it_telemetry)
+        # The management plane (Wazuh + SOC analytics) runs in every episode, so
+        # a detection-only run (respond=off) carries the same load and is
+        # comparable. With respond=off the analytics watches but requests nothing.
+        responding = (a.respond or "off") != "off"
         with ctx.phase("services"):
+            # First, and in the background: the agents wait for it, and the
+            # normal phase gives both the time to settle before any finding.
+            keys = {name: defense.generate_shared_key() for name in T.WAZUH_AGENTS}
+            ctx.start(
+                defense.WazuhManager(
+                    "soc", {n: (T.WAZUH_AGENTS[n], keys[n]) for n in T.WAZUH_AGENTS}
+                )
+            )
             # DPI sensor first, so the model's calibration window covers the
             # clients' session setup as well as steady state.
             ctx.start(
@@ -265,6 +282,9 @@ class CpsScenario(Scenario):
                     a.detectors,
                     a.learn_seconds,
                     dashboard_port=T.DASHBOARD_GUEST_PORT if a.dashboard_port else None,
+                    # Only when a response runs: with none, a write from the
+                    # firewall is nobody's and must be reported.
+                    responder_ip=T.FW_OT_IP if responding else None,
                 )
             )
             ctx.start(
@@ -292,22 +312,44 @@ class CpsScenario(Scenario):
                 ctx.start(
                     defense.ItSensor("hmi", T.ENGINE_IP, T.MODBUS_PORT, ACCESS_LOG, a.learn_seconds)
                 )
-        ctx.start(monitor.PlantMirror("engine"))
-        ctx.start(monitor.TelemetryMirror())
-        if (a.respond or "off") != "off":
-            from cyberrange.scenarios.cps import kg as cps_kg
-            from cyberrange.scenarios.cps import responder as cps_responder
-
+            # What each agent may run, from the countermeasures the structure
+            # recorded at deploy (tree.json): the host provisions the allowlist,
+            # it does not decide. The SOC analytics asks for these by id.
+            logs = {"sensor": [defense.OtSensor.TELEMETRY]}
+            if it:
+                logs["hmi"] = [defense.ItSensor.TELEMETRY]
+            allowed = {name: {} for name in T.WAZUH_AGENTS}
+            for cm in self._countermeasures(ctx):
+                if cm["machine"] in allowed:
+                    allowed[cm["machine"]][cm["id"]] = {
+                        "apply": cm["apply"],
+                        "revert": cm["revert"],
+                    }
+            for name, agent_id in T.WAZUH_AGENTS.items():
+                ctx.start(
+                    defense.WazuhAgent(
+                        name,
+                        T.SOC_IP,
+                        agent_id,
+                        keys[name],
+                        responses=allowed[name],
+                        logs=logs.get(name, ()),
+                    )
+                )
+            # The decision runs on the SOC node: it reads the manager's alerts,
+            # keeps the attack tree's belief and asks the manager for responses.
             ctx.start(
-                defense.SoarResponder(
-                    a.respond,
+                defense.SocAnalytics(
+                    "soc",
+                    inventory.inventory(a),
+                    policy=a.respond or "off",
                     approval=a.approval,
                     interval=a.respond_interval,
                     it=it,
-                    responder=cps_responder.Responder,
-                    kg=cps_kg.build,
                 )
             )
+        ctx.start(monitor.PlantMirror("engine"))
+        ctx.start(monitor.TelemetryMirror())
 
         log.info(
             "Normal operation for %.0fs (model calibration: first %.0fs)",
@@ -335,7 +377,10 @@ class CpsScenario(Scenario):
         if not a.attack:
             return
         driver = ctx.start(self.attacker(a))
-        with ctx.phase("attack", mode=driver.label):
+        # The attack blocks the main thread; ctx.live keeps the mirrors polling,
+        # so the SOC's decisions and actions reach the ledger as they happen and
+        # not only once the attack returns.
+        with ctx.phase("attack", mode=driver.label), ctx.live():
             driver.attack(ctx)
         log.info("Post-attack observation for %.0fs", a.post_attack_duration)
         with ctx.phase("post_attack"):

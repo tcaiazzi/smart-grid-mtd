@@ -12,13 +12,13 @@ on the host. No guest agent imports it, so it may use networkx.
 
 | File | What it holds |
 |---|---|
-| [cyberrange/planes/defense/soar/kg.py](../cyberrange/planes/defense/soar/kg.py) | the knowledge graph: construction from any lab, queries, JSON |
-| [cyberrange/scenarios/cps/kg.py](../cyberrange/scenarios/cps/kg.py) | the CPS binding: which topology, services, roles and rules go in |
-| [cyberrange/planes/defense/soar/trees.py](../cyberrange/planes/defense/soar/trees.py) | the tree model and its operations, the CPS attack tree, the countermeasures |
-| [cyberrange/planes/defense/soar/mapping.py](../cyberrange/planes/defense/soar/mapping.py) | findings → evidence on tree nodes → belief (`CampaignState`) |
-| [cyberrange/planes/defense/soar/policy.py](../cyberrange/planes/defense/soar/policy.py) | belief → decisions: the rules playbook and the solver |
-| [cyberrange/scenarios/cps/responder.py](../cyberrange/scenarios/cps/responder.py) | the runtime loop in a run, the files it writes, offline replay |
-| [cyberrange/planes/attack/planner/](../cyberrange/planes/attack/planner/) | the attacker that walks the same tree |
+| [nodes/soc/soar_kg.py](../nodes/soc/soar_kg.py) | the knowledge graph: construction from the SOC's inventory, queries, JSON |
+| [cyberrange/scenarios/cps/inventory.py](../cyberrange/scenarios/cps/inventory.py) | the CPS binding: the lab as the SOC's inventory (topology, services, roles, rules) |
+| [nodes/soc/soar_trees.py](../nodes/soc/soar_trees.py) | the tree model and its operations, the CPS attack tree, the countermeasures |
+| [nodes/soc/soar_mapping.py](../nodes/soc/soar_mapping.py) | findings → evidence on tree nodes → belief (`CampaignState`) |
+| [nodes/soc/soar_policy.py](../nodes/soc/soar_policy.py) | belief → decisions: the rules playbook and the solver |
+| [nodes/soc/soc_analytics.py](../nodes/soc/soc_analytics.py) | the SOC node's runtime loop (decision + requests); its engine, offline, is the replay |
+| [cyberrange/planes/attack/planner/](../cyberrange/planes/attack/planner/) | the attacker that walks the same tree, read from `tree.json` |
 
 ## 1. The pipeline
 
@@ -53,7 +53,7 @@ lab being deployed, and stay fixed until the run ends (§4).
 
 `build_kg` is generic: it turns any declared lab into a graph and knows nothing
 about the CPS scenario. The scenario supplies the inputs in
-[scenarios/cps/kg.py](../cyberrange/scenarios/cps/kg.py):
+[scenarios/cps/inventory.py](../cyberrange/scenarios/cps/inventory.py):
 
 | Input | Source | Becomes |
 |---|---|---|
@@ -170,12 +170,15 @@ What `reachable` does not model:
 
 ### 2.5 Layering
 
-[planes/defense/soar/kg.py](../cyberrange/planes/defense/soar/kg.py) must not
-import a scenario (rule 1 of [CLAUDE.md](../CLAUDE.md)). So the components that
-need the graph, `SoarResponder` and `PlannedAttacker`, take a **builder**
-(`kg=cps_kg.build`, a function lab → graph) as a constructor argument, and the
-scenario passes its own builder when it composes them. A second scenario reuses
-both components by passing a different builder.
+The graph is node software now ([nodes/soc/soar_kg.py](../nodes/soc/soar_kg.py)),
+and node software imports no scenario (rule 8 of [CLAUDE.md](../CLAUDE.md)). So it
+builds the graph from an **inventory** the scenario provides
+([cps.inventory](../cyberrange/scenarios/cps/inventory.py), derived from the
+topology): the SOC analytics does this on its node, and the host does it offline
+through `soc_tool` (a subprocess, no import). `PlannedAttacker` does not build a
+graph at all — it reads the recorded `tree.json`, where each node already says
+whether it is feasible. A second scenario reuses all of this by providing its own
+inventory and tree.
 
 ### 2.6 Serialisation
 
@@ -291,8 +294,8 @@ two lists keep them apart. The solver depends on the difference (§6.2).
 | `notify` | — | — | — | 0 | 0 | 0 | | 90 |
 | `block_flow` | firewall | pivot + the 3 impact leaves | — | 0.5 | 0.5 | 0.01 | | 10 |
 | `isolate_hmi` | hmi | it_access, it_exec, pivot + leaves | — | 0.5 | 0.8 | 0.01 | **yes** | 20 |
-| `force_auto` | engine | — | mode_hijack, setpoint_oor | 1.0 | 0.1 | 0.02 | | 30 |
-| `restore_breaker` | engine | — | breaker_open | 1.0 | 0.1 | 0.02 | | 40 |
+| `force_auto` | firewall | — | mode_hijack, setpoint_oor | 1.0 | 0.1 | 0.02 | | 30 |
+| `restore_breaker` | firewall | — | breaker_open | 1.0 | 0.1 | 0.02 | | 40 |
 | `kill_proc_tree` *(IT)* | hmi | it_exec, pivot + leaves | — | 0.3 | 0.15 | 0.01 | | 5 |
 | `block_web_src` *(IT)* | hmi | it_access, it_exec, pivot + leaves | — | 0.4 | 0.2 | 0.01 | | 6 |
 
@@ -301,9 +304,14 @@ Notes on the table:
 - **Commands.** Each countermeasure carries the shell commands it runs on
   `machine` (`apply`), and the commands that would undo it (`revert`). The
   commands are built from `cps_context`, so they follow the graph like the tree
-  does. `force_auto` and `restore_breaker` write over Modbus to 127.0.0.1 from
-  inside the engine container, so the DPI sensor does not see them as attacker
-  writes.
+  does. `force_auto` and `restore_breaker` write over Modbus to the engine from
+  the boundary firewall, which already stands on the OT link: the plant holds
+  no agent and no new path is opened towards it. The DPI sensor knows that
+  address as the `responder` role (`ROLE_POLICY`), so it reports the writes as
+  `ot_response_write` events rather than findings, and the model leaves them out
+  of its features. Modbus has no authentication, so the role is an address:
+  whoever controls the firewall writes to the plant unseen. From IT that address
+  cannot be used — the FORWARD chain passes the HMI's source only.
 - **Costs.** `time_to_effect_s`, `op_cost` (operational disruption, 0..1) and
   `energy_cost` are nominal values that the solver weighs. `block_flow` costs
   0.5 because it also cuts the operator's legitimate HMI control.
@@ -339,10 +347,10 @@ deployed. There is no stored copy that could drift from the lab.
 
 | When | Who | What |
 |---|---|---|
-| before deploy | `core.lifecycle` → `CpsScenario.write_structure(ctx)` | `kg.json` and `tree.json` in the run directory, from `ctx.lab`. The countermeasures include the IT ones when `--it-telemetry` is on |
-| responder start (`--respond rules\|solver`) | `SoarResponder.start` → `Responder` | its own graph from `ctx.lab`, the tree, the countermeasures, an empty `CampaignState`. It writes the two files again with the same content |
-| attack phase with `--attack-driver planner` | `PlannedAttacker.attack` → `drive_attack_planned` | its own graph from `ctx.lab`, and the tree from that graph |
-| dashboard, for a run without `kg.json` | `CpsScenario.structure()` | rebuilt from today's declared topology; the card says "rebuilt" |
+| before deploy | `core.lifecycle` → `CpsScenario.write_structure(ctx)` | `kg.json` and `tree.json` in the run directory, from the inventory (via `soc_tool`, a subprocess). The countermeasures include the IT ones when `--it-telemetry` is on |
+| SOC analytics start | `SocAnalytics` → `soc_analytics.py` on the node | its own graph from the inventory, the tree, the countermeasures, an empty `CampaignState`; it writes `kg.json`/`tree.json` on the node |
+| attack phase with `--attack-driver planner` | `PlannedAttacker.attack` → `drive_attack_planned` | the tree document the run recorded (`tree.json`) |
+| dashboard, for a run without `kg.json` | `CpsScenario.structure()` → `soc_tool` | rebuilt from today's inventory, in a subprocess; the card says "rebuilt" |
 | offline | `python -m cyberrange.scenarios.cps.responder --replay <run>` | rebuilt from the declared topology |
 
 `write_structure` failing does not fail the run: the lifecycle logs a warning
@@ -652,7 +660,7 @@ changing a constant. To see the effect on real data, replay recorded runs with
   ([piano-wp2-wp3.md](piano-wp2-wp3.md)).
 - **The CPS tree lives in the defence plane.**
   - `cps_attack_tree`, `cps_context` and `cps_countermeasures` are in
-    `planes/defense/soar/trees.py`, next to the generic tree model.
+    `nodes/soc/soar_trees.py`, next to the generic tree model.
   - The mapping and the planner also hard-code CPS node ids: `IMPACT_LEAVES`,
     `FORWARD_STEPS`, the playbook, `IMPACT_MODE`.
   - None of these modules imports a scenario, so the layering test passes, but

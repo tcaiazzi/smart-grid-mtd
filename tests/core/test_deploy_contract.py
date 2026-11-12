@@ -41,9 +41,10 @@ from tests.helpers import SNAPSHOT_DIR  # noqa: E402
 
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 
-# Where guest modules are allowed to live. Used to spot a stale twin after a
-# move; update this list when the planes move, not when a single file does.
-PLANE_DIRS = ("cyberrange",)
+# Where guest modules are allowed to live: the planes' agents, and the node
+# tooling under nodes/. Used to spot a stale twin after a move; update this list
+# when one of those trees moves, not when a single file does.
+PLANE_DIRS = ("cyberrange", "nodes")
 
 
 def render(scenario_name):

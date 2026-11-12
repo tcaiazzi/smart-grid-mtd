@@ -1,21 +1,25 @@
-"""Knowledge graph v0 of the CPS lab (cyberrange.planes.defense.soar.kg), built in-process
-from the Lab model — no Docker.
+"""Knowledge graph of the CPS lab (nodes/soc/soar_kg.py), built from the SOC's
+inventory (cyberrange.scenarios.cps.inventory) — the node's code, run on the host.
 
-Run: `.venv/bin/python -m unittest tests.test_soar_kg`.
+Run: `.venv/bin/python -m pytest tests/nodes/test_soar_kg.py`.
 """
 
 import unittest
 
+from tests.helpers import guest_paths
 
-from cyberrange.planes.defense import ot_registers as reg  # noqa: E402
-from cyberrange.planes.defense.soar import kg  # noqa: E402
-from cyberrange.scenarios.cps import kg as cps_kg
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
+
+import ot_registers as reg  # noqa: E402  (flat guest imports, need the path set above)
+import soar_kg as kg  # noqa: E402
+
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 
 
 class CPSKnowledgeGraph(unittest.TestCase):
     def setUp(self):
-        self.g = cps_kg.build()
+        self.g = kg.build_kg(cps_inv.inventory())
 
     def test_hosts_zones_roles(self):
         self.assertEqual(
@@ -103,11 +107,7 @@ class CPSKnowledgeGraph(unittest.TestCase):
 
     def test_rule_removal_cuts_the_path(self):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]
-        services, roles = cps_kg.catalog()
-        lab, _m, _s = cps.build_lab(__import__("types").SimpleNamespace(dashboard_port=0))
-        g = kg.build_kg(
-            lab, rules, services=services, roles=roles, plant_service=("engine", "modbus")
-        )
+        g = kg.build_kg(cps_inv.inventory(rules=rules))
         self.assertFalse(kg.reachable(g, "hmi", "engine", cps.MODBUS_PORT))
 
     def test_json_roundtrip(self):

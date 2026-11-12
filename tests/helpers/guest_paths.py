@@ -25,6 +25,13 @@ DEFENSE_AGENTS = DEFENSE / "agents"
 ATTACK_AGENTS = ATTACK / "agents"
 TRAFFIC_AGENTS = TRAFFIC / "agents"
 
+#: Node tooling: software of the lab's nodes, outside the platform package.
+NODES = REPO_ROOT / "nodes"
+WAZUH_AGENT = NODES / "wazuh" / "agent"
+#: SOC node: the analytics (soc_analytics) and the SOAR modules it imports.
+#: ot_registers rides along in DEFENSE (a flat dual-use module).
+SOC = NODES / "soc"
+
 
 def add(*directories):
     """Put ``directories`` at the front of sys.path, as a container's root is."""

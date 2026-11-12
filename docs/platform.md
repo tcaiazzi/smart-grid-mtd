@@ -18,7 +18,7 @@ metrics.
    │          BackgroundReplay ScmcPublisher                         │
    │ attack   VulnApp ScriptedChain PlannedAttacker                  │
    │          PassiveFingerprinter DeliveryAttack                    │
-   │ defense  OtSensor ItSensor SoarResponder                        │
+   │ defense  OtSensor ItSensor SocAnalytics WazuhManager WazuhAgent │
    │          QkdCertBootstrap MtdCoordinator                        │
    │ monitor  Capture TelemetryMirror PlantMirror                    │
    └───────────────┬─────────────────────────────────────────────────┘
@@ -133,8 +133,8 @@ example, the CPS scenario's `--it-telemetry` starts `ItSensor`, gives
 responder use the IT countermeasures.
 
 The artifacts a run downloads are the union of its components' artifacts. The
-`SoarResponder` reads the telemetry of every started sensor through the same
-`TelemetryCursor` the live mirror uses.
+`TelemetryMirror` reads the telemetry of every started component through a
+`TelemetryCursor` and folds it onto the progress ledger.
 
 ## 3. The three streams of a run
 
@@ -205,7 +205,7 @@ next to the mean [95% CI] one) and `graph` (its structure views):
 
 1. **Image.** Reuse `kathara/mqtt` or `kathara/cps`, or add `docker/<name>/Dockerfile`.
 2. **Guest agents.** Add them under `cyberrange/planes/<plane>/agents/`. They are flat modules with bare imports, and may import only the stdlib and what the node image installs. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
-3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `SoarResponder` takes its response loop and knowledge-graph builder). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
+3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `PlannedAttacker` takes its attack tree). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
 4. **Scenario package.** Create `cyberrange/scenarios/<name>/` with:
    - `topology.py`: a `Topology`;
    - `scenario.py`: the `Scenario` subclass;

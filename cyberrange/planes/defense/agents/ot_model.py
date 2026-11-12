@@ -68,8 +68,21 @@ class WindowFeaturizer:
     closes every window that ended at or before `now` (empty windows included,
     so silence is a signal too) and returns [(window_start, vector)]."""
 
-    def __init__(self, plc_ip, window_s=1.0, setpoint_register=0, mode_register=2, manual_value=1):
+    def __init__(
+        self,
+        plc_ip,
+        window_s=1.0,
+        setpoint_register=0,
+        mode_register=2,
+        manual_value=1,
+        responder_ip=None,
+    ):
         self.plc_ip = plc_ip
+        # The automated response writes from this address. The model is
+        # calibrated on normal traffic, where no response ever happens, so
+        # counting these sessions and writes would flag every countermeasure as
+        # a new anomaly. They still move the tracked process state.
+        self.responder_ip = responder_ip
         self.window_s = float(window_s)
         self.sp_reg = setpoint_register
         self.mode_reg = mode_register
@@ -149,12 +162,16 @@ class WindowFeaturizer:
     # ── observations ────────────────────────────────────────────────────────
     def observe_syn(self, t, src):
         closed = self._advance(t)
+        if src == self.responder_ip:
+            return closed
         self._c["new_sessions"] += 1
         self._c["sources"].add(src)
         return closed
 
     def observe_read(self, t, src, fc):
         closed = self._advance(t)
+        if src == self.responder_ip:
+            return closed
         self._c["sources"].add(src)
         if fc == 0x04:
             self._c["reads_ir"] += 1
@@ -165,6 +182,12 @@ class WindowFeaturizer:
     def observe_write(self, t, src, register, value):
         """`value` in engineering units (None if unknown register)."""
         closed = self._advance(t)
+        if src == self.responder_ip:
+            if register == self.mode_reg:
+                self._set_mode(t, value)
+            elif register == self.sp_reg and value is not None:
+                self.setpoint = value
+            return closed
         c = self._c
         c["writes"] += 1
         c["sources"].add(src)

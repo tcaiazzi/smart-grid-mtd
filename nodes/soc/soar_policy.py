@@ -1,4 +1,8 @@
-"""policy.py — response policies over the campaign state (mapping.snapshot()).
+#!/usr/bin/env python3
+"""soar_policy.py — response policies over the campaign state (soar_mapping's
+snapshot()).
+
+Copied flat onto the SOC node next to soc_analytics.py; stdlib only.
 
 Two policies with the same interface, ``decide(snapshot, t) -> Decision|None``:
 
@@ -21,7 +25,8 @@ import itertools
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
-from cyberrange.planes.defense.soar import mapping, trees
+import soar_mapping as mapping
+import soar_trees as trees
 
 APPROVAL_MODES = ("auto", "deny")  # plus "delay:<seconds>", handled by the responder
 

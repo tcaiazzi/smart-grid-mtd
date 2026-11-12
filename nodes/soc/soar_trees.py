@@ -1,5 +1,9 @@
-"""trees.py — attack tree of the CPS chain and the countermeasures that
+#!/usr/bin/env python3
+"""soar_trees.py — attack tree of the CPS chain and the countermeasures that
 annotate it (an attack-defense tree), instantiated on the knowledge graph.
+
+Copied flat onto the SOC node next to soc_analytics.py; stdlib + networkx
+(through soar_kg).
 
 The attack tree is a template whose steps reference knowledge-graph nodes and
 whose preconditions are checked against the graph (``feasible``): change the
@@ -20,8 +24,8 @@ Commands are shell strings run on ``machine`` (a lab host name).
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional
 
-from cyberrange.planes.defense import ot_registers as reg
-from cyberrange.planes.defense.soar import kg as kgmod
+import ot_registers as reg
+import soar_kg as kgmod
 
 AND, OR, LEAF = "AND", "OR", "LEAF"
 DG_SCALE = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
@@ -46,9 +50,14 @@ class Node:
         for c in self.children:
             yield from c.walk()
 
-    def to_dict(self):
+    def to_dict(self, g=None):
+        """With a graph, every node also says whether it is ``feasible`` on it:
+        a reader of the document (the dashboard, an attacker's planner) cannot
+        evaluate a precondition, which is code."""
         d = {k: v for k, v in asdict(self).items() if k not in ("children", "precondition")}
-        d["children"] = [c.to_dict() for c in self.children]
+        if g is not None:
+            d["feasible"] = feasible(self, g)
+        d["children"] = [c.to_dict(g) for c in self.children]
         return d
 
 
@@ -122,9 +131,10 @@ def ancestors(root, node_id):
     return out
 
 
-def to_json(root, countermeasures):
+def to_json(root, countermeasures, g=None):
     """Attack-defense tree: the attack tree plus, per node, the countermeasures
-    that prevent or restore it (what WP4 consumes for explanations)."""
+    that prevent or restore it (what WP4 consumes for explanations). ``g`` adds
+    each node's feasibility on that graph."""
     defense = {}
     for cm in countermeasures:
         for nid in cm.prevents:
@@ -136,7 +146,7 @@ def to_json(root, countermeasures):
                 cm.id
             )
     return {
-        "attack_tree": root.to_dict(),
+        "attack_tree": root.to_dict(g),
         "defense": defense,
         "countermeasures": [c.to_dict() for c in countermeasures],
     }
@@ -162,6 +172,8 @@ def cps_context(g):
     http = kgmod.services_of(g, hmi)[0]
     hmi_ip = kgmod.addresses(g, hmi)[0][0]
     fw_on_hmi_zone = [a for a, z in kgmod.addresses(g, fw) if z == kgmod.addresses(g, hmi)[0][1]][0]
+    plant_zone = kgmod.addresses(g, engine)[0][1]
+    fw_on_plant_zone = [a for a, z in kgmod.addresses(g, fw) if z == plant_zone][0]
     it_hosts = [g.nodes[h]["name"] for h in kgmod.hosts(g) if g.nodes[h]["role"] == "it-host"]
     attacker = it_hosts[0] if it_hosts else None
     attacker_ip = kgmod.addresses(g, attacker)[0][0] if attacker else None
@@ -172,6 +184,7 @@ def cps_context(g):
         "hmi_ip": hmi_ip,
         "engine_ip": kgmod.addresses(g, engine)[0][0],
         "gateway_hmi": fw_on_hmi_zone,
+        "responder_ip": fw_on_plant_zone,
         "modbus_port": modbus["port"],
         "modbus_svc": f"svc:{engine}/modbus",
         "hmi_svc": http,
@@ -350,13 +363,16 @@ def cps_countermeasures(g, it=False):
         Countermeasure(
             "force_auto",
             "Return control authority to the PLC and restore the nominal "
-            "DG setpoint (local override)",
+            "DG setpoint (written by the boundary device)",
             "Restore Configuration",
-            c["engine"],
+            c["firewall"],
+            # From the boundary device, which already stands on the OT link: the
+            # plant needs no agent and no new path is opened towards it. The
+            # sensor knows this writer as the responder role.
             # Mode first, then the setpoint, over one connection: without the
             # setpoint the PLC walks down from the hijacked value 2 kW per cycle.
             apply=[
-                f"python3 ot_write.py 127.0.0.1 {port} "
+                f"python3 ot_write.py {c['engine_ip']} {port} "
                 f"{reg.HR_CTRL_MODE}={reg.CTRL_AUTO} "
                 f"{reg.HR_DG_SETPOINT}={reg.encode(reg.DG_NOMINAL_KW, DG_SCALE)}"
             ],
@@ -369,10 +385,10 @@ def cps_countermeasures(g, it=False):
         ),
         Countermeasure(
             "restore_breaker",
-            "Re-close the feeder breaker (local override)",
+            "Re-close the feeder breaker (written by the boundary device)",
             "Restore Configuration",
-            c["engine"],
-            apply=[f"python3 ot_write.py 127.0.0.1 {port} {reg.HR_SWITCH_CMD}=0"],
+            c["firewall"],
+            apply=[f"python3 ot_write.py {c['engine_ip']} {port} {reg.HR_SWITCH_CMD}=0"],
             revert=[],
             restores=["breaker_open"],
             time_to_effect_s=1.0,

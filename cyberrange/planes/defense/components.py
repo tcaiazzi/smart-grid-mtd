@@ -7,17 +7,22 @@ Detection and response, proactive and reactive:
     ItSensor           host sensor on the HMI (web log, processes, connections)
     SoarResponder      host-side response loop: findings -> attack tree -> policy
                        -> countermeasures in the lab
+    WazuhManager       the SOC's manager on the management network
+    WazuhAgent         a host reporting to it and running its active responses
+    WazuhEnforcer      applies a countermeasure through the manager, not by exec
 
 Every guest sensor writes telemetry.jsonl-shaped events (mtd_telemetry.py) and
 declares it as a TelemetrySource; ``mirror`` maps its events onto the
 progress ledger.
 """
 
+import base64
+import json
 import logging
 import os
 import time
 
-from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetrySource, tail_reader
+from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetrySource
 from cyberrange.core.context import seed_arg
 
 log = logging.getLogger("cyberrange.planes.defense.components")
@@ -63,14 +68,18 @@ class OtSensor(GuestAgent):
         detectors,
         learn_seconds,
         dashboard_port=None,
+        responder_ip=None,
     ):
+        """``responder_ip``: the address the automated response writes to the
+        plant from; without it the sensor reports those writes as an attack."""
         dash = f" --dashboard-port {dashboard_port}" if dashboard_port else ""
+        resp = f" --responder-ip {responder_ip}" if responder_ip else ""
         super().__init__(
             node,
             f"python3 ot_sensor.py --iface {iface} --engine-ip {engine_ip} "
             f"--engine-port {engine_port} --plc-ip {plc_ip} --hmi-ip {hmi_ip} "
             f"--detectors {detectors} --learn-seconds {learn_seconds} "
-            f"--telemetry-file telemetry.jsonl{dash}",
+            f"--telemetry-file telemetry.jsonl{resp}{dash}",
             "sensor.log",
             plane=PLANE,
             name="ot_sensor",
@@ -89,6 +98,13 @@ class OtSensor(GuestAgent):
         if kind in ("model_fitted", "model_error"):
             return kind, dict(
                 threshold=ev.get("threshold"), error=ev.get("error"), guest_t=ev.get("t")
+            )
+        if kind == "ot_response_write":
+            return "response_write", dict(
+                src=ev.get("src"),
+                register=ev.get("register"),
+                value=ev.get("value"),
+                guest_t=ev.get("t"),
             )
         return None
 
@@ -123,44 +139,109 @@ class ItSensor(GuestAgent):
         return None
 
 
-class SoarResponder(Component):
-    """The scenario's response loop (``responder=``) as a host thread reading
-    every started sensor's telemetry. The knowledge graph is built from the
-    deployed lab, so the policy reasons on what really runs."""
+# ── management network (Wazuh) ───────────────────────────────────────────────
+# The tooling itself is node software (nodes/wazuh/, staged by the scenario's
+# manifests): these components only launch it and name what it leaves behind.
+class WazuhManager(GuestAgent):
+    """The Wazuh manager on the SOC node. ``agents`` is {name: (id, key)}: each
+    agent is registered with the key its WazuhAgent is started with."""
 
-    plane, name = PLANE, "soar_responder"
+    ALERTS = "/var/ossec/logs/alerts/alerts.json"
+    LOG = "/var/ossec/logs/ossec.log"
 
-    def __init__(self, policy, approval="auto", interval=0.5, it=False, responder=None, kg=None):
-        self.policy, self.approval, self.interval, self.it = policy, approval, interval, it
-        # Both come from the scenario: the response loop it runs, and the
-        # builder for the knowledge graph the policy reasons on (lab -> graph).
-        self.responder_cls, self.kg = responder, kg
-        self.responder = None
-
-    def start(self, ctx):
-        sources = [
-            tail_reader(ctx.exec_text, s.node, s.path)
-            for s in ctx.telemetry_sources()
-            if s.name in ("ot", "it")
-        ]
-        self.responder = self.responder_cls(
-            ctx.manager,
-            ctx.machines,
-            self.policy,
-            ctx.out_dir,
-            emit=ctx.emit,
-            interval=self.interval,
-            approval=self.approval,
-            it=self.it,
-            sources=sources,
-            g=self.kg(ctx.lab),
+    def __init__(self, node, agents):
+        registered = " ".join(f"{i}:{name}:{key}" for name, (i, key) in sorted(agents.items()))
+        super().__init__(
+            node,
+            f"bash /wazuh-manager-setup.sh {registered}",
+            "wazuh_manager.log",
+            plane=PLANE,
+            name="wazuh_manager",
+            artifacts=[
+                Artifact(node, self.ALERTS, f"{node}.alerts.json"),
+                Artifact(node, self.LOG, f"{node}.ossec.log"),
+            ],
         )
-        self.responder.start()
-        log.info("Responder up: policy=%s approval=%s it=%s", self.policy, self.approval, self.it)
 
-    def stop(self, ctx):
-        if self.responder is not None:
-            self.responder.stop()
+
+class WazuhAgent(GuestAgent):
+    """A host of the management network: ships ``logs`` (guest JSONL files) to
+    the manager and runs the countermeasures in ``responses``
+    ({id: {"apply": [cmd], "revert": [cmd]}}) when the manager asks for one."""
+
+    RECORD = "/var/ossec/logs/cps-response.jsonl"
+    LOG = "/var/ossec/logs/ossec.log"
+
+    def __init__(self, node, manager_ip, agent_id, key, responses=None, logs=()):
+        allowlist = base64.b64encode(json.dumps(responses or {}).encode()).decode()
+        super().__init__(
+            node,
+            f"bash /wazuh-agent-setup.sh {manager_ip} {agent_id} {node} {key} {allowlist} "
+            + " ".join(logs),
+            "wazuh_agent.log",
+            plane=PLANE,
+            name=f"wazuh_agent:{node}",
+            artifacts=[
+                Artifact(node, self.RECORD, f"{node}.cps-response.jsonl"),
+                Artifact(node, self.LOG, f"{node}.ossec.log"),
+            ],
+        )
+
+
+class SocAnalytics(GuestAgent):
+    """The SOC's analytics on the manager's node (soc_analytics.py): it reads
+    the manager's alerts, keeps the attack tree's belief and asks the manager
+    for the responses. The decision runs here, in the lab, not on the host.
+
+    ``policy`` is off | rules | solver; with ``off`` it watches and requests
+    nothing. ``inventory`` is the lab as the SOC is told it (cps.inventory):
+    the one thing a node cannot discover, passed base64 on the command line."""
+
+    RESPONSE = "/response.jsonl"
+    KG, TREE = "/kg.json", "/tree.json"
+
+    def __init__(self, node, inventory, policy="off", approval="auto", interval=0.5, it=False):
+        inv = base64.b64encode(json.dumps(inventory).encode()).decode()
+        super().__init__(
+            node,
+            f"python3 soc_analytics.py --inventory-b64 {inv} --policy {policy} "
+            f"--approval {approval} --interval {interval}" + (" --it" if it else ""),
+            "soc_analytics.log",
+            plane=PLANE,
+            name="soc_analytics",
+            artifacts=[
+                Artifact(node, self.RESPONSE, "response.jsonl"),
+                Artifact(node, self.KG, f"{node}.kg.json"),
+                Artifact(node, self.TREE, f"{node}.tree.json"),
+            ],
+        )
+
+    def telemetry(self):
+        return [TelemetrySource(self.node, self.RESPONSE, "soar")]
+
+    def mirror(self, ev):
+        kind = ev.get("kind")
+        if kind == "tree_state":
+            nodes = ev.get("nodes") or {}
+            return "tree_state", {
+                "nodes": {n: [v.get("state"), v.get("score")] for n, v in nodes.items()},
+                "active": ev.get("active_impacts"),
+                "hosts": ev.get("hosts_implicated"),
+                "next": ev.get("next"),
+                "guest_t": ev.get("belief_t"),
+            }
+        if kind == "decision":
+            return "decision", {
+                k: ev.get(k) for k in ("policy", "actions", "rationale", "covers", "needs_approval")
+            } | {"guest_t": ev.get("decided_t")}
+        if kind == "action":
+            return "action", dict(
+                id=ev.get("id"),
+                ok=ev.get("ok"),
+                machine=ev.get("machine"),
+                guest_t=ev.get("done_t"),
+            )
+        return None
 
 
 # ── MQTT smart grid ───────────────────────────────────────────────────────────

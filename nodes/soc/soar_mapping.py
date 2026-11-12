@@ -1,4 +1,8 @@
-"""mapping.py — sensor findings -> attack-tree nodes -> campaign state.
+#!/usr/bin/env python3
+"""soar_mapping.py — sensor findings -> attack-tree nodes -> campaign state.
+
+Copied flat onto the SOC node next to soc_analytics.py; stdlib + networkx
+(through soar_kg).
 
 The DPI sensor sees only Modbus on the OT link, so it observes the *end* of the
 chain (the plant manipulation) and never the IT steps. The mapping therefore:
@@ -21,9 +25,9 @@ chain (the plant manipulation) and never the IT steps. The mapping therefore:
 WP2 -> WP3 interface): per node a score in [0, 1] and a state.
 """
 
-from cyberrange.planes.defense import ot_registers as reg
-from cyberrange.planes.defense.soar import kg as kgmod
-from cyberrange.planes.defense.soar import trees
+import ot_registers as reg
+import soar_kg as kgmod
+import soar_trees as trees
 
 CONFIRMED, SUSPECTED, INFERRED, UNKNOWN = "confirmed", "suspected", "inferred", "unknown"
 CONFIRM_AT = 0.75

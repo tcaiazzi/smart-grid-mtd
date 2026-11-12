@@ -17,8 +17,7 @@
   "guest_files": [
    "/modbus_engine.py",
    "/grid_sim.py",
-   "/ot_registers.py",
-   "/ot_write.py"
+   "/ot_registers.py"
   ],
   "settings": {
    "0": "OT",
@@ -30,6 +29,13 @@
   ]
  },
  "firewall": {
+  "guest_files": [
+   "/ot_write.py",
+   "/ot_registers.py",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py"
+  ],
   "settings": {
    "0": "IT",
    "1": "OT",
@@ -53,7 +59,10 @@
    "/ot_write.py",
    "/ot_registers.py",
    "/it_sensor.py",
-   "/mtd_telemetry.py"
+   "/mtd_telemetry.py",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py"
   ],
   "settings": {
    "0": "IT",
@@ -87,7 +96,10 @@
    "/ot_registers.py",
    "/mtd_telemetry.py",
    "/mtd_dashboard.py",
-   "/mtd_dashboard.html"
+   "/mtd_dashboard.html",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py"
   ],
   "settings": {
    "0": "OT",
@@ -102,9 +114,19 @@
   ]
  },
  "soc": {
+  "guest_files": [
+   "/wazuh-manager-setup.sh",
+   "/cps_rules.xml",
+   "/soc_analytics.py",
+   "/soar_kg.py",
+   "/soar_trees.py",
+   "/soar_mapping.py",
+   "/soar_policy.py",
+   "/ot_registers.py"
+  ],
   "settings": {
    "0": "MGMT",
-   "image": "kathara/cps"
+   "image": "kathara/soc"
   },
   "startup": [
    "ip address add 10.30.0.20/24 dev eth0"

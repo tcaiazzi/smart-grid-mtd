@@ -19,6 +19,11 @@ below never sees them and neither needs an exemption:
   exist is its whole job;
 * `core/loc.py` imports each scenario package the same way, to measure it.
 
+Beside the platform stands ``nodes/``: software of the lab's nodes that is not
+the platform's (third-party tool configuration, set-up scripts, the glue around
+them). The platform stages it through a manifest and launches it; neither side
+imports the other, so what a node does can change without the platform knowing.
+
 Run: `.venv/bin/python -m pytest tests/test_layering.py`
 """
 
@@ -29,6 +34,8 @@ from tests.helpers import REPO_ROOT  # noqa: E402
 
 CORE = REPO_ROOT / "cyberrange" / "core"
 PLANES = REPO_ROOT / "cyberrange" / "planes"
+PLATFORM = REPO_ROOT / "cyberrange"
+NODES = REPO_ROOT / "nodes"
 
 # Violations still to be paid off. Empty is the goal; an entry is a promise,
 # not a permission. Format: "<relative path>: <imported module>".
@@ -110,6 +117,32 @@ class LayeringHolds(unittest.TestCase):
             + "\n  ".join(bad)
             + "\nTake the scenario-specific part as a constructor argument instead.",
         )
+
+    def test_the_platform_does_not_import_node_software(self):
+        bad = offences(PLATFORM, ["nodes"])
+        self.assertEqual(
+            [],
+            bad,
+            "the platform imports node software, so the node can no longer change on "
+            "its own:\n  " + "\n  ".join(bad) + "\nStage it through a manifest and launch it.",
+        )
+
+    def test_node_software_does_not_import_the_platform(self):
+        self.assertTrue(
+            list(NODES.rglob("*.py")), "no Python under nodes/: the check below asserts nothing"
+        )
+        bad = offences(NODES, ["cyberrange"])
+        self.assertEqual(
+            [],
+            bad,
+            "node software imports the platform, which does not exist on a node:\n  "
+            + "\n  ".join(bad),
+        )
+
+    def test_nodes_is_not_a_package(self):
+        """An ``__init__.py`` would make ``import nodes.…`` work from the repo
+        root, on the host only: the first step towards platform code reaching in."""
+        self.assertEqual([], [str(p.relative_to(REPO_ROOT)) for p in NODES.rglob("__init__.py")])
 
     def test_allowlist_is_empty(self):
         """The allowlist exists so a violation can be recorded rather than lost.

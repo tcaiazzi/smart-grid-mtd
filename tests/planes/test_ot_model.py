@@ -27,15 +27,17 @@ import ot_registers as reg  # noqa: E402
 from ot_model import FEATURES, RobustAnomalyModel, WindowFeaturizer  # noqa: E402
 
 PLC, HMI = "10.20.0.10", "10.10.0.20"
+RESPONDER = "10.20.0.1"
 
 
 class Plant:
     """Drives a featurizer with what the sensor would decode off the wire."""
 
-    def __init__(self, seed=1):
+    def __init__(self, seed=1, responder_ip=None):
         self.rng = random.Random(seed)
         self.fz = WindowFeaturizer(
             PLC,
+            responder_ip=responder_ip,
             setpoint_register=reg.HR_DG_SETPOINT,
             mode_register=reg.HR_CTRL_MODE,
             manual_value=reg.CTRL_MANUAL,
@@ -99,6 +101,14 @@ class Plant:
         self._release = None
         self._next_op = 1e9  # a careful operator does not fight a foreign MANUAL
 
+    def restore(self, t, src=RESPONDER):
+        """The response: a new session writing AUTO and the nominal setpoint."""
+        fz, take = self.fz, self._take
+        take(t, fz.observe_syn(t + 0.80, src))
+        take(t, fz.observe_write(t + 0.81, src, reg.HR_CTRL_MODE, 0.0))
+        take(t, fz.observe_write(t + 0.82, src, reg.HR_DG_SETPOINT, 20.0))
+        self.mode, self.setpoint, self.v_extra = reg.CTRL_AUTO, 20.0, 0.0
+
     def run(self, t0, t1, **kw):
         for t in range(t0, t1):
             self.second(float(t), **kw)
@@ -152,6 +162,38 @@ class Model(unittest.TestCase):
         late = [v for ws, v in self.p.windows if ws >= 65.0]
         self.assertTrue(late)
         self.assertTrue(all(self.model.is_anomalous(v)[0] for v in late))
+
+
+class ResponderRole(unittest.TestCase):
+    """The model is calibrated where no response ever happens: the responder's
+    session and writes must not read as a new anomaly, while the same traffic
+    from an address with no role must."""
+
+    def _after_restore(self, responder_ip):
+        p = Plant(seed=1, responder_ip=responder_ip)
+        p.run(0, 45)
+        model = RobustAnomalyModel()
+        for _ws, vec in p.windows:
+            model.add_calibration(vec)
+        model.fit()
+        p.run(45, 50, operator=False)
+        p.hijack(50.0)  # MANUAL + 60 kW; the voltage has not moved yet
+        p.run(50, 52, operator=False)
+        p.windows.clear()
+        p.restore(52.0)
+        p.run(52, 60, operator=False)
+        return [ws for ws, v in p.windows if model.is_anomalous(v)[0]], p
+
+    def test_restore_from_the_responder_is_quiet(self):
+        flagged, p = self._after_restore(RESPONDER)
+        self.assertEqual(flagged, [], "the response itself reads as an anomaly")
+        # The writes still moved the tracked state.
+        self.assertEqual(p.fz.setpoint, 20.0)
+        self.assertIsNone(p.fz.manual_since)
+
+    def test_same_traffic_without_the_role_is_flagged(self):
+        flagged, _p = self._after_restore(None)
+        self.assertIn(52.0, flagged)
 
 
 if __name__ == "__main__":

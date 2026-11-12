@@ -35,7 +35,7 @@ to.
 ## Before the first run
 
 - `.venv/bin/python` — the repo is never installed, so always the venv binary.
-- Images: `make cps-image` builds `kathara/cps`; `kathara/mqtt` is the MQTT one.
+- Images: `make cps-image` builds `kathara/cps` and `kathara/soc` (the SOC's Wazuh manager); `kathara/mqtt` is the MQTT one.
 - The MQTT scenario needs a background trace (`assets/pcap/…`, `make split`).
 - A deploy **replaces** any lab with the same name: two runs of the same
   scenario cannot overlap on one machine.

@@ -10,46 +10,46 @@ the seed, so an episode can be replayed.
 import random
 
 from cyberrange.planes.attack.planner import steps as S
-from cyberrange.planes.defense.soar import trees
+from cyberrange.planes.attack.planner import tree_doc
 
 PROFILES = ("opportunistic", "targeted", "stealthy")
 
 
 class AttackPlanner:
-    def __init__(self, tree, kg, profile="opportunistic", goal=None, seed=None, max_steps=12):
+    def __init__(self, tree, profile="opportunistic", goal=None, seed=None, max_steps=12):
+        """``tree`` is the attack tree as a document (see tree_doc): the attacker
+        plans on what it knows of the target, not on the defender's live graph."""
         if profile not in PROFILES:
             raise ValueError(f"unknown profile {profile!r}")
         if profile == "targeted" and goal not in S.IMPACT_MODE:
             raise ValueError(f"targeted profile needs a goal in {sorted(S.IMPACT_MODE)}")
-        self.tree, self.kg = tree, kg
-        self.idx = trees.index(tree)
+        self.tree = tree
+        self.idx = tree_doc.index(tree)
         self.profile, self.goal = profile, goal
         self.rng = random.Random(seed)
         self.max_steps = max_steps
 
     # ── planning ───────────────────────────────────────────────────────────────
     def impact_candidates(self):
-        """Feasible impact leaves on the current graph, ordered by profile."""
-        leaves = [
-            n for n in S.IMPACT_MODE if n in self.idx and trees.feasible(self.idx[n], self.kg)
-        ]
+        """Feasible impact leaves of the tree, ordered by profile."""
+        leaves = [n for n in S.IMPACT_MODE if n in self.idx and tree_doc.feasible(self.idx[n])]
         if self.profile == "targeted":
             return [self.goal] if self.goal in leaves else []
         if self.profile == "stealthy":
 
             def key(n):
-                return (S.DETECTABILITY.get(n, 0.5), -self.idx[n].impact)
+                return (S.DETECTABILITY.get(n, 0.5), -self.idx[n]["impact"])
         else:  # opportunistic: the biggest impact first
 
             def key(n):
-                return (-self.idx[n].impact, S.DETECTABILITY.get(n, 0.5))
+                return (-self.idx[n]["impact"], S.DETECTABILITY.get(n, 0.5))
 
         return sorted(leaves, key=key)
 
     def sequence_for(self, leaf):
         """Ordered executable steps to reach ``leaf``: its prerequisite steps
         (in stage order) then the leaf itself."""
-        pre = set(trees.prerequisites(self.tree, leaf))
+        pre = set(tree_doc.prerequisites(self.tree, leaf))
         ordered = [n for n in S.PREREQ_ORDER if n in pre and S.is_step(n)]
         return ordered + [leaf]
 
@@ -90,7 +90,7 @@ class AttackPlanner:
                 entry = {
                     "node": node,
                     "stage": S.stage_of(node),
-                    "attck": self.idx[node].attck,
+                    "attck": self.idx[node].get("attck"),
                     "ok": ok,
                     "chosen_among": [leaf],
                     "target": leaf,

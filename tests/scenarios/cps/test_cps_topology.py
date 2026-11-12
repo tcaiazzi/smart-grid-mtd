@@ -28,7 +28,18 @@ class Topology(unittest.TestCase):
             ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"],
         )
         for name, mach in self.lab.machines.items():
-            self.assertEqual(mach.get_image(), cps.IMAGE, name)
+            # The manager is too heavy for every node: only the SOC carries it.
+            self.assertEqual(mach.get_image(), cps.SOC_IMAGE if name == "soc" else cps.IMAGE, name)
+
+    def test_agents_only_on_management_hosts(self):
+        for name in cps.WAZUH_AGENTS:
+            self.assertIn(
+                cps.MGMT,
+                _links(self.m[name]).values(),
+                f"{name} runs an agent but cannot reach the manager",
+            )
+        # Nothing on the plant: it is watched from the wire, acted on from the boundary.
+        self.assertFalse({"engine", "plc"} & set(cps.WAZUH_AGENTS))
 
     def test_zones(self):
         self.assertEqual(_links(self.m["attacker"]), {0: cps.IT})

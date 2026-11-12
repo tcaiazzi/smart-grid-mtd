@@ -27,6 +27,7 @@ ATTACKER_IP = "10.10.0.20"  # app server / pivot host (pre-v2 tests: an unknown 
 HMI_IP = "10.10.0.20"  # v2: the same host is the HMI, a known role
 ENGINE_IP = "10.20.0.20"
 OTHER_IP = "10.10.0.10"  # the attacker box itself (no role)
+RESPONDER_IP = "10.20.0.1"  # the boundary firewall on the OT link
 
 
 def modbus_write_single(address, value, unit=reg.UNIT_ID, txn=1):
@@ -314,6 +315,76 @@ class WireProcess(unittest.TestCase):
             and a["klass"] == "manual_mode_excursion"
         ]
         self.assertEqual(len(cleared), 1)
+
+    def _hijack_then_respond(self, responder_ip):
+        """A hijack that pushes the voltage out of band, then the restore
+        (AUTO + nominal setpoint + breaker) written from the firewall."""
+        self.sensor = s.OTSensor(
+            "eth0",
+            ENGINE_IP,
+            reg.MODBUS_PORT,
+            PLC_IP,
+            self.tel,
+            hmi_ip=HMI_IP,
+            detectors=("rules",),
+            responder_ip=responder_ip,
+        )
+        t = 1.0
+        for _ in range(3):
+            self.poll(t, PLC_IP, 0.99, 1.01, 0, 20.0)
+            t += 1
+        self.write(t, HMI_IP, reg.HR_CTRL_MODE, 1, sport=40200)
+        self.write(t + 0.01, HMI_IP, reg.HR_DG_SETPOINT, reg.encode(60.0, 10.0), sport=40200)
+        for _ in range(3):
+            t += 1
+            self.poll(t, PLC_IP, 1.013, 1.068, 1, 60.0)
+        before = len(self.findings())
+        t += 0.2
+        self.write(t, RESPONDER_IP, reg.HR_CTRL_MODE, 0, sport=40300)
+        self.write(t + 0.01, RESPONDER_IP, reg.HR_DG_SETPOINT, reg.encode(20.0, 10.0), sport=40300)
+        self.write(t + 0.02, RESPONDER_IP, reg.HR_SWITCH_CMD, 0, sport=40300)
+        # Still out of band for one more poll: the physics has not stepped yet.
+        self.poll(t + 0.5, PLC_IP, 1.013, 1.068, 0, 20.0)
+        return [f for f in self.findings()[before:] if f["entities"].get("src") == RESPONDER_IP]
+
+    def test_responder_restore_is_not_a_finding(self):
+        self.assertEqual(self._hijack_then_respond(RESPONDER_IP), [])
+        writes = [e for e in self.tel.events() if e["kind"] == "ot_response_write"]
+        self.assertEqual(
+            [(w["src"], w["register"]) for w in writes],
+            [
+                (RESPONDER_IP, reg.HR_CTRL_MODE),
+                (RESPONDER_IP, reg.HR_DG_SETPOINT),
+                (RESPONDER_IP, reg.HR_SWITCH_CMD),
+            ],
+        )
+        # The restore is tracked as state: authority is back with the PLC.
+        self.assertEqual(self.sensor.rules.ctrl_mode, reg.CTRL_AUTO)
+
+    def test_same_writes_without_the_role_are_reported(self):
+        # Without --responder-ip the firewall is nobody: the very same frames
+        # are an unknown client writing to actuators.
+        klasses = {f["klass"] for f in self._hijack_then_respond(None)}
+        self.assertIn("unauthorized_write_to_actuator", klasses)
+        self.assertEqual([e for e in self.tel.events() if e["kind"] == "ot_response_write"], [])
+
+    def test_responder_out_of_range_write_is_still_reported(self):
+        self.sensor = s.OTSensor(
+            "eth0",
+            ENGINE_IP,
+            reg.MODBUS_PORT,
+            PLC_IP,
+            self.tel,
+            hmi_ip=HMI_IP,
+            detectors=("rules",),
+            responder_ip=RESPONDER_IP,
+        )
+        self.write(1.0, RESPONDER_IP, reg.HR_DG_SETPOINT, reg.encode(200.0, 10.0))
+        self.assertEqual(
+            [f["klass"] for f in self.findings()],
+            ["out_of_range_command"],
+            "the role allows the register, not any value on it",
+        )
 
     def test_unsafe_blame_skips_rewrites_and_acquitted_writes(self):
         # Live-run regression: the PLC's identical re-writes and the operator's

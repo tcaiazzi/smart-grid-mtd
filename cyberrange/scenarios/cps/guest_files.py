@@ -9,17 +9,46 @@ These nodes ride on the kathara/cps image (docker/cps/Dockerfile), separate
 from the MQTT lab. ot_registers.py is the shared "plant contract" copied onto
 every node that speaks or inspects Modbus; the DPI sensor stays
 stdlib/numpy-only.
+
+What comes from ``nodes/`` is the tooling of the management network (Wazuh
+configuration, set-up scripts, the active response): software of the nodes, not
+of the platform, which only stages it.
 """
+
+# Hosts on the management network that report to the SOC and run its responses.
+WAZUH_AGENT_FILES = [
+    ("nodes/wazuh/agent/wazuh-agent-setup.sh", "/wazuh-agent-setup.sh"),
+    ("nodes/wazuh/agent/wazuh-agent.conf", "/wazuh-agent.conf"),
+    ("nodes/wazuh/agent/cps_response.py", "/cps_response.py"),
+]
+
+# SOC node (kathara/soc image): the Wazuh manager with its rules for this lab,
+# and the analytics that read its alerts and ask it for the responses.
+SOC_FILES = [
+    ("nodes/wazuh/manager/wazuh-manager-setup.sh", "/wazuh-manager-setup.sh"),
+    ("nodes/wazuh/manager/cps_rules.xml", "/cps_rules.xml"),
+    ("nodes/soc/soc_analytics.py", "/soc_analytics.py"),
+    ("nodes/soc/soar_kg.py", "/soar_kg.py"),
+    ("nodes/soc/soar_trees.py", "/soar_trees.py"),
+    ("nodes/soc/soar_mapping.py", "/soar_mapping.py"),
+    ("nodes/soc/soar_policy.py", "/soar_policy.py"),
+    ("cyberrange/planes/defense/ot_registers.py", "/ot_registers.py"),
+]
 
 # Physical engine node: pandapower twin behind a Modbus/TCP server.
 ENGINE_FILES = [
     ("cyberrange/planes/traffic/agents/modbus_engine.py", "/modbus_engine.py"),
     ("cyberrange/planes/traffic/agents/grid_sim.py", "/grid_sim.py"),
     ("cyberrange/planes/defense/ot_registers.py", "/ot_registers.py"),
-    # Stdlib Modbus writer, reused defensively: the SOAR prototype's local
-    # override (back to AUTO, re-close the breaker) writes on 127.0.0.1 here.
-    ("cyberrange/planes/attack/agents/ot_write.py", "/ot_write.py"),
 ]
+
+# Boundary firewall: the stdlib Modbus writer, reused defensively. The response
+# returns the plant to a safe state (back to AUTO, re-close the breaker) from
+# here, over the OT link the firewall already stands on.
+FW_FILES = [
+    ("cyberrange/planes/attack/agents/ot_write.py", "/ot_write.py"),
+    ("cyberrange/planes/defense/ot_registers.py", "/ot_registers.py"),
+] + WAZUH_AGENT_FILES
 
 # PLC node: Modbus master / controller (the legitimate industrial traffic).
 PLC_FILES = [
@@ -35,7 +64,7 @@ SENSOR_FILES = [
     ("cyberrange/planes/defense/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
     ("cyberrange/planes/defense/agents/mtd_dashboard.py", "/mtd_dashboard.py"),
     ("cyberrange/planes/defense/agents/mtd_dashboard.html", "/mtd_dashboard.html"),
-]
+] + WAZUH_AGENT_FILES
 
 # IT HMI / SCADA host: the ONE IT client the boundary firewall lets reach the
 # engine (legitimate polling + operator dispatches), which also runs the
@@ -50,7 +79,7 @@ HMI_FILES = [
     # steps are observed, not just inferred. Stdlib + the shared telemetry bus.
     ("cyberrange/planes/defense/agents/it_sensor.py", "/it_sensor.py"),
     ("cyberrange/planes/defense/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
-]
+] + WAZUH_AGENT_FILES
 
 # Attacker node: drives the exploit over HTTP against the HMI host.
 ATTACKER_CPS_FILES = [

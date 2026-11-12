@@ -75,7 +75,9 @@ SENSITIVE_ACTUATORS = {HR_DG_SETPOINT, HR_SWITCH_CMD, HR_CTRL_MODE}
 # role -> allowed read function codes / writable holding registers. The PLC
 # regulates the DG setpoint; the HMI operator may take manual control and
 # dispatch a setpoint. Nobody operates the feeder breaker remotely (it is a
-# local/protection device), so any remote breaker write violates policy.
+# local/protection device), so any remote breaker write violates policy —
+# except from the responder: the boundary device, when the automated response
+# returns the plant to a safe state (control authority, setpoint, breaker).
 ROLE_POLICY = {
     "plc": {
         "reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
@@ -84,6 +86,10 @@ ROLE_POLICY = {
     "hmi": {
         "reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
         "writes": {HR_CTRL_MODE, HR_DG_SETPOINT},
+    },
+    "responder": {
+        "reads": {FC_READ_HOLDING_REGISTERS, FC_READ_INPUT_REGISTERS},
+        "writes": {HR_CTRL_MODE, HR_DG_SETPOINT, HR_SWITCH_CMD},
     },
 }
 

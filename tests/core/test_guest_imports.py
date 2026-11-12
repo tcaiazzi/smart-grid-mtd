@@ -35,9 +35,11 @@ from tests.helpers import REPO_ROOT  # noqa: E402
 from cyberrange.scenarios.cps.guest_files import (  # noqa: E402
     ATTACKER_CPS_FILES,
     ENGINE_FILES,
+    FW_FILES,
     HMI_FILES,
     PLC_FILES,
     SENSOR_FILES,
+    SOC_FILES,
 )
 from cyberrange.scenarios.mqtt_mtd.guest_files import (  # noqa: E402
     ROUTER_FILES,
@@ -55,8 +57,10 @@ MACHINES = {
     "router": ROUTER_FILES,
     # Cyber-physical (OT/Modbus) scenario nodes.
     "engine": ENGINE_FILES,
+    "firewall": FW_FILES,
     "plc": PLC_FILES,
     "sensor": SENSOR_FILES,
+    "soc": SOC_FILES,
     "hmi": HMI_FILES,
     "attacker_cps": ATTACKER_CPS_FILES,
 }
@@ -64,13 +68,16 @@ MACHINES = {
 
 # The image each machine runs, as the Dockerfile that builds it.
 MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
+SOC_IMAGE = "docker/soc/Dockerfile"
 IMAGE_OF = {
     "semp": MQTT_IMAGE,
     "scmc": MQTT_IMAGE,
     "router": MQTT_IMAGE,
     "engine": CPS_IMAGE,
+    "firewall": CPS_IMAGE,
     "plc": CPS_IMAGE,
     "sensor": CPS_IMAGE,
+    "soc": SOC_IMAGE,
     "hmi": CPS_IMAGE,
     "attacker_cps": CPS_IMAGE,
 }
@@ -304,6 +311,40 @@ class ImagesPinWhatTheHostTests(unittest.TestCase):
                             f"{dist} differs between requirements.txt and {dockerfile}: "
                             "the tests pass on one version and the lab runs another",
                         )
+
+
+class NodeToolsArePinned(unittest.TestCase):
+    """The checks above read `pip3 install` only. The Wazuh packages come from
+    apt, where an unpinned name means "whatever the repository serves the day
+    the image is rebuilt" — and an agent newer than its manager is refused."""
+
+    PACKAGE = re.compile(r"\b(wazuh-(?:agent|manager))(?:=([\w.+~-]+))?(?=\s|$)")
+
+    def installs(self):
+        found = []
+        for dockerfile in sorted((REPO_ROOT / "docker").glob("*/Dockerfile")):
+            for line in dockerfile.read_text().splitlines():
+                if line.lstrip().startswith("#") or "install" not in line:
+                    continue
+                for name, version in self.PACKAGE.findall(line):
+                    found.append((str(dockerfile.relative_to(REPO_ROOT)), name, version))
+        return found
+
+    def test_every_wazuh_package_is_pinned_to_one_version(self):
+        found = self.installs()
+        self.assertEqual(
+            {name for _f, name, _v in found},
+            {"wazuh-agent", "wazuh-manager"},
+            "the parser no longer finds the Wazuh installs: the pin check asserts nothing",
+        )
+        for dockerfile, name, version in found:
+            with self.subTest(dockerfile=dockerfile, package=name):
+                self.assertTrue(version, f"{name} is unpinned in {dockerfile}")
+        self.assertEqual(
+            len({v for _f, _n, v in found}),
+            1,
+            f"agent and manager versions differ, the manager refuses a newer agent: {found}",
+        )
 
 
 if __name__ == "__main__":

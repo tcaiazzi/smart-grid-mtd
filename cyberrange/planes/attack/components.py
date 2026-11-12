@@ -107,8 +107,8 @@ class ScriptedChain(_ExploitDriver):
 
 
 class PlannedAttacker(_ExploitDriver):
-    """A reactive attacker choosing each step on the attack tree of the
-    deployed lab, by profile (opportunistic | targeted | stealthy)."""
+    """A reactive attacker choosing each step on an attack tree of the lab, by
+    profile (opportunistic | targeted | stealthy)."""
 
     name = "planned_attacker"
 
@@ -122,14 +122,14 @@ class PlannedAttacker(_ExploitDriver):
         dwell=0.0,
         max_steps=12,
         interval=0.5,
-        kg=None,
+        tree=None,
     ):
         super().__init__(target_url, engine_ip, engine_port, interval)
         self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
-        # The attack tree is grown from the scenario's knowledge graph. The
-        # scenario supplies the builder (lab -> graph): a plane that imported
-        # one scenario's graph could not be reused by the next.
-        self.kg = kg
+        # ctx -> the attack tree as a document (planner.tree_doc). The scenario
+        # supplies it: which tree describes a lab is the scenario's knowledge,
+        # and the attacker reads a document, never the defender's code.
+        self.tree = tree
 
     @property
     def label(self):
@@ -140,7 +140,7 @@ class PlannedAttacker(_ExploitDriver):
             ctx.manager,
             ctx.machines,
             ctx.gt,
-            self.kg(ctx.lab),
+            self.tree(ctx),
             target_url=self.target_url,
             engine_ip=self.engine_ip,
             engine_port=self.engine_port,

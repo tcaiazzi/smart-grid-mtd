@@ -24,5 +24,20 @@ RUN pip3 install --no-cache-dir --break-system-packages \
         pandapower==3.5.6 \
         pymodbus==3.6.9
 
+# Wazuh agent: the hosts on the management network report to the manager on the
+# SOC node and run its active responses. Installed on every node of the image,
+# started only where the scenario enrols one. Same version as the manager
+# (docker/soc/Dockerfile): an agent newer than its manager is refused.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gnupg ca-certificates lsb-release procps && \
+    curl -fsS https://packages.wazuh.com/key/GPG-KEY-WAZUH | \
+        gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import && \
+    chmod 644 /usr/share/keyrings/wazuh.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" \
+        > /etc/apt/sources.list.d/wazuh.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends wazuh-agent=4.14.10-1 && \
+    rm -rf /var/lib/apt/lists/*
+
 LABEL org.smartgrid-mtd.role="cps-node" \
       org.smartgrid-mtd.description="engine/plc/sensor/firewall/appserver/attacker base image (OT scenario)"

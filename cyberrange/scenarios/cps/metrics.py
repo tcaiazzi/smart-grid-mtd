@@ -223,6 +223,13 @@ def compute_metrics(out_dir: str) -> dict:
     gt = _read_jsonl(_find(out_dir, "ground_truth.jsonl"))
     resp_path = os.path.join(out_dir, "response.jsonl")
     resp = _read_jsonl(resp_path) if os.path.exists(resp_path) else None
+    # The SOC analytics runs in every episode; with policy "off" it only watches
+    # (no decisions, no actions), which is not a response to score. Treat it as
+    # no response, so a detection-only run is not marked as having failed to act.
+    if resp is not None and next(
+        (r.get("policy") for r in resp if r.get("kind") == "response_up"), None
+    ) in (None, "off"):
+        resp = None
     frames.sort(key=lambda fr: fr.get("timestamp", 0))
 
     attack_start = next((e["t"] for e in gt if e.get("kind") == "attack_start"), None)

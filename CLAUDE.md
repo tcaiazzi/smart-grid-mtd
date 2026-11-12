@@ -9,14 +9,16 @@ and every run is seeded, scored and recorded. Two scenarios live here today —
 cyberrange/core/       the platform: topology, lifecycle, context, campaigns, ledger, dashboard
 cyberrange/planes/     traffic | attack | defense | monitor — components.py + agents/ (guest code)
 cyberrange/scenarios/  mqtt_mtd/ and cps/ — one directory per experiment, whole
+nodes/                 software of the lab's nodes that is not the platform's (Wazuh set-up, rules, responses)
 make/ scripts/ tools/ tests/ docs/
 ```
 
 ## Rules that are not negotiable
 
-1. **Imports point one way: `core ← planes ← scenarios`.** A plane that imports a
-   scenario can only ever serve that scenario. Pass the scenario-specific part in
-   as a constructor argument instead (see `SoarResponder`). Enforced by
+1. **Imports point one way: `core ← planes ← scenarios`, and `nodes/` imports
+   neither.** A plane that imports a scenario can only ever serve that scenario.
+   Pass the scenario-specific part in as a constructor argument instead (see
+   `PlannedAttacker`, which takes its attack tree as an argument). Enforced by
    `tests/core/test_layering.py`.
 2. **A guest path is a contract; a host path is free.** Files copied into
    containers are flat modules importing each other bare, so `/ot_registers.py`
@@ -39,6 +41,12 @@ make/ scripts/ tools/ tests/ docs/
 7. **No new top-level directories, and never `pip install -e .`.** The repo runs
    from its root; an installed copy would shadow the sources and make tests pass
    for the wrong reason.
+8. **`nodes/` and `cyberrange/` never import each other.** The platform deploys,
+   observes and scores; what a node *does* at run time — the tools it runs, their
+   configuration, the logic that decides and acts — is node software. Prefer an
+   existing open-source tool, installed by the node image and configured from
+   `nodes/`, to code of our own; a component only stages and launches it. Python
+   under `nodes/` obeys rule 3. Enforced by `tests/core/test_layering.py`.
 
 ## Commands
 

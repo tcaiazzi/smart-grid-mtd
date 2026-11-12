@@ -1,14 +1,21 @@
-"""Response policies (cyberrange.planes.defense.soar.policy): fixed rules vs the
-enumeration solver, on synthetic campaign states.
+"""Response policies (nodes/soc/soar_policy.py): fixed rules vs the enumeration
+solver, on synthetic campaign states.
 
-Run: `.venv/bin/python -m unittest tests.test_soar_policy`.
+Run: `.venv/bin/python -m pytest tests/nodes/test_soar_policy.py`.
 """
 
 import unittest
 
+from tests.helpers import guest_paths
 
-from cyberrange.planes.defense.soar import mapping, policy, trees  # noqa: E402
-from cyberrange.scenarios.cps import kg as cps_kg
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
+
+import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
+import soar_mapping as mapping  # noqa: E402
+import soar_policy as policy  # noqa: E402
+import soar_trees as trees  # noqa: E402
+
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from tests.helpers.soar import HMI, finding, model  # noqa: E402
 
 SCENARIOS = {
@@ -28,7 +35,7 @@ EXPECTED = {
 
 class Policies(unittest.TestCase):
     def setUp(self):
-        self.g = cps_kg.build()
+        self.g = kg.build_kg(cps_inv.inventory())
         self.tree = trees.cps_attack_tree(self.g)
         self.cms = trees.cps_countermeasures(self.g)
 

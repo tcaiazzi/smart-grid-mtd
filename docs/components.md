@@ -29,7 +29,7 @@ override any of these hooks:
 | `start(ctx)` | `ctx.start(c)` in the episode | Launches the component: guest processes through `ctx.exec`, or a host thread. `ctx.start` also registers it. |
 | `stop(ctx)` | By the core when the episode ends, in reverse start order | Stops host-side work (threads). Guest processes die with the lab. |
 | `artifacts()` | By the core in the `download` phase | Returns `[Artifact(node, guest_path, local_name, required)]`, the files to copy into the run directory. A missing `required` file fails the run; any other missing file is only logged. |
-| `telemetry()` | By readers of guest telemetry (`TelemetryMirror`, `SoarResponder`) | Returns `[TelemetrySource(node, path, name)]`, the guest JSONL telemetry files the component writes. |
+| `telemetry()` | By readers of guest telemetry (`TelemetryMirror`) | Returns `[TelemetrySource(node, path, name)]`, the guest JSONL telemetry files the component writes. |
 | `mirror(ev)` | By `TelemetryMirror`, for each new telemetry event | Returns `(kind, fields)` to emit on the ledger, or `None` to skip the event. |
 | `poll(ctx)` | By `ctx.observe(...)` / `ctx.live()` every `--poll-interval` seconds | Pulls live state onto the ledger. It must not raise; the core catches and logs errors anyway. |
 
@@ -89,7 +89,9 @@ the run's `--seed` (unseeded when the run is).
 | `DeliveryAttack` | attack | host → guest | router, scmc · `kathara/mqtt` | mqtt-mtd |
 | `OtSensor` | defense | guest | sensor · `kathara/cps` | cps |
 | `ItSensor` | defense | guest | hmi · `kathara/cps` | cps (`--it-telemetry`) |
-| `SoarResponder` | defense | host thread | firewall, hmi, engine | cps (`--respond`) |
+| `SocAnalytics` | defense | guest | soc · `kathara/soc` | cps (always; acts with `--respond`) |
+| `WazuhManager` | defense | guest | soc · `kathara/soc` | cps (`--respond`) |
+| `WazuhAgent` | defense | guest | sensor, hmi, firewall · `kathara/cps` | cps (`--respond`) |
 | `QkdCertBootstrap` | defense | guest | semp, scmc · `kathara/mqtt` | mqtt-mtd |
 | `MtdCoordinator` | defense | guest | semp · `kathara/mqtt` | mqtt-mtd |
 | `Capture` | monitor | guest | any image with tcpdump | mqtt-mtd |
@@ -279,7 +281,7 @@ Detection and response, both proactive (MTD) and reactive (sensors, SOAR).
 Guest sensors write telemetry with `cyberrange/planes/defense/agents/mtd_telemetry.py`,
 declare it as a `TelemetrySource`, and map it onto the ledger with `mirror`.
 
-### `OtSensor(node, iface, engine_ip, engine_port, plc_ip, hmi_ip, detectors, learn_seconds, dashboard_port=None)`
+### `OtSensor(node, iface, engine_ip, engine_port, plc_ip, hmi_ip, detectors, learn_seconds, dashboard_port=None, responder_ip=None)`
 
 Passive Modbus deep-packet inspection on the OT link. It sniffs a promiscuous
 NIC with no address and reports on its management NIC. It is stdlib + numpy
@@ -287,10 +289,11 @@ only.
 
 | | |
 |---|---|
-| **Starts** | `python3 ot_sensor.py --iface IFACE --engine-ip … --detectors D --learn-seconds L --telemetry-file telemetry.jsonl [--dashboard-port P]` |
+| **Starts** | `python3 ot_sensor.py --iface IFACE --engine-ip … --detectors D --learn-seconds L --telemetry-file telemetry.jsonl [--responder-ip R] [--dashboard-port P]` |
 | **`detectors`** | `rules`, `model` or `rules,model`. **Rules** pair requests with responses and apply the role policy: `unauthorized_write`, `unauthorized_write_to_actuator`, `unauthorized_read`, `policy_violation`, `out_of_range_command`, `unsafe_command`, `manual_mode_excursion`. **Model** fits a median/MAD profile during the first `learn_seconds` and then reports `behavioral_anomaly`. |
-| **Telemetry** | `sensor:/telemetry.jsonl`, name `ot`: `ot_finding`, `ot_alert` (raised/cleared), `model_fitted`, `model_error` |
-| **Ledger (`mirror`)** | `finding`, `alert`, `model_fitted`, `model_error` |
+| **`responder_ip`** | The address the automated response writes to the plant from (role `responder`). Its writes raise no finding and stay out of the model's features; without it the sensor reports them as an unknown writer. Pass it only when a response runs. |
+| **Telemetry** | `sensor:/telemetry.jsonl`, name `ot`: `ot_finding`, `ot_alert` (raised/cleared), `model_fitted`, `model_error`, `ot_response_write` |
+| **Ledger (`mirror`)** | `finding`, `alert`, `model_fitted`, `model_error`, `response_write` |
 | **Artifacts** | `<node>.sensor.log`, `<node>.telemetry.jsonl` |
 
 Start it first, so that its calibration window also covers the clients'
@@ -316,29 +319,43 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 | **Artifacts** | `<node>.it_sensor.log`, `<node>.it_telemetry.jsonl` |
 | **Needs** | `VulnApp(access_log=…)` on the same node. Give `HmiClient` a `diag_url` too, so normal use is learned. |
 
-### `SoarResponder(policy, approval="auto", interval=0.5, it=False, responder=None, kg=None)`
+### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False)`
 
-The response loop as a host thread. The loop itself (`responder=`, the CPS
-scenario passes `cyberrange/scenarios/cps/responder.py`'s `Responder`) and the
-knowledge-graph builder (`kg=`) come from the scenario; both are required.
-Every `interval` it reads the telemetry of every started `ot`/`it` sensor and
-folds each finding into the attack tree's campaign state
-(`cyberrange/planes/defense/soar/mapping.py`). It asks the policy for a decision and runs
-the chosen countermeasures in the lab. The knowledge graph is built from the
-deployed lab.
+The SOC's decision, as a guest agent on the manager's node
+(`nodes/soc/soc_analytics.py`). It reads the manager's alerts, folds each
+finding into the attack tree's campaign state, asks the policy for a decision
+and requests the chosen countermeasures from the manager as active responses on
+the agents. The reasoning is the node's software (`nodes/soc/soar_*.py`), built
+from `inventory` — the lab as the SOC is told it (`cps.inventory`). It runs in
+every episode; `policy="off"` watches and requests nothing.
 
 | | |
 |---|---|
-| **`policy`** | `rules` (a playbook per impact) or `solver` (the minimal-cost set that covers the active tree, with causal pairing) |
+| **`policy`** | `off` (watch only), `rules` (a playbook per impact) or `solver` (the minimal-cost set that covers the active tree, with causal pairing) |
 | **`approval`** | `auto`, `deny`, or `delay:<s>` (operator approval for high-impact countermeasures) |
 | **`it`** | Also allow the IT countermeasures. Set it when `ItSensor` runs. |
-| **Countermeasures** | `notify`, `block_flow` (firewall drops HMI→plant Modbus), `isolate_hmi`, `force_auto` (local override back to AUTO + nominal setpoint), `restore_breaker`; with `it`: `kill_proc_tree`, `block_web_src` |
-| **Writes** | `response.jsonl` (`response_up`, `tree_state`, `decision`, `approval`, `action` with commands, return codes and times), `kg.json`, `tree.json` |
+| **Countermeasures** | `notify`, `block_flow` (firewall drops HMI→plant Modbus), `isolate_hmi`, `force_auto` (the firewall writes AUTO + nominal setpoint to the plant), `restore_breaker`; with `it`: `kill_proc_tree`, `block_web_src` |
+| **Writes** | `response.jsonl` (`response_up`, `tree_state`, `decision`, `approval`, `action` with per-leg times `alert_t`/`issued_t`/`node_started_t`/`node_done_t`), `kg.json`, `tree.json` on the node |
 | **Ledger** | `tree_state`, `decision` (with justification), `action` |
 
-Start it after the sensors: it reads their telemetry sources when it starts.
-`python -m cyberrange.scenarios.cps.responder --replay <run>` shows what a policy
-*would* have done on a finished run.
+Offline, the same tool runs on the host through `soc_tool` (a subprocess, no
+import): `cps-replay` shows what a policy *would* have done on a finished run,
+and the run's structure (`kg.json`/`tree.json`) is written this way at deploy.
+
+### `WazuhManager(node, agents)` · `WazuhAgent(node, manager_ip, agent_id, key, responses=None, logs=())`
+
+The management network's tooling. The software is Wazuh, installed by the node
+images and configured from `nodes/wazuh/`; these components launch it and name
+its artifacts, and hold no logic of their own.
+
+| | |
+|---|---|
+| **`WazuhManager`** | Starts the manager on the SOC node (`bash /wazuh-manager-setup.sh ID:NAME:KEY …`). `agents` is `{name: (id, key)}`. Artifacts: `<node>.alerts.json`, `<node>.ossec.log`, `<node>.wazuh_manager.log`. |
+| **`WazuhAgent`** | Starts an agent with the same pre-shared `key`, shipping the JSONL files in `logs` and allowed to run the countermeasures in `responses` (`{id: {"apply": [cmd], "revert": [cmd]}}`). The script waits for the manager's port, so start order does not matter. Artifacts: `<node>.cps-response.jsonl` (one record per response run), `<node>.ossec.log`, `<node>.wazuh_agent.log`. The `cps-response.jsonl` is what the SOC analytics reads back to close each action, and a request already recorded is not run twice. |
+
+Timings measured in the lab: manager and agents ready about 8 s after start;
+finding → manager alert 0.5 s (median); API call → response started on the
+host 0.1–0.5 s.
 
 ### `QkdCertBootstrap(ca_node, client_node, shared_key, server_ips, client_ips, ca_ip="10.1.0.2", ca_port=9999, server_cn="semp", client_cn="scmc1")`
 
@@ -422,7 +439,7 @@ voltage chart draws.
 ```
 services     OtSensor → PhysicalProcess → (2 s) → PlcController → HmiClient → VulnApp [→ ItSensor]
 monitor      PlantMirror, TelemetryMirror
-response     [SoarResponder(policy, it=…)]                  only with --respond
+response     SocAnalytics(inventory, policy, it=…)          always; acts with --respond
 normal       ctx.observe(normal_duration)                   the model calibrates here
 attack       ScriptedChain(mode) | PlannedAttacker(profile) → attack(ctx)
 post_attack  ctx.observe(post_attack_duration)
@@ -433,7 +450,7 @@ post_attack  ctx.observe(post_attack_duration)
 - `HmiClient(diag_url="http://127.0.0.1:8080")`
 - `VulnApp(access_log="/vuln_app.access.jsonl")`
 - `ItSensor(access_log=…)` is started
-- `SoarResponder(it=True)`
+- `SocAnalytics(it=True)`
 
 ### MQTT run (`cyberrange/scenarios/mqtt_mtd/scenario.py`)
 

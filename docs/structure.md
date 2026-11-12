@@ -19,10 +19,36 @@ document describes something that is checked rather than hoped for.
 | **scenarios** | `cyberrange/scenarios/<name>/` | One directory per experiment, holding all of it: topology, episode, CLI, campaign, deploy manifest, metrics, figures, offline training. A scenario composes planes. |
 | **analysis** | `cyberrange/scenarios/<name>/analysis/`, `training/`, `tools/` | What runs *after* a run, offline, on its artifacts. It may import anything below it, and nothing imports it. |
 
+## Beside the layers: `nodes/`
+
+The layers above are the platform: they deploy a lab, observe it and score it.
+What a node does at run time is a different thing, and it lives in `nodes/` —
+outside the `cyberrange` package, imported by none of it and importing none of
+it (`tests/core/test_layering.py` checks both directions, and that `nodes/` is
+not a package).
+
+| | Platform (`cyberrange/`) | Node software (`nodes/`) |
+|---|---|---|
+| Runs | on the host | inside the containers |
+| Is | orchestration, observation, scoring | the tools of the scenario's nodes: configuration of third-party software, set-up scripts, the glue around them |
+| Reaches a node | — | through a scenario's manifest (`guest_files.py`), like any guest file |
+| Third-party software | — | installed by the node image (`docker/<image>/Dockerfile`), pinned |
+
+The preference is to **use an existing open-source tool** and keep in `nodes/`
+only what configures it. Today that is Wazuh on the CPS management network:
+`nodes/wazuh/manager/` (set-up, rules) and `nodes/wazuh/agent/` (set-up,
+profile, the active response that applies a countermeasure). The components
+that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
+
+The agents under `cyberrange/planes/*/agents/` predate this boundary: they are
+node software too, and are meant to move here.
+
 ## Deciding where a new file goes
 
 Ask what its lifecycle is:
 
+- **Is it the configuration or glue of a tool a node runs?** → `nodes/<tool>/`,
+  and add it to the scenario's `guest_files.py`.
 - **Does it run inside a container?** → `planes/<plane>/agents/`, and add it to
   the scenario's `guest_files.py`. It must be a flat module that imports only the
   stdlib and what its node image installs (`docker/<scenario>/Dockerfile`),
@@ -40,9 +66,9 @@ Ask what its lifecycle is:
 
 **A plane that imports a scenario is no longer reusable.** It is also hard to
 see: the import is usually lazy, inside a method, and everything passes. Two
-components used to do this — `SoarResponder` reached for the CPS response loop,
-`DeliveryAttack` for the MQTT fault injector. Both now take what they need as a
-constructor argument, supplied by the scenario that builds them. The same
+components used to do this — `PlannedAttacker` reached for the CPS knowledge
+graph, `DeliveryAttack` for the MQTT fault injector. Both now take what they need
+as a constructor argument, supplied by the scenario that builds them. The same
 applies to the dashboard: a scenario declares its own panel and structure
 (`Scenario.panel_js`, `Scenario.structure`) and the core asks the registry,
 rather than importing one scenario's knowledge graph.
@@ -60,6 +86,7 @@ tracked source file is counted by somebody.
 |---|---|
 | Does the lab still deploy the same thing? | `tests/core/test_deploy_contract.py` freezes every scenario's guest paths and startup commands (`make lab-conf` renders them without Docker) |
 | Do the entry points exist? | `tests/core/test_entry_points.py` resolves every `-m <module>` that the makefiles, scripts and campaigns invoke, and every `make` target they call |
-| Is the layering intact? | `tests/core/test_layering.py` |
+| Is the layering intact, and the platform/node boundary? | `tests/core/test_layering.py` |
+| Are the node tools pinned? | `tests/core/test_guest_imports.py` (pip pins against `requirements.txt`; apt pins of the Wazuh packages, agent and manager on one version) |
 | Is the code-size table honest? | `tests/core/test_loc_coverage.py` |
 | Did tests go missing instead of failing? | the floor in `tests/conftest.py` |

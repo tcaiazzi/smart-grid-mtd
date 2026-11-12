@@ -1,14 +1,20 @@
-"""Findings -> attack-tree nodes -> campaign state (cyberrange.planes.defense.soar.mapping),
+"""Findings -> attack-tree nodes -> campaign state (nodes/soc/soar_mapping.py),
 on synthetic findings shaped like the sensor's (see ot_sensor._finding).
 
-Run: `.venv/bin/python -m unittest tests.test_soar_mapping`.
+Run: `.venv/bin/python -m pytest tests/nodes/test_soar_mapping.py`.
 """
 
 import unittest
 
+from tests.helpers import guest_paths
 
-from cyberrange.planes.defense.soar import mapping, trees  # noqa: E402
-from cyberrange.scenarios.cps import kg as cps_kg
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
+
+import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
+import soar_mapping as mapping  # noqa: E402
+import soar_trees as trees  # noqa: E402
+
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 
 HMI, PLC, ROGUE = cps.HMI_IP, cps.PLC_IP, "10.20.0.99"
@@ -40,7 +46,7 @@ def model(t, *features, conf=0.9):
 
 class Mapping(unittest.TestCase):
     def setUp(self):
-        self.g = cps_kg.build()
+        self.g = kg.build_kg(cps_inv.inventory())
         self.tree = trees.cps_attack_tree(self.g)
 
     def run_findings(self, findings):

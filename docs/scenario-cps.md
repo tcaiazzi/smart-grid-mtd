@@ -13,8 +13,9 @@ The question it is built to answer: can a passive defensive sensor recognise the
 attack, ideally **before** the physical effect appears, and what does the plant
 suffer when it does not?
 
-It is independent of the MQTT/MTD scenario. It has its own node image
-(`kathara/cps`) and its own Kathará lab (`cps`), and the two never interfere.
+It is independent of the MQTT/MTD scenario. It has its own node images
+(`kathara/cps` for the nodes, `kathara/soc` for the SOC) and its own Kathará
+lab (`cps`), and the two never interfere.
 
 ## 2. Architecture
 
@@ -63,8 +64,43 @@ Two channels must not be confused:
 The sensor's live page is instrumentation: an `INPUT` rule on the sensor drops
 it on the MGMT interface, so it is reachable through the bridged NIC only.
 
-As of today the management network carries no traffic: the response loop still
-runs on the host and reaches the nodes through the container runtime (§11).
+What travels on the management network, when a response runs
+(`CPS_RESPOND` other than `off`), is **Wazuh** traffic:
+
+- the `soc` node runs the Wazuh **manager** (image `kathara/soc`);
+- sensor, HMI and firewall each run a Wazuh **agent**, registered with a
+  pre-shared key so that it reports as soon as the manager listens (about 8 s
+  after the services start);
+- the sensor's agent ships every finding to the manager, which turns it into an
+  alert (`soc.alerts.json` in the run directory; median 0.5 s after the finding);
+- a countermeasure reaches its host as a Wazuh **active response**: the manager
+  asks the agent for it by id, and the agent runs the commands that id maps to
+  in an allowlist provisioned on that host — a request never carries a command.
+
+The engine and the PLC run no agent: the plant is watched from the wire and
+acted on from the firewall. The configuration and scripts behind all this are
+node software, under `nodes/wazuh/` (see [structure.md](structure.md)).
+
+The manager's REST API listens on the management network with the product's
+default credentials. An attacker on the HMI can therefore ask the manager for
+any allowlisted response on any agent. That is the exposure this network
+models; the attack tree does not walk it yet (§11).
+
+The decision runs inside the lab too. The `soc` node runs an **analytics**
+service (`nodes/soc/soc_analytics.py`) next to the manager: it reads the
+manager's alerts, keeps the attack tree's belief and asks the manager for the
+responses — so detection, decision and enforcement are all in the lab, and the
+host only starts, observes and scores. The analytics builds its own knowledge
+graph from an **inventory** the scenario hands it (what a SOC is configured with
+about the network it watches); the host provisions it, it does not decide.
+
+The management plane runs in **every** episode, so a detection-only run carries
+the same load and is comparable. `CPS_RESPOND` sets the analytics' policy:
+`off` watches and requests nothing, `rules`/`solver` act. Each action in
+`response.jsonl` carries, besides the host clock, the manager's `alert_t` and
+the `node_started_t`/`node_done_t` the enforcing host recorded, so the latency
+of each leg — finding to alert, alert to request, request to effect — is
+measurable.
 
 ## 3. The physical process
 
@@ -166,7 +202,7 @@ attack.
 
 ```bash
 make cps-selftest      # physics, Modbus, PLC, both detectors, attack chain — NO Kathará
-make cps-image         # build the kathara/cps node image (pandapower + pymodbus)
+make cps-image         # build kathara/cps (nodes + Wazuh agent) and kathara/soc (Wazuh manager)
 make cps-lab    CPS_OUT=output/cps/normal SEED=1                        # normal operation only
 make cps-attack CPS_OUT=output/cps/hijack CPS_ATTACK_MODE=manual-hijack SEED=1
 make cps-metrics CPS_OUT=output/cps/hijack   # per-detector detection, impact, energy
@@ -264,10 +300,13 @@ alarms. A statistical evaluation across seeds is what campaigns are for.
 
 ## 10. Response (the SOAR prototype)
 
-A first end-to-end data → detection → response loop on top of the sensor
-(`cyberrange/planes/defense/soar/`, host-side; the runtime loop in
-`cyberrange/scenarios/cps/responder.py`). It is off by default
-(`CPS_RESPOND=off`), which leaves the scenario unchanged.
+A full end-to-end data → detection → decision → response loop, all inside the
+lab (§2). The reasoning — knowledge graph, attack tree, mapping, policy — is
+software of the SOC node (`nodes/soc/`, stdlib + networkx), run by the analytics
+service there and, offline, by the host through `soc_tool` (a subprocess, no
+import) for the dashboard's structure and for replay. `CPS_RESPOND` sets the
+policy; `off` watches without acting. `make cps-replay` shows what a policy
+would have decided on a finished run's findings.
 
 How the knowledge graph and the attack tree are built, turned into a belief
 and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
@@ -278,7 +317,7 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   (`ot_registers.ROLE_POLICY`) and the boundary FORWARD rules.
   `reachable(g, src, dst, port)` decides whether a host can reach a port on
   another from zones, addresses and rules. The CPS binding lives in
-  `cyberrange/scenarios/cps/kg.py` — the plane itself knows no scenario.
+  `cyberrange/scenarios/cps/inventory.py` — the node software itself knows no scenario.
 - **Attack tree** (`soar/trees.py`), a template of the chain grounded on the
   graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
   the sanctioned HMI→plant flow → one of three impacts: setpoint out of range
@@ -292,9 +331,12 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   - `force_auto` — back to AUTO plus the nominal setpoint;
   - `restore_breaker` — re-close the breaker.
 
-  `force_auto` and `restore_breaker` are local Modbus writes on 127.0.0.1 inside
-  the engine container, so the sensor does not see them and the plant contract
-  is unchanged.
+  `force_auto` and `restore_breaker` are Modbus writes from the firewall to the
+  engine over the OT link. The plant contract gives that writer its own role,
+  `responder`; the sensor records its writes as `ot_response_write` (when the
+  plant actually received the response) and raises no finding for them. The
+  role is bound to the firewall's OT address, so a compromised firewall is a
+  blind spot of the sensor.
 - **Mapping** (`soar/mapping.py`): findings become weighted evidence on tree
   nodes. Command-level evidence (a wrong write) is kept apart from consequence
   evidence (the voltage left the band); once a leaf is confirmed by a wrong
@@ -396,9 +438,9 @@ deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
 - automatic generation of the attack trees;
 - the stochastic game model;
 - real energy measurement of the countermeasures;
-- a response loop inside the lab, on the management network (agents on the
-  hosts, a manager and the analytics on the `soc` node), instead of the
-  host-side responder.
+- the management network in the attack tree (reaching the manager's API from
+  the HMI, with its default credentials) and a step of the planner that walks it;
+- relocating the guest agents under `cyberrange/planes/*/agents/` to `nodes/`.
 
 ## 12. Quick reference
 
@@ -409,7 +451,7 @@ deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
 | PLC and HMI | `cyberrange/planes/traffic/agents/plc_controller.py`, `hmi_client.py` |
 | Attack chain | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
 | Sensor and model | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
-| SOAR: graph, tree, mapping, policies | `cyberrange/planes/defense/soar/`, bound to this lab in `cyberrange/scenarios/cps/kg.py` |
+| SOAR: graph, tree, mapping, policies | `nodes/soc/soar_*.py` (node software), bound to this lab by `cyberrange/scenarios/cps/inventory.py` |
 | Lab and orchestration | `cyberrange/scenarios/cps/` (topology, episode) on `cyberrange/core/`; CLI `cli.py`, campaigns `campaign.py` |
 | Metrics and dashboard panel | `cyberrange/scenarios/cps/metrics.py`, `panel.js`; the dashboard itself is `cyberrange/core/dashboard.py` |
 | The platform underneath | [platform.md](platform.md), [structure.md](structure.md) |
