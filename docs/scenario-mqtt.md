@@ -12,8 +12,6 @@ beforehand, and decides **which IP address is the nanogrid**. Then it isolates
 that address with a blackhole on the router. The defence cannot prevent any of
 this. All it can do is make the observed traffic stop being recognisable.
 
-This is the scenario behind the paper's results (Fig. 2 and Fig. 3).
-
 ## 2. Architecture
 
 ```
@@ -45,7 +43,7 @@ time, each at a different availability cost:
 | **padding** | the packet size distribution changes |
 | **frequency hop** | the publishing cadence changes |
 
-Two families of policy, compared in the paper:
+Two families of policy, compared by the evaluation:
 
 - **fixed timers** — each manoeuvre has its own interval (`MTD_HOP_INTERVAL`, …);
 - **RL** — a PPO policy trained offline
@@ -91,7 +89,7 @@ model trained on undefended traffic against defended traffic — the interesting
 comparison, because it measures how much the MTD degrades a classifier that was
 already trained.
 
-**The paper's whole evaluation** is one command:
+**The whole evaluation** is one command:
 
 ```bash
 .venv/bin/python main.py            # --dry-run to see the commands without running them
@@ -165,7 +163,7 @@ cross-model run reads the baseline model from `output/baseline-mbps<M>/model/`.
 
 ## 6. The parameter ablation
 
-`make sweep` walks a grid instead of the paper's four fixed configurations, and
+`make sweep` walks a grid instead of the evaluation's four fixed configurations, and
 answers which mechanism actually does the hiding:
 
 | Group | Varies |
@@ -203,14 +201,14 @@ Per run (`cyberrange/scenarios/mqtt_mtd/metrics.py`):
 
 Campaigns aggregate these across seeds with mean and 95% confidence interval.
 
-The paper's figures (`analysis/compare_coordinators.py`):
+The evaluation's figures (`analysis/compare_coordinators.py`):
 
 | Figure | File |
 |---|---|
-| Fig. 2a — availability over time | `availability_comparison.pdf` |
-| Fig. 2b — attacker confidence per configuration | `detection_comparison.pdf` |
-| Fig. 2c — cumulative availability cost | `availability_cost_comparison.pdf` |
-| Fig. 3 — per-field Shannon entropy | `entropy_comparison.pdf` |
+| Availability over time | `availability_comparison.pdf` |
+| Attacker confidence per configuration | `detection_comparison.pdf` |
+| Cumulative availability cost | `availability_cost_comparison.pdf` |
+| Per-field Shannon entropy | `entropy_comparison.pdf` |
 
 ## 8. The live MTD dashboard
 
@@ -256,7 +254,7 @@ make attack DETECTOR_MODEL=output/detector/detector.npz   # run it live in the d
 Everything that is tuned — feature set, network size, smoothing, threshold — is
 chosen on the dev seeds; the test seeds are scored only by `detector-final`.
 
-Each detector run uses the paper's MTD configuration, sniffs, then spends
+Each detector run uses the evaluation's MTD configuration, sniffs, then spends
 `DET_POST_ATTACK` seconds with `DET_BLOCK_EPISODES` blackholes (the CNN
 attacker's pick, or an oracle attacker blocking the address in use) and seeded
 benign faults (netem loss / delay / burst loss on the router, executor restarts).
@@ -274,7 +272,7 @@ alerts with the truth.
 |---|---|
 | Topology and episode | `cyberrange/scenarios/mqtt_mtd/{topology,scenario}.py` |
 | Command line of one run | `cyberrange/scenarios/mqtt_mtd/cli.py` |
-| Paper campaign | `cyberrange/scenarios/mqtt_mtd/campaign.py`, `main.py` |
+| Evaluation campaign | `cyberrange/scenarios/mqtt_mtd/campaign.py`, `main.py` |
 | Parameter ablation | `cyberrange/scenarios/mqtt_mtd/ablation.py` (`make sweep`) |
 | Deploy manifest | `cyberrange/scenarios/mqtt_mtd/guest_files.py` |
 | Metrics | `cyberrange/scenarios/mqtt_mtd/metrics.py` |

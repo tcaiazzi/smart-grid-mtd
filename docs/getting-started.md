@@ -65,7 +65,7 @@ Follow it live in a second terminal:
 make dashboard       # http://127.0.0.1:8765  — every scenario's runs and campaigns
 ```
 
-### MQTT MTD — the paper's scenario
+### MQTT MTD
 
 The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in
 `assets/pcap/`, then split it into train/test sets:
@@ -74,7 +74,7 @@ The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in
 make split
 ```
 
-The whole paper evaluation — baseline, fixed-timer MTD, RL-cost, RL-entropy, with
+The whole evaluation — baseline, fixed-timer MTD, RL-cost, RL-entropy, with
 the figures at the end — runs as one campaign:
 
 ```bash

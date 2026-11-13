@@ -11,7 +11,7 @@ cyber-physical systems safely, reproducibly and observably, with three
 
 | Scenario | What it studies | Read |
 |---|---|---|
-| `mqtt-mtd` | The workshop paper's: MTD against ML traffic fingerprinting | [docs/scenario-mqtt.md](docs/scenario-mqtt.md) |
+| `mqtt-mtd` | MTD against ML traffic fingerprinting of MQTT smart-grid traffic | [docs/scenario-mqtt.md](docs/scenario-mqtt.md) |
 | `cps` | A cyber-physical OT/Modbus plant: active IT→OT attack, DPI and IT sensors, a SOC (Wazuh + analytics) that decides and responds inside the lab | [docs/scenario-cps.md](docs/scenario-cps.md) |
 | `cps-advisor` | The `cps` lab with people in it: the SOC advises an operator instead of acting, and a red team can attack by hand against a blue team | [docs/scenario-cps-advisor.md](docs/scenario-cps-advisor.md), and for the players [docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md) |
 | `cps-recon` | The `cps` lab with an attacker that is not handed the attack tree: it derives it by reconnaissance (nmap, then living off the land on the HMI), and the run scores how close the derived tree is to the true one | [docs/scenario-cps-recon.md](docs/scenario-cps-recon.md) |
@@ -84,22 +84,15 @@ make split
 ```bash
 make help                 # every target, with what it writes where
 make selftest             # the whole test suite — no Kathará, no Docker
-.venv/bin/python main.py  # the paper's evaluation end to end (--dry-run to look first)
+.venv/bin/python main.py  # the MQTT MTD evaluation end to end (--dry-run to look first)
 make cps-attack CPS_OUT=output/cps/hijack CPS_ATTACK_MODE=manual-hijack SEED=1
 make dashboard            # follow any run or campaign live, any scenario
 ```
 
-`main.py` runs the four configurations compared in §VI-G — baseline,
-fixed-timer MTD, RL-cost, RL-entropy, training both RL policies first if they are
-missing — at the replay rate (`MBPS=2`) the paper's numbers were generated at,
-and ends with the figures: `availability_comparison.pdf` (Fig. 2a),
-`detection_comparison.pdf` (Fig. 2b), `availability_cost_comparison.pdf`
-(Fig. 2c), `entropy_comparison.pdf` (Fig. 3).
-
-It runs as a campaign on the platform's runner: lab steps are retried, a failed
-configuration does not stop the others, every attack run is scored, and
-`output/campaigns/paper-mbps<M>/summary.md` holds the per-configuration
-mean [95% CI] across `--runs`. `make dashboard` follows it live.
+`main.py` runs the four MQTT MTD configurations — baseline, fixed-timer MTD,
+RL-cost, RL-entropy — as a campaign on the platform's runner: lab steps are
+retried, a failed configuration does not stop the others, every attack run is
+scored, and `make dashboard` follows it live.
 
 For anything beyond these five — the experiment pipeline step by step, the
 variables that shape a run, the output layout, the parameter ablation, the SOAR
@@ -110,6 +103,57 @@ target keeps its lab up after the episode, until Ctrl-C. `make cps-teams` is a
 red team against a blue team on the CPS lab: each team gets a console and a web
 terminal on its own node, and `make dashboard` is the referee's read-only view
 ([docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md)).
+
+## Reproducing the paper
+
+The `mqtt-mtd` scenario is the experimental set-up of:
+
+> **Towards a Digital-Twin Cyber Range for MTD against ML Traffic Fingerprinting
+> in Smart Grid**
+>
+> T. Caiazzi, S. Albero, S. Iannucci, R. Torlone, G. Adinolfi, M. Valenti, M. Celino
+>
+> [AICR-ACS 2026](https://aicr-acs.github.io/) — 1st International Workshop on
+> AI-Driven Cyber-Resilience for Autonomous Cyber-Physical Systems, co-located
+> with [ACSOS 2026](https://2026.acsos.org/)
+
+
+**1. Prerequisites** — the virtualenv and Docker/Kathará from
+[Installation](#installation), then the scenario's image and traffic trace:
+
+```bash
+docker build -t kathara/mqtt docker/mqtt/
+# place the background trace at assets/pcap/traccia.pcap, then:
+make split                                   # train/test traces
+```
+
+**2. Run the evaluation:**
+
+```bash
+.venv/bin/python main.py --dry-run           # print every command, run nothing
+.venv/bin/python main.py                     # the full evaluation (MBPS=2, the published configuration)
+.venv/bin/python main.py --runs 10           # 10 seeded runs -> output/run-0..9/, mean [95% CI]
+.venv/bin/python main.py --resume            # continue an interrupted evaluation
+```
+
+Both RL policies are trained offline first if they are missing (`make train-rl`,
+`make train-rl-entropy`); they are shared by every run.
+
+**3. Results:**
+
+| What | Where |
+|---|---|
+| Per-configuration mean [95% CI] across runs | `output/campaigns/paper-mbps2/summary.md` |
+| The figures | `output/compare-<config>/` (with `--runs`, `output/run-<i>/compare-<config>/`) |
+
+The figures are `availability_comparison.pdf` (availability over time),
+`detection_comparison.pdf` (attacker confidence per configuration),
+`availability_cost_comparison.pdf` (cumulative availability cost) and
+`entropy_comparison.pdf` (per-field Shannon entropy).
+
+`make dashboard` follows the evaluation live. The scenario, its variables and the
+parameter ablation (`make sweep`) are documented in
+[docs/scenario-mqtt.md](docs/scenario-mqtt.md).
 
 ## Working in this repository
 

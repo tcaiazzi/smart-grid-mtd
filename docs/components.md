@@ -276,7 +276,7 @@ nanogrid-like their traffic is, and picks the one to blackhole.
 |---|---|
 | **`sniff(ctx, seconds)`** | `timeout S tcpdump -i IFACE -w attacker_capture.pcap` on the attacker, then downloads it. Returns the local path. |
 | **`score(ctx, capture)`** | Runs `detect_nanogrid_ip` and writes `nanogrid_ranking.csv`. It logs `Blocking nanogrid IP: <ip>`, a line `plot_results` reads back from `run.log`. Returns the IP, or `""`. |
-| **`block_policy`** | `top1` always blocks the top-ranked IP (the workshop paper). `threshold` blocks only if its `nanogrid_frac` ≥ `threshold` (default `cyberrange.planes.attack.thresholds.DETECT_THRESHOLD`). |
+| **`block_policy`** | `top1` always blocks the top-ranked IP (the default). `threshold` blocks only if its `nanogrid_frac` ≥ `threshold` (default `cyberrange.planes.attack.thresholds.DETECT_THRESHOLD`). |
 | **Needs** | a model trained on this scenario's datasets (`make train`) |
 
 ### `DeliveryAttack(router, scmc, port_pool, relaunch, oracle=None, block_duration=None, block_episodes=1, impair=False, injector=None)`
@@ -286,7 +286,7 @@ observation. It wraps the scenario's fault injector (`cyberrange/scenarios/mqtt_
 
 | | |
 |---|---|
-| **`attack(ctx, cnn_ip)`** | Starts the episodes, which run in background threads. With no `oracle` and no `block_duration`, it applies the paper's single permanent block of `cnn_ip`. |
+| **`attack(ctx, cnn_ip)`** | Starts the episodes, which run in background threads. With no `oracle` and no `block_duration`, it applies a single permanent block of `cnn_ip`. |
 | **`oracle`** | `src`, `broker` or `random`: blackhole the address the SCMC's MQTT path uses *right now*, read from its live socket. This is the worst-case attacker. |
 | **`block_duration` / `block_episodes`** | Lift each blackhole after N s; repeat it, 20–40 s apart. |
 | **`impair=True`** | Seeded benign faults on the router: netem loss, delay or burst loss, and executor restarts (through `relaunch(state, n)`, normally `ScmcPublisher.command_for`). |

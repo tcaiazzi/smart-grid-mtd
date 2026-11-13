@@ -13,7 +13,7 @@ from reusable *plane* components, and every run is seeded, scored and recorded.
 
 | Scenario | What it studies |
 |---|---|
-| [`mqtt-mtd`](scenario-mqtt.md) | The workshop paper's: MTD against ML traffic fingerprinting. |
+| [`mqtt-mtd`](scenario-mqtt.md) | Moving Target Defense against ML traffic fingerprinting of MQTT smart-grid traffic. |
 | [`cps`](scenario-cps.md) | A cyber-physical OT/Modbus plant: an IT→OT attack, DPI and host sensors, and a SOC (Wazuh + analytics) that decides and responds inside the lab. |
 | [`cps-advisor`](scenario-cps-advisor.md) | The `cps` lab with people in it: the SOC *advises* an operator instead of acting, and a [red team can play against a blue team](playground-red-vs-blue.md). |
 | [`cps-recon`](scenario-cps-recon.md) | The `cps` lab with an attacker that is *not* handed the attack tree: it derives it by reconnaissance, and the run scores how close the derived tree is to the true one. |

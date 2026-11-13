@@ -10,7 +10,7 @@ targets and variables, `make help` is always authoritative; the
 |---|---|---|
 | Run one configuration once and look at it | a single-run target, e.g. `make cps-attack …` | One lab, one episode, one output directory. Best for developing and debugging. |
 | Run many configurations × seeds, scored and aggregated | a **campaign**, e.g. `make cps-campaign` | Resumable; a failed run does not stop the others; results aggregated with a 95% CI. |
-| Reproduce the paper's evaluation end to end | `.venv/bin/python main.py` | Runs the four compared configurations as a campaign and emits the figures. |
+| Reproduce the MQTT MTD evaluation end to end | `.venv/bin/python main.py` | Runs the four compared configurations as a campaign and emits the figures. |
 
 Add `--dry-run` (or `DRY=1` on targets that support it) to see the plan before
 anything deploys.
