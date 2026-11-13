@@ -153,6 +153,10 @@ class Reconnoitre(unittest.TestCase):
         self.assertEqual(findings["ot"]["engine_ip"], "10.20.0.20")
         stages = [r["stage"] for r in rows if r["kind"] == "recon"]
         self.assertEqual(stages, ["it", "ot"])
+        self.assertTrue(
+            all(isinstance(r.get("t"), float) for r in rows),
+            "a recon row with no time cannot be placed on the run's timeline",
+        )
 
 
 if __name__ == "__main__":

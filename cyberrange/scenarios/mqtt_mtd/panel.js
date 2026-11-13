@@ -10,6 +10,11 @@
 // code can use them (h, $, num, dur, now, statusBadge, S) directly.
 "use strict";
 (function () {
+// This panel's own redraw key and the page's SVG helper (set by the factory):
+// every panel is concatenated into one script, so nothing here may lean on
+// another panel's private names.
+let chartKey = null, s = null;
+
 function renderQueueMqtt(ui) {
   ui.queueTable({
     note: "attacker confidence: its nanogrid_frac over the nanogrid's own IPs "
@@ -106,10 +111,13 @@ function drawMtd(r) {
   box.insertBefore(svg, $("tip"));
 }
 
-  (window.CyberRangePanels ||= {})["mqtt-mtd"] = ui => ({
-    queue: () => renderQueueMqtt(ui),
-    detail: renderDetailMqtt,
-    // This scenario's aggregate is the 95%-CI table, which the page shows from
-    // the data itself; it adds no results tab of its own.
-  });
+  (window.CyberRangePanels ||= {})["mqtt-mtd"] = ui => {
+    s = ui.svg;
+    return {
+      queue: () => renderQueueMqtt(ui),
+      detail: renderDetailMqtt,
+      // This scenario's aggregate is the 95%-CI table, which the page shows from
+      // the data itself; it adds no results tab of its own.
+    };
+  };
 })();

@@ -158,6 +158,29 @@ class Planner(unittest.TestCase):
         b, rb = self.plan(seed=7)
         self.assertEqual(ra.calls, rb.calls)
 
+    def test_every_choice_of_impact_is_told_with_what_was_open(self):
+        plans = []
+        p = AttackPlanner(self.tree, seed=1)
+        p.run(
+            Recorder(block={"setpoint_oor", "breaker_open", "mode_hijack"}),
+            on_plan=lambda **plan: plans.append(plan),
+        )
+        self.assertGreaterEqual(len(plans), 2, "a re-plan after a failed impact went untold")
+        first, second = plans[0], plans[1]
+        self.assertEqual((first["reason"], second["reason"]), ("initial", "replan"))
+        self.assertEqual(first["target"], "breaker_open")
+        self.assertEqual(first["sequence"][-1], "breaker_open")
+        self.assertIn("mode_hijack", [c["node"] for c in first["candidates"]])
+        self.assertNotIn(first["target"], [c["node"] for c in second["candidates"]])
+        self.assertIn("breaker_open", second["blocked"])
+
+    def test_a_step_names_the_impacts_it_was_chosen_among(self):
+        steps = []
+        p = AttackPlanner(self.tree, seed=1)
+        p.run(Recorder(), record=lambda **step: steps.append(step))
+        self.assertEqual(steps[0]["chosen_among"][0], "breaker_open")
+        self.assertGreater(len(steps[0]["chosen_among"]), 1, "the alternatives went unrecorded")
+
     def test_dwell_between_steps(self):
         waits = []
         p = AttackPlanner(self.tree, seed=1)
@@ -226,7 +249,11 @@ class FakeCtx:
         return (self.out, b"", self.rc)  # the agent already ran; its record is the truth
 
     def exec_text(self, node, cmd):
-        return self.record_text
+        # As `tail -n +N` over the record: from line N on, each line ended by the
+        # newline the agent writes after every row.
+        start = int(cmd.split("tail -n +", 1)[1].split()[0]) if "tail -n +" in cmd else 1
+        lines = [line for line in self.record_text.split("\n") if line]
+        return "".join(line + "\n" for line in lines[start - 1 :])
 
     def emit(self, kind, **f):
         self.ledger.append((kind, f))
@@ -247,6 +274,9 @@ class InLabAgent(unittest.TestCase):
         steps = [r for r in rows if r["kind"] == "plan_step"]
         self.assertTrue(steps)
         self.assertTrue(all(r.get("mode") == "planner:opportunistic" for r in steps))
+        # What it aimed at comes before the first step taken towards it.
+        self.assertEqual(rows[1]["kind"], "attack_plan")
+        self.assertEqual(rows[1]["target"], steps[-1]["target"])
         # The impact step carries its Modbus write under "phases".
         self.assertTrue(
             any(
@@ -306,6 +336,47 @@ class InLabAgent(unittest.TestCase):
             str(raised.exception),
             "the failed run would not say why the agent died",
         )
+
+    def test_live_poll_and_final_read_record_each_row_once(self):
+        from cyberrange.planes.attack.components import PlannedAttacker
+
+        _s, rows = _drive_in_lab(self.tree)
+        gt, ledger = GT(), []
+        ctx = FakeCtx("\n".join(json.dumps(r) for r in rows[:2]), gt, ledger)
+        pa = PlannedAttacker(
+            "opportunistic",
+            CTX["target_url"],
+            CTX["engine_ip"],
+            CTX["engine_port"],
+            tree=lambda _c: self.tree,
+        )
+        pa.poll(ctx)  # the live thread, while the agent is still at its first step
+        self.assertEqual(
+            [k for k, _ in ledger][0],
+            "attack_start",
+            "the attack reached the dashboard only once it was over",
+        )
+        ctx.record_text = "\n".join(json.dumps(r) for r in rows)  # the agent has exited
+        pa.attack(ctx)
+        pa.poll(ctx)  # ctx.live polls once more on its way out
+        steps = [r for r in rows if r["kind"] == "plan_step"]
+        self.assertEqual(len(steps), len([r for r in gt.rows if r["kind"] == "plan_step"]))
+        self.assertEqual(len(steps), [k for k, _ in ledger].count("plan_step"))
+        self.assertEqual(
+            1, [r["kind"] for r in gt.rows].count("attack_start"), "a row was recorded twice"
+        )
+
+    def test_the_ledger_carries_what_the_attacker_saw(self):
+        _s, gt, ledger = self._reconstruct()
+        kinds = [k for k, _ in ledger]
+        self.assertEqual((kinds[0], kinds[-1]), ("attack_start", "attack_end"))
+        seen = [f["observed"] for k, f in ledger if k == "plan_step"]
+        self.assertTrue(
+            any(w["ok"] for o in seen for w in o.get("writes", [])),
+            "the impact step's accepted writes are what the attacker saw of the plant",
+        )
+        end = dict(ledger)["attack_end"]
+        self.assertTrue(end["success"])
 
     def test_record_cut_short_is_closed_by_the_host(self):
         _s, rows = _drive_in_lab(self.tree)

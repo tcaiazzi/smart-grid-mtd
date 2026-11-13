@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import os
+import threading
 
 from cyberrange.planes.attack import active_attack
 from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetryCursor, tail_reader
@@ -67,6 +68,29 @@ def emit_attack_writes(ctx):
                     )
     except Exception as e:
         log.debug("could not replay ground truth: %s", e)
+
+
+def observed(phases):
+    """What a step's own output told the attacker: the lines it printed about
+    itself, reduced to what the dashboard's attacker column shows."""
+    out, writes = {}, []
+    for p in phases or []:
+        if p.get("phase") == "modbus_write":
+            reg = p.get("register")
+            writes.append(
+                {
+                    "register_name": active_attack.REGISTER_NAMES.get(reg, reg),
+                    "value": p.get("value"),
+                    "ok": p.get("ok"),
+                }
+            )
+            continue
+        for k in ("whoami", "detail"):
+            if p.get(k) is not None:
+                out[k] = p[k]
+    if writes:
+        out["writes"] = writes
+    return out
 
 
 class _ExploitDriver(Component):
@@ -139,6 +163,12 @@ class PlannedAttacker(_ExploitDriver):
         # it: which tree describes a lab is the scenario's knowledge, and the
         # attacker reads a document, never the defender's code.
         self.tree = tree
+        # The record is read twice over: live by poll() on the live-poll thread,
+        # and to its end once the agent exits. One cursor behind one lock, so
+        # each row reaches the ground truth and the ledger exactly once.
+        self._cursor, self._lock = None, threading.Lock()
+        self._seen = set()
+        self._summary = {"success": False, "stage_reached": "none", "writes_ok": 0}
 
     @property
     def label(self):
@@ -168,25 +198,32 @@ class PlannedAttacker(_ExploitDriver):
         out, _err, rc = ctx.run(self.node, cmd, wait=True)
         return self._reconstruct(ctx, rc, (out or b"").decode(errors="replace"))
 
+    def poll(self, ctx):
+        # The agent appends a row per step: each is on the dashboard while the
+        # attack runs, not in one burst when it ends.
+        if ctx.gt is not None:
+            self._drain(ctx)
+
+    def _drain(self, ctx):
+        """Record every row of the agent's record not recorded yet."""
+        with self._lock:
+            if self._cursor is None:
+                self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.RECORD))
+            for row in self._cursor.poll():
+                self._seen.add(row.get("kind"))
+                self._record_row(ctx, row, self._summary)
+
     def _reconstruct(self, ctx, rc, output):
-        """Replay the agent's record into the ground truth and the ledger:
-        attack_start, per-step plan_step, the Modbus writes, the foothold,
-        attack_end. ``rc`` and ``output`` are the agent's own, to report a record
-        that is missing or cut short."""
-        summary = {"success": False, "stage_reached": "none", "writes_ok": 0}
+        """Finish replaying the agent's record into the ground truth and the
+        ledger (attack_start, its plans, per-step plan_step, the Modbus writes,
+        the foothold, attack_end): what the live poll has not read yet. ``rc``
+        and ``output`` are the agent's own, to report a record that is missing
+        or cut short."""
+        summary = self._summary
         if ctx.gt is None:
             return summary
-        seen = set()
-        for line in ctx.exec_text(self.node, f"cat {self.RECORD}").splitlines():
-            line = line.strip()
-            if not line.startswith("{"):
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            seen.add(row.get("kind"))
-            self._record_row(ctx, row, summary)
+        self._drain(ctx)
+        seen = self._seen
         tail = output[-500:].strip()
         if "attack_start" not in seen:
             # A run asked to attack whose ground truth holds no attack is scored
@@ -212,13 +249,28 @@ class PlannedAttacker(_ExploitDriver):
                 goal=row.get("goal"),
                 dwell=row.get("dwell"),
             )
+            ctx.emit(
+                "attack_start",
+                guest_t=row.get("t"),
+                mode=row.get("mode"),
+                profile=row.get("profile"),
+                goal=row.get("goal"),
+                dwell=row.get("dwell"),
+            )
+        elif kind == "attack_plan":
+            # What the attacker knows and intends, not something it did: on the
+            # ledger for the dashboard, not in the ground truth.
+            plan = ("target", "sequence", "candidates", "blocked", "reason")
+            ctx.emit("attack_plan", guest_t=row.get("t"), **{k: row.get(k) for k in plan})
         elif kind == "plan_step":
             entry = {
                 k: row.get(k)
                 for k in ("node", "stage", "attck", "ok", "chosen_among", "target", "writes")
             }
             ctx.gt.record("plan_step", t=row.get("t"), mode=row.get("mode"), **entry)
-            ctx.emit("plan_step", guest_t=row.get("t"), **entry)
+            ctx.emit(
+                "plan_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **entry
+            )
             # Steps succeed in stage order, so the last one that did is how far
             # the attack got, should the agent never report its end.
             if row.get("ok"):
@@ -260,6 +312,7 @@ class PlannedAttacker(_ExploitDriver):
                 stage_reached=row.get("stage_reached"),
                 writes_ok=row.get("writes_ok", 0),
             )
+            ctx.emit("attack_end", guest_t=row.get("t"), **summary)
 
 
 class ReconAttacker(PlannedAttacker):
@@ -319,7 +372,17 @@ class ReconAttacker(PlannedAttacker):
                 modbus_ok=row.get("modbus_ok"),
             )
             ctx.gt.record("recon", t=row.get("t"), **fields)
-            ctx.emit("recon", guest_t=row.get("t"), **fields)
+            # The dashboard shows what recon found in full: what the attacker
+            # knows of the target is the point of this scenario.
+            found = dict(
+                hosts=row.get("hosts"),
+                modbus_port=row.get("modbus_port"),
+                registers=row.get("registers"),
+            )
+            ctx.emit("recon", guest_t=row.get("t"), **fields, **found)
+            return
+        if row.get("kind") == "belief":
+            ctx.emit("attacker_belief", guest_t=row.get("t"), tree=row.get("tree"))
             return
         super()._record_row(ctx, row, summary)
 
@@ -377,7 +440,13 @@ class RedConsole(GuestAgent):
                 ctx.gt.record("attack_start", t=row.get("t"), mode=self.MODE)
             step = dict(step=row.get("step"), ok=row.get("ok"), operator=row.get("operator"))
             ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
-            ctx.emit("red_step", guest_t=row.get("t"), **step)
+            ctx.emit(
+                "red_step",
+                guest_t=row.get("t"),
+                stage=row.get("stage"),
+                observed=observed(row.get("phases")),
+                **step,
+            )
             for e in row.get("phases") or []:
                 if e.get("phase") != "modbus_write":
                     continue

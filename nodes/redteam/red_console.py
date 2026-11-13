@@ -121,6 +121,10 @@ class Bench:
             s["last"] = {k: r[k] for k in ("t", "ok", "rc")} if r else None
             # Advice, not a gate: the team may try a step out of order and see it fail.
             s["ready"] = all(n in done for n in s.get("needs") or [])
+            # One word for where the step stands, as the control dashboard says it.
+            s["outcome"] = (
+                ("done" if r["ok"] else "failed") if r else ("ready" if s["ready"] else "waiting")
+            )
             steps.append(s)
         return {"now": round(self.clock(), 3), "steps": steps, "history": history}
 

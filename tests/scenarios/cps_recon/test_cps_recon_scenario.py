@@ -66,7 +66,11 @@ class FakeCtx:
         return (b"", b"", 0)
 
     def exec_text(self, node, cmd):
-        return self.record_text
+        # As `tail -n +N` over the record: from line N on, each line ended by the
+        # newline the agent writes after every row.
+        start = int(cmd.split("tail -n +", 1)[1].split()[0]) if "tail -n +" in cmd else 1
+        lines = [line for line in self.record_text.split("\n") if line]
+        return "".join(line + "\n" for line in lines[start - 1 :])
 
     def emit(self, kind, **f):
         self.ledger.append((kind, f))
@@ -78,7 +82,9 @@ class Reconstruction(unittest.TestCase):
 
     RECORD = [
         {"kind": "recon", "t": 1.0, "stage": "it", "foothold": {"ip": "10.10.0.20", "port": 8080}},
-        {"kind": "recon", "t": 2.0, "stage": "ot", "engine_ip": "10.20.0.20", "modbus_ok": True},
+        {"kind": "recon", "t": 2.0, "stage": "ot", "engine_ip": "10.20.0.20", "modbus_ok": True,
+         "modbus_port": 5020, "registers": {"0": 20, "2": 0}},
+        {"kind": "belief", "t": 2.5, "tree": {"id": "via_hmi", "children": [{"id": "it_access"}]}},
         {"kind": "attack_start", "t": 3.0, "mode": "planner:opportunistic"},
         {"kind": "plan_step", "t": 4.0, "mode": "planner:opportunistic", "node": "it_access",
          "stage": "it_access", "ok": True, "phases": []},
@@ -89,6 +95,19 @@ class Reconstruction(unittest.TestCase):
         {"kind": "attack_end", "t": 6.0, "mode": "planner:opportunistic", "success": True,
          "stage_reached": "impact", "writes_ok": 1},
     ]  # fmt: skip
+
+    def test_the_dashboard_gets_what_recon_found_and_the_tree_it_built(self):
+        ctx = FakeCtx("\n".join(json.dumps(r) for r in self.RECORD))
+        attack.ReconAttacker("opportunistic", "10.10.0.0/24").attack(ctx)
+        ot = [f for k, f in ctx.ledger if k == "recon" and f["stage"] == "ot"][0]
+        self.assertEqual((ot["modbus_port"], ot["registers"]), (5020, {"0": 20, "2": 0}))
+        belief = [f for k, f in ctx.ledger if k == "attacker_belief"]
+        self.assertEqual(belief[0]["tree"]["id"], "via_hmi")
+        self.assertNotIn(
+            "belief",
+            [r["kind"] for r in ctx.gt.rows],
+            "what the attacker believes is not something that happened",
+        )
 
     def test_host_reconstructs_recon_and_attack(self):
         ctx = FakeCtx("\n".join(json.dumps(r) for r in self.RECORD))

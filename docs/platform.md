@@ -216,6 +216,7 @@ A campaign is a list of **units**, run in order on one ledger.
 make dashboard            # every scenario's runs and campaigns under output/ (127.0.0.1:8765)
 make cps-dashboard        # only the cps runs
 make cps-advisor-dashboard  # only the cps-advisor runs
+make cps-recon-dashboard  # only the cps-recon runs
 ```
 
 `cyberrange/core/dashboard.py` only reads: the server has no endpoint that
@@ -227,20 +228,52 @@ changes anything, in the lab or on disk. It shows two kinds of content.
 - campaign progress and ETA (fixed-length phases are flagged `timed`);
 - the queue;
 - the current run's phases;
-- results, with a mean [95% CI] tab.
+- one time bar for the selected run: its stops are the facts the scenario's
+  panel marks, and every time-aware view (the structure views and the panel's
+  cards) is drawn as of the stop it selects, or live;
+- results, with a mean [95% CI] tab. A standalone run is scored when it ends
+  (`run_metrics` on its own ledger, from `Scenario.metrics`); a campaign scores
+  each of its runs itself.
+
+Each section is drawn on its own: one that throws shows its error in its card
+and the others are drawn as usual, and an event the page cannot fold is skipped
+rather than stalling the ledger.
 
 A ledger that is open keeps its file's modification time fresh
 (`progress.HEARTBEAT_S`), so a campaign busy in a step that emits nothing is
 still shown as running; one whose writer died turns "interrupted" after
 `ledgers.STALE_S`.
 
-**Per scenario**, drawn by the scenario's `panel.js` and not by the page — the
-hooks are `queue` (its columns of the run table), `detail` (the selected run),
-`results` (`{tabs: [{id, label}], render(tab, aggregate, table)}`, its tabs
-next to the mean [95% CI] one) and `graph` (its structure views):
+**Per scenario**, drawn by the scenario's `panel.js` and not by the page. The
+page calls the panel's factory once with its helpers (`h`, `svg`, `$`, `num`,
+`dur`, `clock`, `queueTable`, …); every panel is served in one script, so a
+panel uses only these and its own names, never another panel's. The hooks, all
+optional:
 
-- **CPS:** the plant voltage chart, findings, and the topology, knowledge graph and attack tree with the response decisions over time.
+| hook | what the panel does with it |
+|---|---|
+| `queue()` | its columns of the run table, through `ui.queueTable` |
+| `detail(run)` | chips, chart and table of the selected run |
+| `chart(run)` | the selected run's chart |
+| `reduce(run, ev)` | folds the event kinds only it knows into `run.x` |
+| `cards: [{id, title, sub, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live) |
+| `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches, `origin(run)` the time the bar counts from |
+| `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one |
+
+`tests/core/test_panels.py` checks the contract and draws an empty run and a run
+with every event kind through every hook of every panel.
+
+- **CPS:** the plant voltage chart, findings and score; the **Attacker · Defender**
+  card — what each side is doing and what it can see (the attacker from its own
+  record: steps, plans, recon, observations; the defender from its telemetry,
+  belief and decisions), a lane timeline of both sides and the plant, and a
+  truth-vs-belief table per attack step; and the topology, knowledge graph and
+  attack tree, the tree carrying both the defender's belief and the attacker's
+  progress.
 - **CPS advisor:** the CPS panel (its `panel.js` delegates to it).
+- **CPS recon:** the CPS panel, with the attack tree framing the real nodes the
+  attacker does not know (from the belief tree it puts on the ledger) and naming
+  the ones it believes in that are not real.
 - **MQTT:** MTD actions per knob coloured by outcome, delivery gaps, and the coordinator's actions table.
 
 ### A run kept open: `--playground`

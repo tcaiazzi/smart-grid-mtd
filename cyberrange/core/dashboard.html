@@ -125,6 +125,20 @@ td.wrap { white-space: normal; min-width: 280px; }
 .sug details { margin: 6px 0; font-size: 13px; }
 .sug summary { cursor: pointer; color: var(--ink-2); }
 .team { font-weight: 600; }
+.timebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
+.timebar label { display: inline-flex; align-items: center; gap: 6px; }
+/* Neutral blocks a panel's cards are built from: two sides, key/value lines, lanes. */
+.cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }
+.side { border-top: 3px solid var(--axis); padding-top: 6px; min-width: 0; }
+.side.red { border-top-color: var(--critical); }
+.side.blue { border-top-color: var(--s1); }
+.side h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 10px 0 4px; font-weight: 600; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 13px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.lanes { position: relative; margin-top: 12px; }
+.lanes svg { display: block; width: 100%; overflow: visible; }
 </style>
 </head>
 <body>
@@ -140,6 +154,11 @@ td.wrap { white-space: normal; min-width: 280px; }
 
   <section class="tiles" id="tiles"></section>
   <div class="bar" id="pbar" role="img" aria-label="campaign progress"></div>
+  <div class="timebar" id="timebar" style="display:none">
+    <label for="g-time">state of the run at <b id="g-tlabel">live</b></label>
+    <input type="range" id="g-time" min="0" max="0" value="0" step="1">
+    <button type="button" id="g-live" title="Follow the latest state">Live</button>
+  </div>
 
   <div class="grid2">
     <section class="card">
@@ -163,7 +182,9 @@ td.wrap { white-space: normal; min-width: 280px; }
     </section>
   </div>
 
-  <section class="card" id="graph-card" style="margin-top:16px">
+  <div id="cards" style="margin-top:16px"></div>
+
+  <section class="card" id="graph-card">
     <h2>Topology · knowledge graph · attack tree</h2>
     <p class="sub" id="g-sub">Select a run.</p>
     <div class="gbar">
@@ -172,17 +193,10 @@ td.wrap { white-space: normal; min-width: 280px; }
         <button type="button" data-view="kg" aria-pressed="false">Knowledge graph</button>
         <button type="button" data-view="tree" aria-pressed="false">Attack tree</button>
       </div>
-      <label class="sub" id="g-inputs-wrap"><input type="checkbox" id="g-inputs" checked> hide input registers</label>
-      <span class="spacer"></span>
-      <label class="sub" for="g-time">response state at <b id="g-tlabel">live</b></label>
-      <input type="range" id="g-time" min="0" max="0" value="0" step="1">
-      <button type="button" id="g-live" title="Follow the latest state">Live</button>
+      <span id="g-options"></span>
     </div>
     <div class="legend" id="g-legend"></div>
     <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
-    <h2 style="margin-top:12px">Response decisions</h2>
-    <p class="sub">Decisions taken up to the selected time, with the justification the policy gave.</p>
-    <div class="scroll"><table id="g-decisions"></table></div>
   </section>
 
   <section class="card" id="op-card" style="margin-top:16px;display:none">
@@ -225,7 +239,7 @@ function runOf(id) {
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
       states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
-      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false };
+      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false, x: {} };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -238,7 +252,7 @@ function resetRunDetail(r, ev) {
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
     states: [], decisions: [], actions: [], respond: ev.respond || null,
-    approvals: {}, teams: [], playground: !!ev.playground });
+    approvals: {}, teams: [], playground: !!ev.playground, x: {} });
 }
 
 function apply(ev) {
@@ -315,6 +329,9 @@ function apply(ev) {
     case "aggregate": S.aggregate = { detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
     case "campaign_end": S.ended = ev; break;
   }
+  // The scenario folds the event kinds only it knows into run.x, after the page
+  // has taken what it draws itself.
+  if (r) panel()?.reduce?.(r, ev);
 }
 
 // ── ETA ─────────────────────────────────────────────────────────────────────
@@ -385,6 +402,13 @@ function statusBadge(st) {
   const [c, label] = STATUS[st] || ["var(--axis)", st || "—"];
   return h("span", { class: "badge" }, h("span", { class: "dot", style: `background:${c}` }), label);
 }
+const SVGNS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+}
 
 // ── render ──────────────────────────────────────────────────────────────────
 function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).status; }
@@ -394,9 +418,20 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 // (graph.js is served before this script, so it cannot call anything here), and
 // the page invokes it once with the handles below. A scenario without a panel
 // still gets the neutral views: ledger, phases, runs, metrics, aggregate.
+//
+// The hooks a panel may return, all optional:
+//   queue()                     columns of the run queue, through ui.queueTable
+//   detail(run)                 chips, chart and table of the selected run
+//   chart(run)                  the run's chart (null: no run selected)
+//   reduce(run, ev)             fold the scenario's own event kinds into run.x
+//   cards: [{id, title, sub, render(box, run, t)}]   cards of its own, drawn at
+//                               the time the run's time bar selects (null = live)
+//   graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree,
+//           options?, origin?}  the structure card; marks also drive the time bar
+//   results: {tabs, render}     tabs of the campaign aggregate
 const panelApi = {
   get S() { return S; },
-  $, h, num, dur, clock, now, statusBadge, queueTable, stepCell,
+  $, h, svg, num, dur, clock, now, statusBadge, queueTable, stepCell,
   shownRunId: () => shownRunId(),
   select(id) { selectedRun = id; render(); },
   render: () => render(),
@@ -409,11 +444,34 @@ const panels = Object.fromEntries(
 const ledgerScenario = () => (ledgers.find(l => l.id === cur.id) || {}).scenario;
 const panel = () => panels[S.scenario || ledgerScenario()] || null;
 
+// One section that throws must not take the others with it: its error is shown
+// in its own card, the rest of the page is drawn as usual.
+function guard(id, fn) {
+  const box = $(id), card = box.closest(".card") || box;
+  let note = card.querySelector(":scope > .err.guard");
+  try {
+    fn();
+    if (note) note.remove();
+  } catch (e) {
+    console.error(id, e);
+    if (!note) { note = h("div", { class: "err guard" }); card.append(note); }
+    note.textContent = `this view failed to draw: ${e && e.message || e}`;
+  }
+}
+
 function render() {
   const lst = ledgerStatus();
   $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
   if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
-  renderTiles(lst); renderQueue(); renderDetail(); renderResults(); renderGraph(); renderOperator(); renderTeams();
+  guard("tiles", () => renderTiles(lst));
+  guard("queue", renderQueue);
+  guard("detail", renderDetail);
+  guard("results", renderResults);
+  guard("timebar", renderTimebar);
+  guard("cards", renderCards);
+  guard("graph-card", renderGraph);
+  guard("op-card", renderOperator);
+  guard("teams-card", renderTeams);
 }
 
 function counts() {
@@ -561,7 +619,9 @@ function renderResults() {
     $("r-tabs").replaceChildren(...tabs.map(t => h("button", { type: "button", "aria-pressed": String(t.id === resultsTab),
       onclick: () => { resultsTab = t.id; renderResults(); } }, t.label)));
   }
-  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run" ? "Results are aggregated for campaigns; a single run is scored by its scenario's metrics command." : "No scored runs yet")))); return; }
+  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run"
+    ? (Object.values(S.runs).some(r => r.metrics) ? "This run is scored in its detail above; an aggregate is a campaign's." : "A single run is scored when it ends; an aggregate is a campaign's.")
+    : "No scored runs yet")))); return; }
   const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
   if (resultsTab === "ci" && hasCi) {
     const gk = a.ci.length && "group" in a.ci[0] ? "group" : "mode";
@@ -583,7 +643,7 @@ function renderResults() {
 // ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
 const QS = new URLSearchParams(location.search);
 let wantRun = QS.get("run"), gView = ["topology", "kg", "tree"].includes(QS.get("view")) ? QS.get("view") : "topology";
-let gHideInputs = true, gTimeIdx = null, gSig = "";
+let gOpts = null, gTimeIdx = null, gSig = "";
 const gStruct = {};
 const gTip = {
   show(ev, title, rows) {
@@ -603,12 +663,66 @@ async function loadStructure(lid, id) {
   catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
   gSig = ""; renderGraph();
 }
+// The time the run's time bar selects: its stops are the panel's marks (the
+// facts of the run, in order), its last stop is live (t = null).
+function runTime(r) {
+  const mk = panel()?.graph?.marks;
+  const marks = r && mk ? mk(r) : [], N = marks.length;
+  const idx = gTimeIdx == null ? N : Math.min(gTimeIdx, N);
+  const t = idx >= N ? null : (idx === 0 ? (marks[0] ? marks[0].t - 1e-3 : null) : marks[idx - 1].t);
+  return { marks, N, idx, t };
+}
 function relLabel(r, t) {
   if (t == null) return "live";
-  const w0 = r.writes[0]?.t;
-  return w0 != null ? `${t - w0 >= 0 ? "+" : ""}${num(t - w0, 2)} s from the first malicious write`
+  const o = panel()?.graph?.origin?.(r);
+  return o && o.t != null ? `${t - o.t >= 0 ? "+" : ""}${num(t - o.t, 2)} s ${o.label}`
     : (r.start_t ? `+${dur(t - r.start_t)} into the run` : clock(t));
 }
+function renderTimebar() {
+  const id = shownRunId(), r = id ? S.runs[id] : null, p = panel(), T = runTime(r);
+  $("timebar").style.display = r && (p?.graph || p?.cards?.length) ? "" : "none";
+  const slider = $("g-time");
+  slider.max = String(T.N); slider.value = String(T.idx); slider.disabled = T.N === 0;
+  $("g-tlabel").textContent = T.idx >= T.N ? "live" : T.idx === 0 ? "before the first event"
+    : `${relLabel(r, T.t)} (${T.marks[T.idx - 1].kind})`;
+}
+
+// A panel's own cards, each drawn at the time the bar selects and guarded on
+// its own: one that throws shows its error and leaves the others drawn.
+function renderCards() {
+  const box = $("cards"), list = panel()?.cards || [];
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  const want = list.map(c => `card-${c.id}`);
+  for (const el of [...box.children]) if (!want.includes(el.id)) el.remove();
+  box.style.display = r && list.length ? "" : "none";
+  if (!r) return;
+  const t = runTime(r).t;
+  for (const c of list) {
+    let sec = $(`card-${c.id}`);
+    if (!sec) {
+      sec = h("section", { class: "card", id: `card-${c.id}` },
+        h("h2", {}, c.title), h("p", { class: "sub" }, c.sub || ""), h("div", { class: "cbody" }));
+      box.append(sec);
+    }
+    guard(`card-${c.id}`, () => c.render(sec.querySelector(".cbody"), r, t));
+  }
+}
+
+// Switches a graph panel declares ({id, label, view?, default}), shown above the
+// views they apply to and passed to its draw functions by id.
+function graphOpts(g) {
+  if (!gOpts) { gOpts = {}; for (const o of g.options || []) gOpts[o.id] = !!o.default; }
+  const shown = (g.options || []).filter(o => !o.view || o.view === gView);
+  const wrap = $("g-options"), sig = shown.map(o => o.id).join("|");
+  if (wrap.dataset.sig !== sig) {
+    wrap.dataset.sig = sig;
+    wrap.replaceChildren(...shown.map(o => h("label", { class: "sub" },
+      h("input", { type: "checkbox", checked: gOpts[o.id] ? "" : null,
+        onchange: e => { gOpts[o.id] = e.target.checked; renderGraph(); } }), ` ${o.label}`)));
+  }
+  return gOpts;
+}
+
 function renderGraph() {
   // The card exists only for a scenario that declares a graph to draw in it.
   const g = panel()?.graph;
@@ -616,21 +730,16 @@ function renderGraph() {
   if (!g) return;
   const id = shownRunId(), r = id ? S.runs[id] : null;
   document.querySelectorAll("#g-tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === gView)));
-  $("g-inputs-wrap").style.display = gView === "kg" ? "" : "none";
+  const opts = graphOpts(g);
   if (!r) {
-    if (gSig !== "none") { gSig = "none"; $("g-sub").textContent = "Select a run."; ["g-view", "g-legend", "g-decisions"].forEach(x => $(x).replaceChildren()); }
+    if (gSig !== "none") { gSig = "none"; $("g-sub").textContent = "Select a run."; ["g-view", "g-legend"].forEach(x => $(x).replaceChildren()); }
     return;
   }
   const k = `${cur.id}|${id}`, st = gStruct[k];
   if (!st) loadStructure(cur.id, id);
-  const marks = g.marks(r), N = marks.length;
-  const idx = gTimeIdx == null ? N : Math.min(gTimeIdx, N);
-  const t = idx >= N ? null : (idx === 0 ? (marks[0] ? marks[0].t - 1e-3 : null) : marks[idx - 1].t);
-  const slider = $("g-time");
-  slider.max = String(N); slider.value = String(idx); slider.disabled = N === 0;
-  $("g-tlabel").textContent = idx >= N ? "live" : idx === 0 ? "before the first event" : `${relLabel(r, t)} (${marks[idx - 1].kind})`;
+  const T = runTime(r);
   const width = $("g-view").clientWidth;
-  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, gHideInputs, idx, N,
+  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, opts, T.idx, T.N,
     r.states.length, r.actions.length, r.writes.length, Math.round(width / 40)]);
   if (sig === gSig) return;
   gSig = sig;
@@ -641,21 +750,12 @@ function renderGraph() {
   $("g-sub").textContent = `${resp} · ${st.source === "rebuilt"
     ? "structure rebuilt from today's lab model: this run predates kg.json, it may differ from what ran"
     : "structure recorded with the run (kg.json, tree.json)"}`;
-  const ov = g.overlayAt(r, t);
+  const ov = g.overlayAt(r, T.t);
   const draw = { topology: g.drawTopology, kg: g.drawKG, tree: g.drawTree }[gView];
   let legend = [];
-  try { legend = draw($("g-view"), st, ov, { width, hideInputs: gHideInputs, tip: gTip }) || []; }
+  try { legend = draw($("g-view"), st, ov, { width, tip: gTip, ...opts }) || []; }
   catch (e) { $("g-view").replaceChildren(h("div", { class: "err" }, `could not draw: ${e.message}`)); }
   $("g-legend").replaceChildren(...legend.map(([c, label]) => h("span", {}, h("span", { class: "lk", style: `background:${c};height:3px` }), label)));
-  const w0 = r.writes[0]?.t ?? r.start_t;
-  const rows = ov.decisions.map(d => h("tr", {},
-    h("td", { class: "num" }, w0 ? `${d.t - w0 >= 0 ? "+" : ""}${num(d.t - w0, 2)} s` : clock(d.t)),
-    h("td", {}, d.policy || "—"), h("td", {}, d.actions.join(", ") || "—"),
-    h("td", { class: "wrap" }, d.rationale || "—")));
-  $("g-decisions").replaceChildren(
-    h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "policy"), h("th", {}, "actions"), h("th", {}, "justification"))),
-    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" },
-      policy ? "No decision yet" : "No responder in this run"))));
 }
 
 // ── people: what the defender asked its operator, what the teams did ────────
@@ -761,16 +861,19 @@ async function pollEvents() {
     const id = cur.id, res = await getJSON(`/api/events?id=${encodeURIComponent(id)}&since=${cur.since}`);
     if (id !== cur.id) return;
     if (res.next < cur.since) { S = fresh(); cur.since = 0; return; }
-    for (const ev of res.events) apply(ev);
+    // An event the page cannot fold is skipped, not retried: retrying it would
+    // stall this ledger on it forever and re-apply the events before it.
+    for (const ev of res.events) {
+      try { apply(ev); } catch (e) { console.error("event", ev.seq, ev.kind, e); }
+    }
     cur.since = res.next;
   } catch (e) { /* keep the frame */ }
 }
 
 $("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
 document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
-$("g-inputs").addEventListener("change", e => { gHideInputs = e.target.checked; renderGraph(); });
-$("g-time").addEventListener("input", e => { const v = +e.target.value; gTimeIdx = v >= +e.target.max ? null : v; renderGraph(); });
-$("g-live").addEventListener("click", () => { gTimeIdx = null; renderGraph(); });
+$("g-time").addEventListener("input", e => { const v = +e.target.value; gTimeIdx = v >= +e.target.max ? null : v; render(); });
+$("g-live").addEventListener("click", () => { gTimeIdx = null; render(); });
 $("theme").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
     ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

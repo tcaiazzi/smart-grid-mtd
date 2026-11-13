@@ -58,10 +58,13 @@ class AttackPlanner:
         return ordered + [leaf]
 
     # ── execution ──────────────────────────────────────────────────────────────
-    def run(self, exec_step, sleep=lambda s: None, record=None, dwell=0.0):
+    def run(self, exec_step, sleep=lambda s: None, record=None, dwell=0.0, on_plan=None):
         """Drive the episode. ``exec_step(node) -> {"ok", "writes", ...}``.
-        Returns a summary dict."""
+        ``record(**step)`` is told every step, ``on_plan(**plan)`` every choice
+        of an impact to aim at: what was open, what was closed, and the steps
+        that lead there. Returns a summary dict."""
         record = record or (lambda **f: None)
+        on_plan = on_plan or (lambda **f: None)
         done, failed, log = set(), set(), []
         writes_ok = 0
         steps_run = 0
@@ -69,16 +72,28 @@ class AttackPlanner:
         tried_leaves = set()
 
         while steps_run < self.max_steps:
-            leaf = next(
-                (
-                    c
-                    for c in self.impact_candidates()
-                    if c not in tried_leaves and not (set(self.sequence_for(c)) & failed)
-                ),
-                None,
-            )
-            if leaf is None:
+            open_leaves = [
+                c
+                for c in self.impact_candidates()
+                if c not in tried_leaves and not (set(self.sequence_for(c)) & failed)
+            ]
+            if not open_leaves:
                 break  # no feasible impact left: defended
+            leaf = open_leaves[0]
+            on_plan(
+                target=leaf,
+                sequence=self.sequence_for(leaf),
+                candidates=[
+                    {
+                        "node": c,
+                        "impact": self.idx[c].get("impact"),
+                        "detectability": S.DETECTABILITY.get(c),
+                    }
+                    for c in open_leaves
+                ],
+                blocked=sorted(failed),
+                reason="replan" if tried_leaves else "initial",
+            )
             tried_leaves.add(leaf)
             for node in self.sequence_for(leaf):
                 if node in done:
@@ -96,7 +111,7 @@ class AttackPlanner:
                     "stage": S.stage_of(node),
                     "attck": self.idx[node].get("attck"),
                     "ok": ok,
-                    "chosen_among": [leaf],
+                    "chosen_among": open_leaves,
                     "target": leaf,
                     "writes": outcome.get("writes", 0),
                 }

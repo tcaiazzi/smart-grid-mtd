@@ -402,6 +402,15 @@ class Advising(unittest.TestCase):
         self.assertEqual((view["policy"], view["mode"]), ("solver", "advise"))
         self.assertEqual([f["klass"] for f in view["findings"]][0], "policy_violation")
         self.assertIn("breaker_open", {n["node"] for n in view["tree"]})
+        # The whole tree, so the console draws the belief on it, believed or not.
+        shape, ids = view["structure"], set()
+        stack = [shape]
+        while stack:
+            n = stack.pop()
+            ids.add(n["id"])
+            stack += n["children"]
+        self.assertEqual(shape["id"], "impact")
+        self.assertTrue({n["node"] for n in view["tree"]} <= ids)
         self.assertTrue(view["decisions"])
         self.assertTrue(view["approvals"]["pending"])
         json.dumps(view)

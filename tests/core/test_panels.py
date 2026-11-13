@@ -1,14 +1,15 @@
 """The dashboard panel contract, checked by actually running the panels.
 
-No JavaScript in this repo is tested, and the panels are the one piece where a
-mistake is both easy and invisible: a factory that throws, or returns something
-the page does not expect, degrades the dashboard silently — the scenario's views
-simply do not appear.
+The panels are the one piece where a mistake is both easy and invisible: a
+factory that throws, or returns something the page does not expect, degrades the
+dashboard silently — the scenario's views simply do not appear — and a panel
+that leans on another panel's private names breaks only when a run is drawn.
 
 This loads every scenario's panel.js the way the page does (the file deposits a
-factory in window.CyberRangePanels; the page invokes it with its own handles)
-and checks what comes back. It needs node, and skips itself when node is absent
-rather than pretending to pass.
+factory in window.CyberRangePanels; the page invokes it with its own handles),
+checks what comes back, and then draws a fake run through every hook on a
+minimal DOM. It needs node, and skips itself when node is absent rather than
+pretending to pass.
 
 Run: `.venv/bin/python -m pytest tests/core/test_panels.py`
 """
@@ -17,6 +18,7 @@ import json
 import shutil
 import subprocess
 import unittest
+from pathlib import Path
 
 from cyberrange.core import registry
 
@@ -31,7 +33,7 @@ const noop = () => undefined;
 const api = {
   S: { scenario: null, runs: {}, order: [] },
   $: () => ({ replaceChildren: noop, style: {}, textContent: "", innerHTML: "" }),
-  h: () => ({}), num: noop, dur: noop, clock: noop, now: () => 0,
+  h: () => ({}), svg: () => ({}), num: noop, dur: noop, clock: noop, now: () => 0,
   statusBadge: () => ({}), shownRunId: noop, select: noop, render: noop,
   stepCell: () => ({}),
   // Records what a panel asks the shared table to draw, instead of drawing it.
@@ -46,8 +48,14 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
 console.log(JSON.stringify(out));
 """
 
-KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results"}
+KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards"}
 GRAPH_KEYS = {"index", "overlayAt", "marks", "drawTopology", "drawKG", "drawTree"}
+GRAPH_OPTIONAL = {"options", "origin"}
+
+# A page reduced to what panels touch (panels call h, $, num, dur, clock and S by
+# name) and a run as the page's reducer leaves it, with one of every event kind
+# the cps family puts on the ledger folded in through the panel's own reduce().
+DRAW_HARNESS = (Path(__file__).parent / "panel_draw_harness.js").read_text()
 
 
 @unittest.skipIf(NODE is None, "node is not installed; the panel contract is unchecked")
@@ -149,7 +157,63 @@ console.log(JSON.stringify(out));""",
                 continue
             with self.subTest(scenario=name):
                 self.assertEqual(
-                    GRAPH_KEYS, keys, f"{name}'s graph does not match what the page calls on it"
+                    set(), GRAPH_KEYS - keys, f"{name}'s graph lacks hooks the page calls on it"
+                )
+                self.assertEqual(
+                    set(),
+                    keys - GRAPH_KEYS - GRAPH_OPTIONAL,
+                    f"{name}'s graph exposes hooks the page never calls",
+                )
+
+    def test_a_card_has_an_id_a_title_and_draws(self):
+        """The page lays out one card per entry and calls render() at the time the
+        bar selects: a card without an id is drawn twice, one without render is an
+        empty box."""
+        for name in registry.names():
+            path = registry.get(name).panel_js()
+            if path is None:
+                continue
+            script = (HARNESS % open(path).read()).replace(
+                "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
+                "(panel.cards || [])"
+                ".map(c => ({ id: c.id, title: c.title, render: typeof c.render }))",
+            )
+            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr.strip())
+            cards = json.loads(result.stdout).get(name, [])
+            with self.subTest(scenario=name):
+                self.assertEqual(len(cards), len({c["id"] for c in cards}), "card ids repeat")
+                for card in cards:
+                    self.assertTrue(card["id"] and card["title"], f"unusable card {card}")
+                    self.assertEqual("function", card["render"], f"card {card['id']} cannot draw")
+
+    def test_every_panel_draws_a_run(self):
+        """Every hook of every panel, run on an empty run and on one with every
+        event kind of the cps family. All panels share one script on the page, so
+        a panel that uses a name only another panel defines passes every shape
+        test above and still throws the first time a run is selected."""
+        sources = [
+            open(registry.get(n).panel_js()).read()
+            for n in registry.names()
+            if registry.get(n).panel_js()
+        ]
+        # Each panel alone, then all of them together as the page serves them.
+        for label, chunk in [(n, [src]) for n, src in zip(registry.names(), sources)] + [
+            ("all panels", sources)
+        ]:
+            result = subprocess.run(
+                [NODE, "-e", DRAW_HARNESS.replace("/* PANELS */", "\n".join(chunk))],
+                capture_output=True,
+                text=True,
+            )
+            with self.subTest(panels=label):
+                self.assertEqual(0, result.returncode, result.stderr.strip())
+                failures = {k: v for k, v in json.loads(result.stdout).items() if v}
+                self.assertEqual(
+                    {},
+                    failures,
+                    "a panel throws while drawing a run; on the page that view stays blank "
+                    "and shows its error instead",
                 )
 
     def test_a_results_panel_names_its_tabs_and_draws_them(self):
@@ -178,20 +242,27 @@ console.log(JSON.stringify(out));""",
                     "ci", [t["id"] for t in results["tabs"]], "'ci' is the page's own tab"
                 )
 
-    def test_the_page_script_parses(self):
-        """A syntax error in the page is a blank dashboard and nothing else says so."""
+    def test_the_page_scripts_parse(self):
+        """A syntax error in a page is a blank page and nothing else says so: the
+        dashboard here, and the two team consoles served in the lab."""
         import re
         import tempfile
 
         from cyberrange.core import paths
 
-        html = (paths.REPO_ROOT / "cyberrange" / "core" / "dashboard.html").read_text()
-        scripts = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
-        self.assertTrue(scripts, "no inline script found in dashboard.html")
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
-            f.write("\n".join(scripts))
-        result = subprocess.run([NODE, "--check", f.name], capture_output=True, text=True)
-        self.assertEqual(0, result.returncode, result.stderr.strip())
+        for page in (
+            "cyberrange/core/dashboard.html",
+            "nodes/soc/soc_console.html",
+            "nodes/redteam/red_console.html",
+        ):
+            with self.subTest(page=page):
+                html = (paths.REPO_ROOT / page).read_text()
+                scripts = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
+                self.assertTrue(scripts, f"no inline script found in {page}")
+                with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
+                    f.write("\n".join(scripts))
+                result = subprocess.run([NODE, "--check", f.name], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr.strip())
 
 
 if __name__ == "__main__":

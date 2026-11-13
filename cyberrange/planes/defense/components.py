@@ -38,7 +38,10 @@ def _finding(ev):
         klass=ev.get("klass"),
         src=ent.get("src"),
         register=ent.get("register"),
+        name=ent.get("name"),
         confidence=ev.get("confidence"),
+        # the attack step an IT finding confirms; the defender's view of it
+        maps_to=ev.get("maps_to"),
         guest_t=ev.get("t"),
     )
 
@@ -256,9 +259,17 @@ class SocAnalytics(GuestAgent):
                 "guest_t": ev.get("belief_t"),
             }
         if kind == "decision":
-            return "decision", {
-                k: ev.get(k) for k in ("policy", "actions", "rationale", "covers", "needs_approval")
-            } | {"guest_t": ev.get("decided_t")}
+            keys = (
+                "policy",
+                "actions",
+                "rationale",
+                "covers",
+                "needs_approval",
+                "cost_terms",
+                "trigger_klass",
+                "trigger_t",
+            )
+            return "decision", {k: ev.get(k) for k in keys} | {"guest_t": ev.get("decided_t")}
         if kind == "action":
             return "action", dict(
                 id=ev.get("id"),

@@ -190,6 +190,11 @@ la console non mostra. Anche qui ogni comando è registrato.
 che le due console tengono separato, su un'unica linea del tempo:
 
 - le fasi del run e lo stato dell'impianto;
+- la scheda **Attacker · Defender**: per ciascuna squadra cosa sta facendo e
+  cosa vede, una linea del tempo a corsie (attaccante, difensore, impianto) e,
+  per ogni passo dell'attacco, quando l'attaccante l'ha fatto e quando il
+  difensore l'ha visto; la barra del tempo sotto i riquadri la riporta a
+  qualunque istante della partita;
 - i **suggerimenti** del SOC con il loro esito (approvato, rifiutato, scaduto),
   come storico;
 - una scheda **Teams** con, in ordine di tempo, i passi del red team, le azioni

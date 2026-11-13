@@ -1,11 +1,15 @@
-// cps_graph.js — topology, knowledge-graph and attack-tree views for the CPS
-// progress dashboard (monitor/cps_dashboard.html). Served at /graph.js by
-// monitor/cps_dashboard.py. Self-contained (no libraries, no CDN); every view
-// is a pure function of (structure, overlay) that draws an SVG with a
-// deterministic layout, so a redraw never moves anything that did not change.
+// panel.js — the cps scenario's views on the platform dashboard
+// (cyberrange/core/dashboard.html, which serves every scenario's panel at /graph.js).
+//
+// The run's two sides at once: what the attacker does and knows, what the
+// defender does and believes (the "Attacker · Defender" card), on top of the
+// plant chart, the findings, and the topology / knowledge-graph / attack-tree
+// views. Self-contained (no libraries, no CDN); every structure view is a pure
+// function of (structure, overlay) drawing an SVG with a deterministic layout, so
+// a redraw never moves anything that did not change.
 //
 //   structure = /api/structure → {source, kg: networkx node-link, tree: {attack_tree, defense, countermeasures}}
-//   overlay   = CPSGraph.overlayAt(run, t) → response state at time t
+//   overlay   = overlayAt(run, t) → the defender's response state and the attacker's progress at time t
 "use strict";
 (function () {
   const NS = "http://www.w3.org/2000/svg";
@@ -69,24 +73,43 @@
   }
 
   // ── response state at time t ──────────────────────────────────────────────
+  // Every fact of either side is a stop of the run's time bar.
   function marks(run) {
     const m = [];
-    for (const s of run.states || []) m.push({ t: s.t, kind: "state" });
+    for (const s of run.states || []) m.push({ t: s.t, kind: "belief update" });
     for (const d of run.decisions || []) m.push({ t: d.t, kind: "decision" });
-    for (const a of run.actions || []) m.push({ t: a.t, kind: "action" });
-    for (const w of run.writes || []) m.push({ t: w.t, kind: "write" });
-    return m.sort((a, b) => a.t - b.t);
+    for (const a of run.actions || []) m.push({ t: a.t, kind: `${a.id} ${a.ok ? "applied" : "failed"}` });
+    for (const w of run.writes || []) m.push({ t: w.t, kind: "attacker write" });
+    const red = run.x && run.x.red;
+    if (red) {
+      for (const st of red.steps) m.push({ t: st.t, kind: `attacker ${st.node} ${st.ok ? "done" : "failed"}` });
+      for (const c of red.recon) m.push({ t: c.t, kind: `attacker recon (${c.stage})` });
+    }
+    // One stop per detector and class: a burst of identical findings is one fact.
+    const seen = new Set();
+    for (const f of run.findings || []) {
+      const k = `${f.detector}|${f.klass}`;
+      if (!seen.has(k)) { seen.add(k); m.push({ t: f.t, kind: `${f.detector}: ${f.klass}` }); }
+    }
+    return m.filter(x => x.t != null).sort((a, b) => a.t - b.t);
   }
+  const uptoT = t => x => t == null || (x && x.t != null && x.t <= t + 1e-6);
   function overlayAt(run, t) {
-    const upto = x => t == null || x.t <= t + 1e-6;
+    const upto = uptoT(t);
     const states = (run.states || []).filter(upto);
     const st = states[states.length - 1] || null;
     const applied = {};
     for (const a of run.actions || []) if (upto(a) && a.ok && a.id !== "notify" && !(a.id in applied)) applied[a.id] = a.t;
+    // What the attacker really did by t, drawn over the defender's belief.
+    const red = run.x && run.x.red, done = {}, failed = {};
+    const steps = red ? red.steps.filter(upto) : [], plans = red ? red.plans.filter(upto) : [];
+    for (const s of steps) (s.ok ? done : failed)[s.node] = s.t;
+    const target = plans.length ? plans[plans.length - 1].target : (steps.length ? steps[steps.length - 1].target : null);
     return {
       t, nodes: st ? st.nodes || {} : {}, active: st ? st.active || [] : [], hosts: st ? st.hosts || [] : [],
       next: st ? st.next || [] : [], applied, writes: (run.writes || []).filter(upto).length,
       decisions: (run.decisions || []).filter(upto),
+      red: { done, failed, target },
     };
   }
   function stateOf(ov, id) { const s = ov.nodes[id]; return s ? { state: s[0], score: s[1] } : { state: "unknown", score: 0 }; }
@@ -336,8 +359,9 @@
       const xs = n.children.map(c => pos[c.id].x);
       pos[n.id] = { x: (Math.min(...xs) + Math.max(...xs)) / 2, d };
     })(root, 0);
-    const M = 12, W = leafX - XG + 2 * M, H = (depthMax + 1) * rowH() + 10;
-    const Y = d => 8 + d * rowH();
+    // The top margin leaves room for the attacker's badge above a root node.
+    const M = 12, W = leafX - XG + 2 * M, H = (depthMax + 1) * rowH() + 20;
+    const Y = d => 18 + d * rowH();
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Attack tree", class: "graph",
       style: `max-width:${Math.max(W, 600)}px` });
     const edges = el("g"), nodes = el("g");
@@ -374,30 +398,52 @@
         });
         g.append(t); cy += CHIP;
       }
+      // The attacker's side of the same node: what it did, what it aims at,
+      // and (when it built its own tree) whether it knows the node at all.
+      const rd = ov.red || {};
+      const mark = n.id in (rd.done || {}) ? "✓ attacker" : n.id in (rd.failed || {}) ? "✗ attacker"
+        : rd.target === n.id ? "◎ target" : null;
+      if (mark) {
+        g.append(el("rect", { x: x + NW - 72, y: y - 9, width: 68, height: 16, rx: 8, fill: "var(--surface)", stroke: "var(--critical)" }));
+        g.append(el("text", { x: x + NW - 38, y: y + 3, "font-size": 10, "font-weight": 600, "text-anchor": "middle", fill: "var(--critical)" }, mark));
+      }
+      if (ov.redKnows && !ov.redKnows.has(n.id) && !(ov.redLeavesOnly && (n.children || []).length))
+        g.append(el("rect", { x: x - 4, y: y - 4, width: NW + 8, height: NH + 8, rx: 11, fill: "none",
+          stroke: "var(--critical)", "stroke-dasharray": "3 3", opacity: 0.8 }));
       nodes.append(g);
     })(root);
     svg.append(edges, nodes);
     box.replaceChildren(svg);
-    return Object.entries(STATE_STYLE).map(([k, v]) => [v.stroke, v.label]).concat([
-      ["var(--muted)", "⊘ prevented by · ↺ restored by"], ["var(--good)", "✓ countermeasure applied by the selected time"]]);
+    const legend = Object.entries(STATE_STYLE).map(([k, v]) => [v.stroke, `defender: ${v.label}`]).concat([
+      ["var(--muted)", "⊘ prevented by · ↺ restored by"], ["var(--good)", "✓ countermeasure applied by the selected time"],
+      ["var(--critical)", "attacker: ✓ done · ✗ failed · ◎ its target"]]);
+    if (ov.redKnows) {
+      legend.push(["var(--critical)", "dashed frame: real, unknown to the attacker"]);
+      const extra = [...ov.redKnows].filter(id => !T.nodes[id]);
+      if (extra.length) legend.push(["var(--warning)", `the attacker believes in nodes that are not real: ${extra.join(", ")}`]);
+    }
+    return legend;
   }
 
 
   // ── views the core page cannot draw ───────────────────────────────────
-  // Moved out of dashboard.html: only this scenario knows what a detection
-  // latency or a bus voltage means. The page's helpers (h, $, num, dur, now,
-  // statusBadge) are globals by the time this factory runs.
-function det(m, d) { return m?.detectors?.[d]; }
-function detCell(m, d) {
-  const x = det(m, d);
-  if (!m || !m.attack || !x) return h("td", { class: "muted" }, "—");
-  return h("td", { class: "num" }, x.detected ? `${num(x.latency_from_write_s, 2)} s${x.before_impact ? "" : " *"}` : "missed");
-}
-
-// The queue every scenario gets: what a run is, not what it measured. Numeric
-// metrics are shown in the order the scenario reported them, with no opinion
-// about which matter — a scenario that wants an opinion ships a panel.
+  // Only this scenario knows what a detection latency or a bus voltage means.
+  // The page's helpers (h, $, num, dur, now, statusBadge) are globals by the
+  // time this factory runs; its SVG helper comes in as ui.svg.
+  let s = null;
   const LATENCY_HINT = "latency from the first malicious write; * = after the physical impact";
+
+  function det(m, d) { return m?.detectors?.[d]; }
+  function detCell(m, d) {
+    const x = det(m, d);
+    if (!m || !m.attack || !x) return h("td", { class: "muted" }, "—");
+    return h("td", { class: "num" }, x.detected ? `${num(x.latency_from_write_s, 2)} s${x.before_impact ? "" : " *"}` : "missed");
+  }
+  function impactText(m) {
+    return !m ? "—" : !m.abnormal_frames ? "none"
+      : m.impact_persists_after_attack ? "persists"
+      : m.recovered ? `recovered ${num(m.recovery_s, 1)} s` : "yes";
+  }
 
   function queue(ui) {
     ui.queueTable({
@@ -411,188 +457,470 @@ function detCell(m, d) {
       ],
       cells: r => {
         const m = r.metrics;
-        const impact = !m ? "—" : !m.abnormal_frames ? "none"
-          : m.impact_persists_after_attack ? "persists"
-          : m.recovered ? `recovered ${num(m.recovery_s, 1)} s` : "yes";
         const fa = m ? (m.detectors?.combined?.false_alarms ?? m.false_alarms) : null;
-        return [detCell(m, "rules"), detCell(m, "model"), h("td", {}, impact),
+        return [detCell(m, "rules"), detCell(m, "model"), h("td", {}, impactText(m)),
           h("td", { class: "num" }, fa == null ? "—" : String(fa))];
       },
     });
   }
 
-// The selected run: live plant state as chips, the voltage chart, and the
-// sensor findings by detector and class. The page has drawn the phases above.
-function detail(r) {
-  if (r.threshold != null) $("d-sub").textContent += ` · model threshold ${r.threshold}`;
-  $("f-title").textContent = "Findings";
-  $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
-  const last = r.plant[r.plant.length - 1];
-  const chip = (k, v, dot) => h("div", { class: "chip" }, h("div", { class: "k" }, k),
-    h("div", { class: "v" }, dot ? h("span", { class: "dot", style: `background:${dot}` }) : null, v));
-  const byDet = d => r.findings.filter(f => f.detector === d);
-  const firstAfter = d => { const w0 = r.writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
-  $("d-chips").replaceChildren(
-    chip("control", last ? (last.ctrl_mode === 1 ? "MANUAL" : "auto") : "—", last?.ctrl_mode === 1 ? "var(--warning)" : null),
-    chip("DG setpoint", last?.dg_setpoint != null ? `${num(last.dg_setpoint, 1)} kW` : "—"),
-    chip("breaker", last ? (last.switch_cmd ? "OPEN" : "closed") : "—", last?.switch_cmd ? "var(--critical)" : null),
-    chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
-    chip("rules fired", r.writes.length ? firstAfter("rules") : String(byDet("rules").length)),
-    chip("model fired", r.writes.length ? firstAfter("model") : String(byDet("model").length)),
-  );
-  drawChart(r);
-  const agg = {};
-  for (const f of r.findings) { const k = `${f.detector}|${f.klass}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, n: 0, first: f.t }).n++; }
-  const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
-    h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), h("td", { class: "num" }, String(a.n)),
-      h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
-  $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
-    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
-}
-
-// The campaign aggregate (metrics.write_aggregate): detection per mode and
-// detector, physical impact per mode.
-const RESULT_TABS = [{ id: "detection", label: "Detection" }, { id: "impact", label: "Physical impact" }];
-function results(tab, a, tb) {
-  const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
-  const data = a[tab];
-  if (!data) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "No scored runs yet")))); return; }
-  if (tab === "detection") {
-    const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
-      ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
-    const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
-      n(r.detection_rate), n(r.latency_median_s), h("td", { class: "num" }, r.latency_min_s == null ? "—" : `${num(r.latency_min_s)}–${num(r.latency_max_s)}`),
-      n(r.before_impact_rate), h("td", { class: "num" }, `${r.false_alarms} (${r.runs_with_false_alarms})`), n(r.false_alarms_in_operator_windows)));
-    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
-  } else {
-    const head = h("tr", {}, h("th", {}, "mode"), ...["runs", "impacted", "persists", "recovered", "time-to-impact (s)", "impact duration (s)", "max ΔV (pu)", "MANUAL (s)"].map(x => h("th", { class: "num" }, x)));
-    const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), n(r.runs), n(r.impact_rate), n(r.persists_rate), n(r.recovered_rate),
-      n(r.time_to_impact_median_s), n(r.impact_duration_median_s), n(r.max_dev_median_pu), n(r.manual_mode_median_s)));
-    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  function chip(k, v, dot) {
+    return h("div", { class: "chip" }, h("div", { class: "k" }, k),
+      h("div", { class: "v" }, dot ? h("span", { class: "dot", style: `background:${dot}` }) : null, v));
   }
-}
 
-// ── voltage chart ───────────────────────────────────────────────────────────
-const SVGNS = "http://www.w3.org/2000/svg";
-function s(tag, attrs, text) {
-  const e = document.createElementNS(SVGNS, tag);
-  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
-  if (text != null) e.textContent = text;
-  return e;
-}
-const Y_LO = 0.80, Y_HI = 1.20;
-let chartKey = null;
-function drawChart(r) {
-  const box = $("d-chart"), tip = $("tip");
-  const key = r ? [r.id, r.start_t, r.plant.length, r.findings.length, r.writes.length, box.clientWidth,
-    document.documentElement.dataset.theme || ""].join("|") : "none";
-  if (key === chartKey) return;            // unchanged: keep the frame (and a live tooltip)
-  chartKey = key;
-  box.querySelector("svg")?.remove();
-  const legend = $("d-legend"); legend.replaceChildren();
-  if (!r || !r.plant.length) {
+  // The run's score, once it has one (a campaign scores each run; a standalone
+  // run is scored when it ends). Only what the run measured is shown.
+  function scoreChips(m) {
+    if (!m) return [];
+    const out = [], c = det(m, "combined");
+    if (m.attack && c) out.push(chip("score · detection", c.detected ? `${num(c.latency_from_write_s, 2)} s` : "missed",
+      c.detected ? (c.before_impact ? "var(--good)" : "var(--warning)") : "var(--critical)"));
+    else if (c) out.push(chip("score · false alarms", String(c.false_alarms ?? 0), c.false_alarms ? "var(--warning)" : "var(--good)"));
+    if (m.stage_reached) out.push(chip("score · attack reached", m.stage_reached, m.attack_succeeded ? "var(--critical)" : "var(--good)"));
+    if (m.attack) out.push(chip("score · impact", impactText(m), m.abnormal_frames ? "var(--critical)" : "var(--good)"));
+    const resp = m.response;
+    if (resp && resp.policy && resp.policy !== "off")
+      out.push(chip("score · response", `${resp.accurate ? "accurate" : "inaccurate"}${resp.over_response ? " · over-response" : ""}`,
+        resp.accurate ? "var(--good)" : "var(--warning)"));
+    const fid = m.tree_fidelity;
+    if (fid) out.push(chip("score · tree fidelity", `P ${num(fid.precision, 2)} · R ${num(fid.recall, 2)}`));
+    return out;
+  }
+
+  // The selected run: live plant state and score as chips, the voltage chart,
+  // and the sensor findings by detector and class. The page has drawn the phases.
+  function detail(r) {
+    if (r.threshold != null) $("d-sub").textContent += ` · model threshold ${r.threshold}`;
+    $("f-title").textContent = "Findings";
+    $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
+    const last = r.plant[r.plant.length - 1];
+    const byDet = d => r.findings.filter(f => f.detector === d);
+    const firstAfter = d => { const w0 = r.writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
+    $("d-chips").replaceChildren(
+      chip("control", last ? (last.ctrl_mode === 1 ? "MANUAL" : "auto") : "—", last?.ctrl_mode === 1 ? "var(--warning)" : null),
+      chip("DG setpoint", last?.dg_setpoint != null ? `${num(last.dg_setpoint, 1)} kW` : "—"),
+      chip("breaker", last ? (last.switch_cmd ? "OPEN" : "closed") : "—", last?.switch_cmd ? "var(--critical)" : null),
+      chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
+      chip("rules fired", r.writes.length ? firstAfter("rules") : String(byDet("rules").length)),
+      chip("model fired", r.writes.length ? firstAfter("model") : String(byDet("model").length)),
+      ...scoreChips(r.metrics),
+    );
+    drawChart(r);
+    const agg = {};
+    for (const f of r.findings) { const k = `${f.detector}|${f.klass}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, n: 0, first: f.t }).n++; }
+    const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
+      h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), h("td", { class: "num" }, String(a.n)),
+        h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
+    $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
+      h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
+  }
+
+  // The campaign aggregate (metrics.write_aggregate): detection per mode and
+  // detector, physical impact per mode.
+  const RESULT_TABS = [{ id: "detection", label: "Detection" }, { id: "impact", label: "Physical impact" }];
+  function results(tab, a, tb) {
+    const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
+    const data = a[tab];
+    if (!data) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "No scored runs yet")))); return; }
+    if (tab === "detection") {
+      const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
+        ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
+      const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
+        n(r.detection_rate), n(r.latency_median_s), h("td", { class: "num" }, r.latency_min_s == null ? "—" : `${num(r.latency_min_s)}–${num(r.latency_max_s)}`),
+        n(r.before_impact_rate), h("td", { class: "num" }, `${r.false_alarms} (${r.runs_with_false_alarms})`), n(r.false_alarms_in_operator_windows)));
+      tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+    } else {
+      const head = h("tr", {}, h("th", {}, "mode"), ...["runs", "impacted", "persists", "recovered", "time-to-impact (s)", "impact duration (s)", "max ΔV (pu)", "MANUAL (s)"].map(x => h("th", { class: "num" }, x)));
+      const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), n(r.runs), n(r.impact_rate), n(r.persists_rate), n(r.recovered_rate),
+        n(r.time_to_impact_median_s), n(r.impact_duration_median_s), n(r.max_dev_median_pu), n(r.manual_mode_median_s)));
+      tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+    }
+  }
+
+  // ── voltage chart ─────────────────────────────────────────────────────────
+  // Time-axis ticks: a round step giving about eight labels, so an hour-long
+  // playground run does not print a label every minute on top of each other.
+  const TICKS = [10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
+  const tickStep = span => TICKS.find(t => span / t <= 8) || Math.ceil(span / 8 / 3600) * 3600;
+  const tickLabel = v => v < 60 || v % 60 ? `${v}s` : v % 3600 ? `${v / 60}m` : `${v / 3600}h`;
+  const Y_LO = 0.80, Y_HI = 1.20;
+  let chartKey = null;
+  function drawChart(r) {
+    const box = $("d-chart"), tip = $("tip");
+    const key = r ? [r.id, r.start_t, r.plant.length, r.findings.length, r.writes.length, box.clientWidth,
+      document.documentElement.dataset.theme || ""].join("|") : "none";
+    if (key === chartKey) return;            // unchanged: keep the frame (and a live tooltip)
+    chartKey = key;
+    box.querySelector("svg")?.remove();
+    const legend = $("d-legend"); legend.replaceChildren();
+    if (!r || !r.plant.length) {
+      box.querySelector(".empty")?.remove();
+      box.append(h("div", { class: "empty" }, r && r.start_t ? "Waiting for the first plant sample…" : "No plant trace for this run."));
+      return;
+    }
     box.querySelector(".empty")?.remove();
-    box.append(h("div", { class: "empty" }, r && r.start_t ? "Waiting for the first plant sample…" : "No plant trace for this run."));
-    return;
+    legend.append(
+      h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
+      h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
+      h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), "normal band 0.95–1.05 pu"));
+    const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
+    const t0 = r.start_t, pts = r.plant;
+    const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
+    const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+    // A live run is drawn on its whole planned timeline (stable axis, fills up);
+    // a finished one on what actually happened.
+    const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
+    const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
+    const clampV = v => Math.min(Y_HI, Math.max(Y_LO, v));
+    const Y = v => m.t + (H - m.t - m.b) * (1 - (clampV(v) - Y_LO) / (Y_HI - Y_LO));
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}` });
+    // calibration window
+    const np = r.phases.find(p => p.name === "normal");
+    if (np?.start_t && r.learn_s) {
+      const x1 = X(np.start_t), x2 = Math.min(X(np.start_t + r.learn_s), W - m.r);
+      svg.append(s("rect", { x: x1, y: m.t, width: Math.max(0, x2 - x1), height: H - m.t - m.b, fill: "var(--wash)" }));
+      svg.append(s("text", { x: x1 + 4, y: H - m.b - 6, "font-size": 11, fill: "var(--muted)" }, "model calibration"));
+    }
+    // band + grid
+    svg.append(s("rect", { x: m.l, y: Y(1.05), width: W - m.l - m.r, height: Y(0.95) - Y(1.05), fill: "var(--wash)", stroke: "var(--grid)" }));
+    for (const v of [0.8, 0.9, 1.0, 1.1, 1.2]) {
+      svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
+      svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, v.toFixed(2)));
+    }
+    const step = tickStep(xMax);
+    for (let x = 0; x <= xMax; x += step)
+      svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, tickLabel(x)));
+    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }));
+    // events: attack + first finding per detector
+    const marks = [];
+    if (r.writes.length) marks.push({ t: r.writes[0].t, label: "attack", dash: "4 3", shape: null });
+    for (const [d, shape] of [["rules", "tri"], ["model", "dia"]]) {
+      const w0 = r.writes[0]?.t;
+      const f = r.findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
+      if (f) marks.push({ t: f.t, label: d, dash: null, shape });
+    }
+    let lastX = -1e9, row = 0;
+    for (const mk of marks.sort((a, b) => a.t - b.t)) {
+      const x = X(mk.t);
+      row = x - lastX < 46 ? row + 1 : 0; lastX = x;
+      svg.append(s("line", { x1: x, x2: x, y1: m.t, y2: H - m.b, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": mk.dash || "none" }));
+      const ty = m.t + 12 + row * 13;          // inside the plot, stacked downward
+      if (mk.shape === "tri") svg.append(s("path", { d: `M${x - 4},${ty - 8} L${x + 4},${ty - 8} L${x},${ty - 1}`, fill: "var(--ink-2)" }));
+      if (mk.shape === "dia") svg.append(s("path", { d: `M${x},${ty - 9} L${x + 4},${ty - 5} L${x},${ty - 1} L${x - 4},${ty - 5}Z`, fill: "var(--ink-2)" }));
+      svg.append(s("text", { x: x + 6, y: ty, "font-size": 11, fill: "var(--ink-2)", stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, mk.label));
+    }
+    // series
+    for (const [key, col] of [["v_load", "var(--s1)"], ["v_dg", "var(--s2)"]]) {
+      const d = pts.filter(p => p[key] != null).map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
+      svg.append(s("path", { d, fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    }
+    // direct labels at the line ends
+    const lp = pts[pts.length - 1];
+    const ly = [[Y(lp.v_load), "load"], [Y(lp.v_dg), "DG"]].sort((a, b) => a[0] - b[0]);
+    if (ly[1][0] - ly[0][0] < 12) ly[1][0] = ly[0][0] + 12;
+    for (const [y, txt] of ly) svg.append(s("text", { x: Math.min(X(lp.t) + 4, W - 2), y: y + 4, "font-size": 11, fill: "var(--ink-2)", "text-anchor": X(lp.t) + 30 > W ? "end" : "start" }, txt));
+    if (pts.some(p => p.v_load < Y_LO || p.v_dg < Y_LO || p.v_load > Y_HI || p.v_dg > Y_HI))
+      svg.append(s("text", { x: W - m.r, y: H - m.b - 6, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, "values outside 0.80–1.20 pu clipped"));
+    // crosshair + tooltip
+    const hair = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1, visibility: "hidden" });
+    const dots = [s("circle", { r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }),
+                  s("circle", { r: 4, fill: "var(--s2)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" })];
+    svg.append(hair, ...dots);
+    const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent" });
+    svg.append(hit);
+    const hide = () => { hair.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); tip.style.display = "none"; };
+    hit.addEventListener("pointerleave", hide);
+    hit.addEventListener("pointermove", ev => {
+      const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
+      let best = pts[0], bd = 1e9;
+      for (const p of pts) { const d = Math.abs(X(p.t) - px); if (d < bd) { bd = d; best = p; } }
+      const x = X(best.t);
+      hair.setAttribute("x1", x); hair.setAttribute("x2", x); hair.setAttribute("visibility", "visible");
+      [["v_load", 0], ["v_dg", 1]].forEach(([k, i]) => { dots[i].setAttribute("cx", x); dots[i].setAttribute("cy", Y(best[k])); dots[i].setAttribute("visibility", "visible"); });
+      const row = (col, val, name) => h("div", { class: "row" }, h("span", { class: "lk", style: `background:${col}` }), h("b", {}, val), h("span", { class: "muted" }, name));
+      tip.replaceChildren(h("div", { class: "muted" }, `+${dur(best.t - t0)} into the run`),
+        row("var(--s1)", `${num(best.v_load)} pu`, "load bus"), row("var(--s2)", `${num(best.v_dg)} pu`, "DG bus"),
+        h("div", { class: "muted" }, `${best.ctrl_mode === 1 ? "MANUAL" : "auto"} · ${num(best.dg_setpoint, 1)} kW · ${best.abnormal ? "abnormal" : "in band"}`));
+      tip.style.display = "block";
+      const left = x * rect.width / W;
+      tip.style.left = `${Math.min(left + 12, rect.width - tip.offsetWidth - 4)}px`;
+      tip.style.top = "8px";
+    });
+    box.insertBefore(svg, tip);
   }
-  box.querySelector(".empty")?.remove();
-  legend.append(
-    h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
-    h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
-    h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), "normal band 0.95–1.05 pu"));
-  const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
-  const t0 = r.start_t, pts = r.plant;
-  const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
-  const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
-  // A live run is drawn on its whole planned timeline (stable axis, fills up);
-  // a finished one on what actually happened.
-  const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
-  const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
-  const clampV = v => Math.min(Y_HI, Math.max(Y_LO, v));
-  const Y = v => m.t + (H - m.t - m.b) * (1 - (clampV(v) - Y_LO) / (Y_HI - Y_LO));
-  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}` });
-  // calibration window
-  const np = r.phases.find(p => p.name === "normal");
-  if (np?.start_t && r.learn_s) {
-    const x1 = X(np.start_t), x2 = Math.min(X(np.start_t + r.learn_s), W - m.r);
-    svg.append(s("rect", { x: x1, y: m.t, width: Math.max(0, x2 - x1), height: H - m.t - m.b, fill: "var(--wash)" }));
-    svg.append(s("text", { x: x1 + 4, y: H - m.b - 6, "font-size": 11, fill: "var(--muted)" }, "model calibration"));
+
+  // ── the two sides of the run ──────────────────────────────────────────────
+  // Folded from the ledger into run.x by reduce(): what the attacker recorded
+  // (its agent, its recon, or the people at the red console) and the defender
+  // events the page does not keep itself.
+  function sides(r) {
+    if (!r.x.red) Object.assign(r.x, {
+      red: { start: null, plans: [], steps: [], recon: [], belief: null, end: null },
+      blue: { alerts: [], respWrites: [] },
+    });
+    return r.x;
   }
-  // band + grid
-  svg.append(s("rect", { x: m.l, y: Y(1.05), width: W - m.l - m.r, height: Y(0.95) - Y(1.05), fill: "var(--wash)", stroke: "var(--grid)" }));
-  for (const v of [0.8, 0.9, 1.0, 1.1, 1.2]) {
-    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
-    svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, v.toFixed(2)));
+  function reduce(r, ev) {
+    const x = sides(r), t = ev.guest_t || ev.t;
+    switch (ev.kind) {
+      case "attack_start": x.red.start = { t, mode: ev.mode, profile: ev.profile, goal: ev.goal }; break;
+      case "attack_plan": x.red.plans.push({ t, target: ev.target, sequence: ev.sequence || [],
+        candidates: ev.candidates || [], blocked: ev.blocked || [], reason: ev.reason }); break;
+      case "plan_step": x.red.steps.push({ t, node: ev.node, stage: ev.stage, attck: ev.attck, ok: !!ev.ok,
+        target: ev.target, observed: ev.observed || {}, by: "agent" }); break;
+      case "red_step": x.red.steps.push({ t, node: ev.step, stage: ev.stage || ev.step, ok: !!ev.ok,
+        observed: ev.observed || {}, by: ev.operator || "red team" }); break;
+      case "recon": x.red.recon.push({ t, stage: ev.stage, hosts: ev.hosts || [], foothold: ev.foothold,
+        engine_ip: ev.engine_ip, modbus_port: ev.modbus_port, modbus_ok: ev.modbus_ok, registers: ev.registers || null }); break;
+      case "attacker_belief": x.red.belief = { t, tree: ev.tree }; break;
+      case "attack_end": x.red.end = { t, success: !!ev.success, stage_reached: ev.stage_reached, writes_ok: ev.writes_ok }; break;
+      case "alert": x.blue.alerts.push({ t, state: ev.state, detector: ev.detector, klass: ev.klass }); break;
+      case "response_write": x.blue.respWrites.push({ t, register: ev.register, value: ev.value }); break;
+    }
   }
-  const step = xMax > 240 ? 60 : xMax > 90 ? 30 : 10;
-  for (let x = 0; x <= xMax; x += step)
-    svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, `${x}s`));
-  svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }));
-  // events: attack + first finding per detector
-  const marks = [];
-  if (r.writes.length) marks.push({ t: r.writes[0].t, label: "attack", dash: "4 3", shape: null });
-  for (const [d, shape] of [["rules", "tri"], ["model", "dia"]]) {
-    const w0 = r.writes[0]?.t;
-    const f = r.findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
-    if (f) marks.push({ t: f.t, label: d, dash: null, shape });
+
+  const STATE_RANK = { confirmed: 0, inferred: 1, suspected: 2 };
+  const STAGES = ["it_access", "it_exec", "pivot"];
+  const last = a => a[a.length - 1] || null;
+
+  // Each side as it stood at t (null = now): what it is doing, what it can see.
+  function sidesAt(r, t) {
+    const x = sides(r), red = x.red, u = uptoT(t);
+    const steps = red.steps.filter(u), plans = red.plans.filter(u), recon = red.recon.filter(u);
+    const writes = r.writes.filter(u), plan = last(plans), done = new Set(steps.filter(s => s.ok).map(s => s.node));
+    const end = u(red.end) ? red.end : null, start = u(red.start) ? red.start : null;
+    const belief = u(red.belief) ? red.belief : null;
+    const humans = steps.some(s => s.by !== "agent");
+    const mode = start?.mode || "";
+    // A recon attacker plans with the same agent, so its mode says planner too:
+    // what tells it apart is that it went looking first.
+    const source = mode.startsWith("recon:") || red.recon.length || red.belief ? "a tree it built by its own reconnaissance"
+      : mode.startsWith("planner:") ? `the attack tree, handed to it (planner, ${start.profile || mode.slice(8)})`
+      : humans ? "people at the red console, step by step"
+      : writes.length ? `a fixed script (${r.mode || "scripted"}): no plan, no feedback` : null;
+    const states = r.states.filter(u), st = last(states);
+    const open = {};
+    for (const a of x.blue.alerts.filter(u)) { const k = `${a.detector}: ${a.klass}`; if (a.state === "cleared") delete open[k]; else open[k] = a; }
+    const approvals = Object.values(r.approvals).filter(a => u({ t: a.asked_t }))
+      .map(a => ({ ...a, state: a.t != null && u({ t: a.t }) ? a.state : "requested" }));
+    return {
+      red: { steps, plan, done, writes, end, start, recon, belief, source,
+        target: plan?.target || last(steps)?.target || null,
+        remaining: plan ? plan.sequence.filter(n => !done.has(n)) : [] },
+      blue: { findings: r.findings.filter(u), st, decisions: r.decisions.filter(u), actions: r.actions.filter(u),
+        open: Object.keys(open), approvals, respWrites: x.blue.respWrites.filter(u) },
+    };
   }
-  let lastX = -1e9, row = 0;
-  for (const mk of marks.sort((a, b) => a.t - b.t)) {
-    const x = X(mk.t);
-    row = x - lastX < 46 ? row + 1 : 0; lastX = x;
-    svg.append(s("line", { x1: x, x2: x, y1: m.t, y2: H - m.b, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": mk.dash || "none" }));
-    const ty = m.t + 12 + row * 13;          // inside the plot, stacked downward
-    if (mk.shape === "tri") svg.append(s("path", { d: `M${x - 4},${ty - 8} L${x + 4},${ty - 8} L${x},${ty - 1}`, fill: "var(--ink-2)" }));
-    if (mk.shape === "dia") svg.append(s("path", { d: `M${x},${ty - 9} L${x + 4},${ty - 5} L${x},${ty - 1} L${x - 4},${ty - 5}Z`, fill: "var(--ink-2)" }));
-    svg.append(s("text", { x: x + 6, y: ty, "font-size": 11, fill: "var(--ink-2)", stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, mk.label));
+
+  const kv = rows => h("dl", { class: "kv" }, ...rows.filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
+    .flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]));
+  const mark = (ok, text, title) => h("span", { title: title || null, style: `margin-right:10px;white-space:nowrap;color:${ok == null ? "var(--ink-2)" : ok ? "var(--ink)" : "var(--critical)"}` },
+    ok == null ? "◎ " : ok ? "✓ " : "✗ ", text);
+  const none = text => h("span", { class: "muted" }, text);
+
+  function redColumn(v, r) {
+    const R = v.red, lastStep = last(R.steps);
+    const status = R.end ? (R.end.success ? "finished: it reached its impact" : `stopped: defended (reached ${R.end.stage_reached || "nothing"})`)
+      : lastStep ? `at ${lastStep.node} — ${lastStep.ok ? "done" : "failed, re-planning"}`
+      : R.start ? "planning its first step" : R.writes.length ? "writing to the plant" : null;
+    const byReg = {};
+    for (const w of R.writes) { const k = w.register || "?"; (byReg[k] = byReg[k] || { n: 0, v: w.value, ok: 0 }).n++; byReg[k].v = w.value; if (w.ok !== false) byReg[k].ok++; }
+    const writes = Object.entries(byReg).map(([k, w]) => `${k} ×${w.n} (last ${w.v}${w.ok < w.n ? `, ${w.n - w.ok} refused` : ""})`).join(" · ");
+    const who = R.steps.map(s => s.observed?.whoami).find(Boolean);
+    const it = last(R.recon.filter(c => c.stage === "it")), ot = last(R.recon.filter(c => c.stage === "ot"));
+    const pivot = R.steps.find(s => s.node === "pivot");
+    const regs = ot && ot.registers ? Object.entries(ot.registers) : [];
+    const countNodes = n => n ? 1 + (n.children || []).reduce((a, c) => a + countNodes(c), 0) : 0;
+    const P = R.plan;
+    return h("div", { class: "side red" }, h("b", { style: "color:var(--critical)" }, "Attacker"),
+      h("h3", {}, "doing"),
+      status || R.steps.length ? kv([
+        ["status", status],
+        ["aims at", R.target ? `${R.target}${R.remaining.length ? ` — next: ${R.remaining.join(" → ")}` : ""}` : null],
+        ["steps", R.steps.length ? h("span", {}, ...R.steps.map(s => mark(s.ok, s.node, [s.attck, s.by !== "agent" ? `by ${s.by}` : null].filter(Boolean).join(" · ")))) : null],
+        ["writes", writes || null],
+      ]) : none("No attack activity yet."),
+      h("h3", {}, "knows"),
+      R.source || R.recon.length ? kv([
+        ["knowledge", R.source],
+        ["hosts found", it ? it.hosts.map(x => `${x.ip} (${(x.ports || []).map(p => p.port ?? p).join(", ")})`).join(" · ") : null],
+        ["foothold", who ? `runs as ${who}${it?.foothold ? ` on ${it.foothold.ip ?? it.foothold}` : ""}` : (it?.foothold ? `${it.foothold.ip ?? it.foothold}` : null)],
+        ["plant reached", ot ? `${ot.engine_ip}:${ot.modbus_port} — Modbus ${ot.modbus_ok ? "answers" : "silent"}`
+          : pivot ? `${pivot.ok ? "reachable" : "unreachable"}${pivot.observed?.detail ? ` (${pivot.observed.detail})` : ""}` : null],
+        ["registers read", regs.length ? regs.slice(0, 6).map(([a, v]) => `${a}=${v}`).join(" · ") + (regs.length > 6 ? ` … (${regs.length})` : "") : null],
+        ["its belief", R.belief ? `a tree of ${countNodes(R.belief.tree)} nodes` : null],
+        ["options", P && P.candidates.length ? P.candidates.map(c => `${c.node}${c.impact != null ? ` (impact ${c.impact})` : ""}`).join(" · ") : null],
+        ["paths closed", P && P.blocked.length ? P.blocked.join(" · ") : null],
+      ]) : none("Nothing yet."));
   }
-  // series
-  for (const [key, col] of [["v_load", "var(--s1)"], ["v_dg", "var(--s2)"]]) {
-    const d = pts.filter(p => p[key] != null).map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
-    svg.append(s("path", { d, fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+
+  function blueColumn(v, r) {
+    const B = v.blue, policy = r.respond && r.respond !== "off" ? r.respond : (B.decisions[0]?.policy || null);
+    const advise = Object.keys(r.approvals).length > 0;
+    const d = last(B.decisions);
+    const cms = {};
+    for (const a of B.actions) if (a.id !== "notify") cms[a.id] = a;
+    const pending = B.approvals.filter(a => a.state === "requested");
+    const byDet = {};
+    for (const f of B.findings) byDet[f.detector] = (byDet[f.detector] || 0) + 1;
+    const lf = last(B.findings);
+    const nodes = Object.entries(B.st?.nodes || {}).filter(([, s]) => s[0] in STATE_RANK)
+      .sort((a, b) => STATE_RANK[a[1][0]] - STATE_RANK[b[1][0]] || b[1][1] - a[1][1]);
+    return h("div", { class: "side blue" }, h("b", { style: "color:var(--s1)" }, "Defender"),
+      h("h3", {}, "doing"),
+      kv([
+        ["response", policy ? `${policy}${advise ? ", advising an operator" : ", automatic"}` : "watching only: no response policy"],
+        ["last decision", d ? `${d.actions.join(", ") || "no action"}${d.rationale ? ` — ${d.rationale}` : ""}` : (policy ? "none yet" : null)],
+        ["countermeasures", Object.keys(cms).length ? h("span", {}, ...Object.values(cms).map(a =>
+          mark(a.ok, `${a.id}${a.machine ? ` @${a.machine}` : ""}`))) : null],
+        ["awaiting operator", pending.length ? pending.map(a => `⏳ ${a.action}`).join(" · ") : null],
+        ["plant writes", B.respWrites.length ? `${B.respWrites.length} restoring write${B.respWrites.length === 1 ? "" : "s"}` : null],
+      ]),
+      h("h3", {}, "sees / believes"),
+      B.findings.length || nodes.length ? kv([
+        ["findings", Object.entries(byDet).map(([k, n]) => `${k} ×${n}`).join(" · ")],
+        ["latest", lf ? `${lf.klass}${lf.src ? ` from ${lf.src}` : ""}${lf.maps_to ? ` → ${lf.maps_to}` : ""}` : null],
+        ["alerts open", B.open.length ? B.open.join(" · ") : null],
+        ["attack tree", nodes.length ? h("span", {}, ...nodes.map(([id, s]) => h("span", {
+          style: `margin-right:10px;white-space:nowrap;color:${STATE_STYLE[s[0]].stroke}` }, `${id} ${s[0]} ${num(s[1], 2)}`))) : null],
+        ["expects next", B.st?.next?.length ? B.st.next.join(" · ") : null],
+        ["hosts implicated", B.st?.hosts?.length ? B.st.hosts.join(" · ") : null],
+        ["model threshold", r.threshold != null ? String(r.threshold) : null],
+      ]) : none("Nothing observed yet."));
   }
-  // direct labels at the line ends
-  const lp = pts[pts.length - 1];
-  const ly = [[Y(lp.v_load), "load"], [Y(lp.v_dg), "DG"]].sort((a, b) => a[0] - b[0]);
-  if (ly[1][0] - ly[0][0] < 12) ly[1][0] = ly[0][0] + 12;
-  for (const [y, txt] of ly) svg.append(s("text", { x: Math.min(X(lp.t) + 4, W - 2), y: y + 4, "font-size": 11, fill: "var(--ink-2)", "text-anchor": X(lp.t) + 30 > W ? "end" : "start" }, txt));
-  if (pts.some(p => p.v_load < Y_LO || p.v_dg < Y_LO || p.v_load > Y_HI || p.v_dg > Y_HI))
-    svg.append(s("text", { x: W - m.r, y: H - m.b - 6, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, "values outside 0.80–1.20 pu clipped"));
-  // crosshair + tooltip
-  const hair = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1, visibility: "hidden" });
-  const dots = [s("circle", { r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }),
-                s("circle", { r: 4, fill: "var(--s2)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" })];
-  svg.append(hair, ...dots);
-  const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent" });
-  svg.append(hit);
-  const hide = () => { hair.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); tip.style.display = "none"; };
-  hit.addEventListener("pointerleave", hide);
-  hit.addEventListener("pointermove", ev => {
-    const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
-    let best = pts[0], bd = 1e9;
-    for (const p of pts) { const d = Math.abs(X(p.t) - px); if (d < bd) { bd = d; best = p; } }
-    const x = X(best.t);
-    hair.setAttribute("x1", x); hair.setAttribute("x2", x); hair.setAttribute("visibility", "visible");
-    [["v_load", 0], ["v_dg", 1]].forEach(([k, i]) => { dots[i].setAttribute("cx", x); dots[i].setAttribute("cy", Y(best[k])); dots[i].setAttribute("visibility", "visible"); });
-    const row = (col, val, name) => h("div", { class: "row" }, h("span", { class: "lk", style: `background:${col}` }), h("b", {}, val), h("span", { class: "muted" }, name));
-    tip.replaceChildren(h("div", { class: "muted" }, `+${dur(best.t - t0)} into the run`),
-      row("var(--s1)", `${num(best.v_load)} pu`, "load bus"), row("var(--s2)", `${num(best.v_dg)} pu`, "DG bus"),
-      h("div", { class: "muted" }, `${best.ctrl_mode === 1 ? "MANUAL" : "auto"} · ${num(best.dg_setpoint, 1)} kW · ${best.abnormal ? "abnormal" : "in band"}`));
-    tip.style.display = "block";
-    const left = x * rect.width / W;
-    tip.style.left = `${Math.min(left + 12, rect.width - tip.offsetWidth - 4)}px`;
-    tip.style.top = "8px";
-  });
-  box.insertBefore(svg, tip);
-}
+
+  // One lane per side and one for the plant, on the run's timeline; the
+  // vertical line is the time the bar selects.
+  function drawLanes(box, r, t) {
+    box.replaceChildren();
+    if (!r.start_t) return;
+    const x = sides(r), red = x.red;
+    const W = Math.max(320, box.clientWidth || 600), LH = 26, m = { l: 70, r: 12, t: 4, b: 22 };
+    const H = m.t + m.b + 3 * LH, t0 = r.start_t;
+    const times = [...red.steps, ...r.writes, ...r.findings, ...r.decisions, ...r.actions, ...r.plant].map(e => e.t).filter(v => v != null);
+    const tEnd = Math.max(t0 + 10, ...times, ...r.phases.map(p => p.end_t || 0));
+    const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+    const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
+    const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
+    const Yc = i => m.t + LH * i + LH / 2;
+    const g = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Timeline of both sides for ${r.id}` });
+    ["attacker", "defender", "plant"].forEach((ln, i) => {
+      g.append(s("line", { x1: m.l, x2: W - m.r, y1: Yc(i), y2: Yc(i), stroke: "var(--grid)" }));
+      g.append(s("text", { x: m.l - 8, y: Yc(i) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--ink-2)" }, ln));
+    });
+    const tipOf = (el, text) => { el.append(s("title", {}, text)); return el; };
+    for (const w of r.writes) g.append(tipOf(s("line", { x1: X(w.t), x2: X(w.t), y1: Yc(0) - 9, y2: Yc(0) + 9, stroke: "var(--critical)", opacity: 0.5 }), `write ${w.register} = ${w.value}`));
+    for (const st of red.steps) {
+      const cx = X(st.t), cy = Yc(0);
+      g.append(tipOf(st.ok ? s("circle", { cx, cy, r: 5, fill: "var(--critical)" })
+        : s("path", { d: `M${cx - 5},${cy - 5} L${cx + 5},${cy + 5} M${cx + 5},${cy - 5} L${cx - 5},${cy + 5}`, stroke: "var(--critical)", "stroke-width": 2.5 }),
+        `${st.node} ${st.ok ? "done" : "failed"}`));
+    }
+    for (const f of r.findings) {
+      const cx = X(f.t), cy = Yc(1) - 3;
+      g.append(tipOf(s("path", { d: `M${cx - 4},${cy + 6} L${cx + 4},${cy + 6} L${cx},${cy - 2}Z`, fill: "var(--s1)", opacity: 0.6 }), `${f.detector}: ${f.klass}`));
+    }
+    for (const d of r.decisions) {
+      const cx = X(d.t), cy = Yc(1);
+      g.append(tipOf(s("path", { d: `M${cx},${cy - 6} L${cx + 6},${cy} L${cx},${cy + 6} L${cx - 6},${cy}Z`, fill: "none", stroke: "var(--s1)", "stroke-width": 2 }), `decision: ${d.actions.join(", ") || "no action"}`));
+    }
+    for (const a of r.actions) if (a.id !== "notify")
+      g.append(tipOf(s("rect", { x: X(a.t) - 4, y: Yc(1) - 4, width: 8, height: 8, fill: a.ok ? "var(--good)" : "var(--critical)" }), `${a.id} ${a.ok ? "applied" : "failed"}`));
+    // plant: abnormal spans filled, MANUAL control dashed above them
+    const spans = (pred) => { const out = []; let a = null; for (const p of r.plant) { if (pred(p)) { a = a ?? p.t; } else if (a != null) { out.push([a, p.t]); a = null; } } if (a != null) out.push([a, last(r.plant).t]); return out; };
+    for (const [a, b] of spans(p => p.abnormal)) g.append(tipOf(s("rect", { x: X(a), y: Yc(2) - 6, width: Math.max(2, X(b) - X(a)), height: 12, fill: "var(--critical)", opacity: 0.45 }), "plant abnormal"));
+    for (const [a, b] of spans(p => p.ctrl_mode === 1)) g.append(tipOf(s("line", { x1: X(a), x2: X(b), y1: Yc(2) - 10, y2: Yc(2) - 10, stroke: "var(--warning)", "stroke-width": 2, "stroke-dasharray": "4 3" }), "control in MANUAL"));
+    const step = tickStep(xMax);
+    for (let v = 0; v <= xMax; v += step) g.append(s("text", { x: X(t0 + v), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, tickLabel(v)));
+    if (t != null) g.append(s("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1.5 }));
+    box.append(g);
+  }
+
+  // Truth against belief, one row per step of the attack: when the attacker did
+  // it, when the defender first suspected and confirmed it, and what countered it.
+  function stageTable(r, v) {
+    const R = v.red, B = v.blue;
+    const t0 = R.start?.t ?? R.steps[0]?.t ?? r.writes[0]?.t ?? r.start_t;
+    const rel = t => t == null ? "—" : `${t - t0 >= 0 ? "+" : ""}${num(t - t0, 1)} s`;
+    const ids = [...STAGES.filter(n => R.steps.some(s => s.node === n) || B.st?.nodes?.[n])];
+    for (const s of R.steps) if (!ids.includes(s.node)) ids.push(s.node);
+    if (!ids.length) return none("No attack step yet: this table compares, for each one, when the attacker did it and when the defender saw it.");
+    const states = r.states.filter(uptoT(v.t));
+    const first = (n, pred) => states.find(x => x.nodes?.[n] && pred(x.nodes[n][0]))?.t ?? null;
+    const counter = n => {
+      for (const d of B.decisions) for (const [a, c] of Object.entries(d.covers || {}))
+        if ([...(c.prevents || []), ...(c.restores || [])].includes(n)) {
+          const act = B.actions.find(x => x.id === a && x.ok && x.t >= d.t - 1e-3);
+          if (act) return { id: a, t: act.t };
+        }
+      return null;
+    };
+    const rows = ids.map(n => {
+      const did = R.steps.find(s => s.node === n && s.ok), tried = R.steps.find(s => s.node === n);
+      const sus = first(n, st => st in STATE_RANK), conf = first(n, st => st === "confirmed"), c = counter(n);
+      const ta = did?.t ?? null, lag = ta != null && sus != null ? sus - ta : null;
+      return h("tr", {}, h("td", {}, n),
+        h("td", { class: "num" }, did ? rel(did.t) : tried ? h("span", { style: "color:var(--critical)" }, `✗ ${rel(tried.t)}`) : "—"),
+        h("td", { class: "num" }, rel(sus)), h("td", { class: "num" }, rel(conf)),
+        h("td", { class: "num" }, lag == null ? "—" : `${lag >= 0 ? "+" : ""}${num(lag, 2)} s`),
+        h("td", {}, c ? `${c.id} at ${rel(c.t)}` : "—"));
+    });
+    return h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, "attack step"), h("th", { class: "num" }, "attacker did it"),
+        h("th", { class: "num" }, "defender suspected"), h("th", { class: "num" }, "confirmed"),
+        h("th", { class: "num" }, "seen after"), h("th", {}, "countered by"))),
+      h("tbody", {}, rows)));
+  }
+
+  function decisionsTable(r, v) {
+    const ds = v.blue.decisions;
+    if (!ds.length) return null;
+    const w0 = r.writes[0]?.t ?? r.start_t;
+    return h("details", { style: "margin-top:10px" }, h("summary", { class: "sub", style: "cursor:pointer" }, `All ${ds.length} response decision${ds.length === 1 ? "" : "s"} up to this time, with the policy's justification`),
+      h("div", { class: "scroll" }, h("table", {},
+        h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "policy"), h("th", {}, "actions"), h("th", {}, "justification"))),
+        h("tbody", {}, ds.map(d => h("tr", {},
+          h("td", { class: "num" }, w0 ? `${d.t - w0 >= 0 ? "+" : ""}${num(d.t - w0, 2)} s` : clock(d.t)),
+          h("td", {}, d.policy || "—"), h("td", {}, d.actions.join(", ") || "—"),
+          h("td", { class: "wrap" }, d.rationale || "—")))))));
+  }
+
+  function renderSides(box, r, t) {
+    const x = sides(r), width = box.clientWidth;
+    const sig = JSON.stringify([r.id, r.status, t, x.red.steps.length, x.red.plans.length, x.red.recon.length, !!x.red.belief, !!x.red.end,
+      r.writes.length, r.findings.length, r.states.length, r.decisions.length, r.actions.length, x.blue.alerts.length,
+      Object.values(r.approvals).map(a => a.state).join(), r.plant.length, Math.round(width / 40), document.documentElement.dataset.theme || ""]);
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    const v = sidesAt(r, t);
+    v.t = t;
+    const lanes = h("div", { class: "lanes" });
+    box.replaceChildren(h("div", { class: "cols2" }, redColumn(v, r), blueColumn(v, r)), lanes,
+      h("h2", { style: "margin-top:14px" }, "Truth vs belief"),
+      h("p", { class: "sub" }, "For each step of the attack: when the attacker did it and when the defender saw it. Times from the start of the attack."),
+      ...[stageTable(r, v), decisionsTable(r, v)].filter(Boolean));
+    drawLanes(lanes, r, t);
+  }
+
+  const GRAPH_OPTIONS = [{ id: "hideInputs", label: "hide input registers", view: "kg", default: true }];
+  const origin = r => r.writes.length ? { t: r.writes[0].t, label: "from the first malicious write" } : null;
 
   // The page invokes this once, with its own handles.
-  (window.CyberRangePanels ||= {})["cps"] = ui => ({
-    queue: () => queue(ui),
-    detail,
-    chart: drawChart,
-    graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree },
-    // The results tabs this scenario fills, shown before any run is scored.
-    results: { tabs: RESULT_TABS, render: results },
-  });
+  (window.CyberRangePanels ||= {})["cps"] = ui => {
+    s = ui.svg;
+    return {
+      queue: () => queue(ui),
+      detail,
+      chart: drawChart,
+      reduce,
+      cards: [{ id: "sides", title: "Attacker · Defender",
+        sub: "What each side is doing and what it can see, at the time the bar above selects. "
+           + "Attacker: from its own record; defender: from its telemetry and decisions.",
+        render: renderSides }],
+      graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree, options: GRAPH_OPTIONS, origin },
+      // The results tabs this scenario fills, shown before any run is scored.
+      results: { tabs: RESULT_TABS, render: results },
+    };
+  };
 })();

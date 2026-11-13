@@ -50,7 +50,7 @@ button[aria-pressed="true"] { background: var(--ink); color: var(--page); border
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
   padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
-.grid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
 .grid2 > .card { margin-bottom: 16px; }
 @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
 .scroll { overflow-x: auto; }
@@ -75,6 +75,11 @@ summary { cursor: pointer; color: var(--ink-2); }
 .acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .meter { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--wash); vertical-align: middle; overflow: hidden; }
 .meter > i { display: block; height: 100%; background: var(--ink-2); }
+/* The two columns: what the team is doing, what it has learnt. */
+.colhead { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 0 0 8px; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; }
+.kv dt { color: var(--ink-2); font-size: 13px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
 #gate { max-width: 420px; margin: 80px auto; }
 #gate input { width: 100%; margin: 8px 0; padding: 6px 10px; }
 pre { margin: 6px 0 0; padding: 8px 10px; background: var(--wash); border-radius: 6px; font-size: 12px;
@@ -102,17 +107,29 @@ pre { margin: 6px 0 0; padding: 8px 10px; background: var(--wash); border-radius
     </header>
     <div class="err" id="err"></div>
 
-    <section class="card">
-      <h2>Attack steps</h2>
-      <p class="sub">The steps of the attack tree, in the order they build on each other. A step marked "not ready" has a prerequisite that has not succeeded yet; you may still try it. Anything else is yours to do from the terminal.</p>
-      <div class="scroll"><table id="steps"></table></div>
-    </section>
-
-    <section class="card">
-      <h2>What you ran</h2>
-      <p class="sub">Newest first, with what each step printed.</p>
-      <div id="history"></div>
-    </section>
+    <div class="grid2">
+      <div>
+        <h2 class="colhead">What I'm doing</h2>
+        <section class="card">
+          <h2>Attack steps</h2>
+          <p class="sub">The steps of the attack tree, indented under the steps they build on. A step marked "waiting" has a prerequisite that has not succeeded yet; you may still try it. Anything else is yours to do from the terminal.</p>
+          <div class="scroll"><table id="steps"></table></div>
+        </section>
+        <section class="card">
+          <h2>What you ran</h2>
+          <p class="sub">Newest first, with what each step printed.</p>
+          <div id="history"></div>
+        </section>
+      </div>
+      <div>
+        <h2 class="colhead">What I know</h2>
+        <section class="card">
+          <h2>Learnt so far</h2>
+          <p class="sub">Only what your own steps reported back. What the defenders see of you is not shown here.</p>
+          <div id="known"></div>
+        </section>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -163,24 +180,61 @@ async function launch(id) {
   running = null; sig = ""; refresh();
 }
 const NOISE = d => d == null ? "—" : d >= 0.7 ? "loud" : d >= 0.35 ? "noticeable" : "quiet";
+const OUTCOME = { done: ["var(--good)", "done"], failed: ["var(--critical)", "failed"],
+  ready: ["var(--ink-2)", "ready"], waiting: ["var(--muted)", "waiting"] };
+
+// How deep a step sits under the steps it needs: its indentation in the list.
+function depths(steps) {
+  const by = Object.fromEntries(steps.map(x => [x.id, x])), memo = {};
+  const d = (id, seen = new Set()) => {
+    if (id in memo) return memo[id];
+    if (seen.has(id) || !by[id]) return 0;
+    seen.add(id);
+    return (memo[id] = Math.max(-1, ...(by[id].needs || []).map(n => d(n, seen))) + 1);
+  };
+  return Object.fromEntries(steps.map(x => [x.id, d(x.id)]));
+}
+
+// What the team's own steps reported: the lines each step printed about itself.
+function known(history) {
+  const phases = history.flatMap(r => r.phases || []), last = k => phases.filter(p => p.phase === k).pop();
+  const access = last("it_access"), exec = last("it_exec"), pivot = last("pivot"), impact = last("impact");
+  const writes = phases.filter(p => p.phase === "modbus_write");
+  const accepted = writes.filter(w => w.ok), refused = writes.length - accepted.length;
+  const rows = [
+    ["foothold", access ? (access.ok ? `in, running as ${access.whoami || "an unknown user"}` : "the web app refused") : null],
+    ["command execution", exec ? (exec.ok ? `works${exec.detail ? ` (${exec.detail})` : ""}` : "blocked") : null],
+    ["plant network", pivot ? (pivot.ok ? `reachable${pivot.detail ? ` (${pivot.detail})` : ""}` : `unreachable${pivot.detail ? ` (${pivot.detail})` : ""}`) : null],
+    ["writes", writes.length ? `${accepted.length} accepted${refused ? `, ${refused} refused` : ""}${accepted.length ? `; last: register ${accepted[accepted.length - 1].register} = ${accepted[accepted.length - 1].value}` : ""}` : null],
+    ["impact", impact ? (impact.ok ? `reached (${impact.attack || "plant"})` : "not reached") : null],
+  ].filter(([, v]) => v);
+  return rows.length ? h("dl", { class: "kv" }, rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, v)]))
+    : h("div", { class: "empty" }, "Nothing yet: run a step and what it reports back shows here");
+}
 
 function render() {
   if (!S) return;
-  const s = JSON.stringify([S.steps.map(x => [x.id, x.ready, x.last]), S.history.length, running]);
+  const s = JSON.stringify([S.steps.map(x => [x.id, x.outcome, x.last]), S.history.length, running]);
   if (s === sig) return;
   sig = s;
   if (S.terminal) { $("term").href = S.terminal; $("term").style.display = ""; }
+  const depth = depths(S.steps);
   $("steps").replaceChildren(
-    h("thead", {}, h("tr", {}, ["step", "technique", "how loud", "last try", ""].map(x => h("th", {}, x)))),
-    h("tbody", {}, S.steps.map(x => h("tr", {},
-      h("td", {}, h("div", {}, x.label || x.id), h("details", {}, h("summary", {}, x.id), h("code", {}, x.command))),
-      h("td", {}, x.attck ? `${x.attck}${x.attck_name ? ` ${x.attck_name}` : ""}` : "—"),
-      h("td", {}, NOISE(x.detectability)),
-      h("td", {}, x.last ? [h("span", { class: "dot", style: `background:${x.last.ok ? "var(--good)" : "var(--critical)"}` }),
-        ` ${x.last.ok ? "worked" : "failed"} at ${clock(x.last.t)}`] : h("span", { class: "muted" }, "not tried")),
-      h("td", { class: "num" }, x.ready ? null : h("span", { class: "muted" }, "not ready "),
-        h("button", { type: "button", disabled: running ? "" : null, onclick: () => launch(x.id) },
-          running === x.id ? "Running…" : "Run"))))));
+    h("thead", {}, h("tr", {}, ["step", "state", "technique", "how loud", ""].map(x => h("th", {}, x)))),
+    h("tbody", {}, S.steps.map(x => {
+      const [c, label] = OUTCOME[x.outcome] || ["var(--muted)", x.outcome || "—"];
+      return h("tr", {},
+        h("td", { style: `padding-left:${8 + 18 * depth[x.id]}px` },
+          h("div", {}, depth[x.id] ? h("span", { class: "muted" }, "└ ") : null, x.label || x.id),
+          h("details", {}, h("summary", {}, x.id), h("code", {}, x.command))),
+        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`,
+          x.last ? h("div", { class: "muted" }, `last try ${clock(x.last.t)}`) : null),
+        h("td", {}, x.attck ? `${x.attck}${x.attck_name ? ` ${x.attck_name}` : ""}` : "—"),
+        h("td", {}, NOISE(x.detectability)),
+        h("td", { class: "num" }, h("button", { type: "button", disabled: running ? "" : null, onclick: () => launch(x.id) },
+          running === x.id ? "Running…" : "Run")));
+    })));
+  $("known").replaceChildren(known(S.history));
   const hist = [...S.history].reverse();
   $("history").replaceChildren(...(hist.length ? hist.map(r => h("details", {},
     h("summary", {}, h("span", { class: "dot", style: `background:${r.ok ? "var(--good)" : "var(--critical)"}` }),

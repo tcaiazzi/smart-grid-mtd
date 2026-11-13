@@ -21,6 +21,7 @@ nmap; pymodbus runs on the HMI, not here.
 import argparse
 import json
 import sys
+import time
 
 import belief_tree
 import recon
@@ -30,8 +31,9 @@ from red_agent import RedAgent, run_shell
 
 
 def _append(record_path, **row):
+    # Stamped like every row the agent writes: the host replays them on a timeline.
     with open(record_path, "a", buffering=1) as f:
-        f.write(json.dumps(row, default=str) + "\n")
+        f.write(json.dumps({"t": round(time.time(), 3), **row}, default=str) + "\n")
 
 
 def pick_foothold(hosts):
@@ -82,6 +84,8 @@ def main():
     tree = belief_tree.build(findings)
     with open(args.belief_out, "w") as f:
         json.dump(tree, f)
+    # On the record too, so the host has it as soon as it is built, not at the end.
+    _append(args.record, kind="belief", tree=tree)
     print(f"recon done: foothold={findings['foothold']} ot={findings['ot'] or 'none'}", flush=True)
 
     ot = findings["ot"] or {}

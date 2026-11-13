@@ -22,5 +22,5 @@ cps-recon:                 ## attack the lab with the recon-driven attacker (it 
 		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_ATTACK_FLAGS) $(CPS_IT_FLAG) \
 		$(PLAYGROUND_FLAG)
 
-cps-recon-dashboard:       ## the dashboard restricted to the recon runs (belief-tree overlay)
+cps-recon-dashboard:       ## the dashboard restricted to the recon runs (what the attacker knows)
 	$(PYTHON) -m $(M_DASHBOARD) --root $(OUTPUT_ROOT) --scenario cps-recon --port $(CPS_DASH_PORT)

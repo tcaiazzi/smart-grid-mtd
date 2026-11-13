@@ -256,13 +256,33 @@ the lab and marks the campaign interrupted.
 Everything goes onto a progress ledger, `progress.jsonl` (a standalone
 `make cps-lab`/`cps-attack` writes one into its `CPS_OUT` too): phases, the live
 plant state and the sensor's findings pulled from the containers every ~2 s, the
-attacker's writes, each run's metrics and the aggregate. `make dashboard` reads
+the attacker's steps, plans and observations as its agent records them, each
+run's metrics (a standalone run's too, when it ends) and the aggregate. `make dashboard` reads
 every ledger under `output/`; `make cps-dashboard` is the same dashboard with
 `--scenario cps`, which filters on what each run recorded rather than on where
 it was written. It can be
 started before, during or after a campaign.
 
-For the selected run, a **Topology · knowledge graph · attack tree** card draws
+For the selected run, an **Attacker · Defender** card puts the two sides next to
+each other, each split into what it is *doing* and what it *knows* (attacker) or
+*sees and believes* (defender):
+
+- **Attacker**, from its own record: its status, the impact it aims at and the
+  steps left, the steps done or failed, its Modbus writes; how it knows the
+  target (the tree handed to the planner, its own recon, people at the red
+  console, or a fixed script — the scripted chain shows only its writes), its
+  foothold, what it reached and read of the plant, the options it had and the
+  paths the defence closed.
+- **Defender**, from its telemetry: the response policy (or "watching only"), its
+  last decision, the countermeasures applied and the suggestions awaiting the
+  operator; findings by detector, open alerts, its belief on each attack-tree
+  node, what it expects next.
+
+Under them, a lane timeline (attacker, defender, plant) and a **truth vs belief**
+table: for each attack step, when the attacker did it, when the defender first
+suspected and confirmed it, the lag, and the countermeasure that covered it.
+
+A **Topology · knowledge graph · attack tree** card draws
 three views in SVG with no libraries (`cyberrange/scenarios/cps/panel.js`),
 reading the run's `kg.json` / `tree.json` through
 `GET /api/structure?id=&run=`. Every run writes both files; for runs that predate
@@ -274,13 +294,15 @@ them the structure is rebuilt from today's lab model and the card says so.
   HMI on MGMT) shows in its address list, not as a link.
 - **Knowledge graph**: all typed nodes in layers, edges coloured by relation;
   hovering a node shows its attributes.
-- **Attack tree**: each node's state (suspected / confirmed / inferred) with the
-  countermeasures that prevent (⊘) or restore (↺) it.
+- **Attack tree**: each node's state as the defender believes it (suspected /
+  confirmed / inferred) with the countermeasures that prevent (⊘) or restore (↺)
+  it, and a red badge for what the attacker really did (✓ done, ✗ failed, ◎ its
+  target).
 
 With the responder on, the response state is overlaid on all three: implicated
 hosts, blocked flow and attacker-write count, restored or isolated hosts, active
-impacts, applied countermeasures. A time slider replays the state event by event
-and lists the decisions with their justification.
+impacts, applied countermeasures. The run's time bar, under the tiles, replays
+both cards fact by fact, either side's.
 `?view=topology|kg|tree&run=<run_id>` opens a view directly.
 
 ## 9. What is measured

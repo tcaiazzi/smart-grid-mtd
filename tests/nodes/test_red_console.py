@@ -86,6 +86,18 @@ class TheBench(unittest.TestCase):
         self.bench.launch("pivot")
         self.assertFalse(ready()["breaker_open"], "a failed prerequisite opened the next step")
 
+    def test_each_step_says_where_it_stands(self):
+        outcome = lambda: {s["id"]: s["outcome"] for s in self.bench.state()["steps"]}  # noqa: E731
+        self.assertEqual(
+            outcome(), {"it_access": "ready", "pivot": "waiting", "breaker_open": "waiting"}
+        )
+        self.bench.launch("it_access")
+        self.shell.fail.add("pivot")
+        self.bench.launch("pivot")
+        self.assertEqual(
+            outcome(), {"it_access": "done", "pivot": "failed", "breaker_open": "waiting"}
+        )
+
 
 class TheConsole(unittest.TestCase):
     def setUp(self):

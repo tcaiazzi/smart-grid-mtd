@@ -68,6 +68,10 @@ class RedAgent:
             "plan_step", mode=self.mode, phases=self._phases.get(entry.get("node"), []), **entry
         )
 
+    def on_plan(self, **plan):
+        """The planner's choice of what to aim at, and what it knew choosing it."""
+        self._write("attack_plan", mode=self.mode, **plan)
+
     def _write(self, kind, **fields):
         row = {"t": round(self.clock(), 3), "kind": kind, **fields}
         self._file.write(json.dumps(row, default=str) + "\n")
@@ -84,7 +88,9 @@ class RedAgent:
             engine_ip=self.ctx["engine_ip"],
             engine_port=self.ctx["engine_port"],
         )
-        summary = planner.run(self.exec_step, sleep=time.sleep, record=self.on_step, dwell=dwell)
+        summary = planner.run(
+            self.exec_step, sleep=time.sleep, record=self.on_step, dwell=dwell, on_plan=self.on_plan
+        )
         self._write(
             "attack_end",
             mode=self.mode,

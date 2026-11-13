@@ -60,9 +60,15 @@ recon findings added.
 against the true `tree.json` recorded at deploy and reports **precision** (of what
 the attacker believed feasible, how much is real), **recall** (of what is really
 feasible, how much it found), and the id lists `discovered` / `missing` /
-`extra`. The dashboard panel turns the attack-tree view into an overlay of these:
-nodes found by recon (green), real but missed (grey, dashed), and any
-hallucinated leaves in the legend.
+`extra`.
+
+The dashboard shows the same comparison live, without waiting for the score: the
+agent puts its belief tree on the record as soon as it has built it, and the
+attack-tree view frames in red (dashed) the real nodes the attacker does not
+know, naming in the legend the ones it believes in that are not real. A run
+recorded before the belief reached the ledger falls back to the leaves its
+`tree_fidelity` lists. The Attacker · Defender card shows what recon found:
+hosts and ports, the foothold, the engine and the registers read.
 
 ## Run it
 

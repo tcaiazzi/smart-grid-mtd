@@ -59,6 +59,20 @@ def preflight():
     get_manager()
 
 
+def _score(scenario, out_dir, emit):
+    """Put a standalone run's score on its own ledger, so the dashboard shows it
+    as it shows a campaign's. A campaign scores its runs itself (and writes
+    metrics.json, which its resume logic reads), so only the ledger is written
+    here. A score that cannot be computed is a missing view, never a failed run."""
+    try:
+        metrics = scenario.metrics(out_dir)
+    except Exception as e:  # noqa: BLE001 — the run itself succeeded
+        log.warning("could not score the run in %s: %s", out_dir, e)
+        return
+    if metrics:
+        emit("run_metrics", metrics=metrics)
+
+
 def run(scenario, args, progress=None, manager=None):
     """Run one episode of ``scenario`` with ``args``. Returns the exit code."""
     scenario.validate(args)
@@ -134,6 +148,8 @@ def run(scenario, args, progress=None, manager=None):
                 manager.undeploy_lab(lab=lab)
         rc = scenario.check_run(ctx)
         status = "ok" if rc == 0 else "invalid"
+        if own and rc == 0:
+            _score(scenario, out_dir, emit)
         return rc
     except KeyboardInterrupt:
         status, error = "interrupted", "KeyboardInterrupt"

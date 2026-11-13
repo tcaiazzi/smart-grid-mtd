@@ -29,8 +29,8 @@ by the node of the team that uses it:
 | Console | Served by | Shows | Can do |
 |---|---|---|---|
 | **Control** | the platform's dashboard, on the host (`make dashboard`) | everything: the ledger, both teams' steps and commands on one timeline | nothing — it only reads |
-| **Blue** | the SOC node (`nodes/soc/soc_operator.py`, `soc_console.html`) | findings, the attack tree's belief, suggestions, responses | approve / reject, apply or revert a countermeasure by hand, switch the SOC between *advise* and *automatic*, open a shell |
-| **Red** | the attacker node (`nodes/redteam/red_console.py`, `red_console.html`), `--teams` only | the attack's steps and what each run printed | run a step, open a shell |
+| **Blue** | the SOC node (`nodes/soc/soc_operator.py`, `soc_console.html`) | *What I'm doing*: suggestions, countermeasures, responses. *What I see*: the whole attack tree coloured by the SOC's belief, findings | approve / reject, apply or revert a countermeasure by hand, switch the SOC between *advise* and *automatic*, open a shell |
+| **Red** | the attacker node (`nodes/redteam/red_console.py`, `red_console.html`), `--teams` only | *What I'm doing*: the attack's steps indented under the steps they need, each done / failed / ready / waiting, and what each run printed. *What I know*: only what its own steps reported (foothold user, command execution, plant reachability, writes accepted) | run a step, open a shell |
 
 ```
  host                         lab

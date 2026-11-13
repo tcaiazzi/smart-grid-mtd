@@ -525,7 +525,19 @@ class Service:
         """The SOC as its console shows it."""
         snap = self.engine.belief or {}
         labels = {n.id: n for n in self.engine.tree.walk()}
+
+        def shape(n):
+            # The tree's shape, for the console to draw the belief on it.
+            return {
+                "id": n.id,
+                "label": n.label,
+                "gate": n.gate,
+                "attck": n.attck,
+                "children": [shape(c) for c in n.children],
+            }
+
         return {
+            "structure": shape(self.engine.tree),
             "policy": getattr(self.engine.policy, "name", "off"),
             "mode": "advise" if self.approval == "operator" else "auto",
             "advise_s": self.advise_s,

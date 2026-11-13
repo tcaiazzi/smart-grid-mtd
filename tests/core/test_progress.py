@@ -295,6 +295,43 @@ class RunLifecycle(unittest.TestCase):
         self.assertEqual(mgr.undeployed, ["cps", "cps"])  # stale lab first, then ours
         self.assertTrue(os.path.exists(os.path.join(self.out, "topology.json")))
 
+    def _with_metrics(self, fn):
+        saved = cps_scenario.CpsScenario.metrics
+        cps_scenario.CpsScenario.metrics = fn
+        self.addCleanup(setattr, cps_scenario.CpsScenario, "metrics", saved)
+
+    def test_a_standalone_run_is_scored_on_its_own_ledger(self):
+        self._with_metrics(lambda _self, run_dir: {"abnormal_frames": 3, "run_dir": run_dir})
+        self.assertEqual(self._run(FakeManager(frames=[_frame(i) for i in range(1, 200)])), 0)
+        evs = read_events(os.path.join(self.out, "progress.jsonl"))
+        self.assertEqual(
+            [e["kind"] for e in evs][-2:],
+            ["run_metrics", "run_end"],
+            "a standalone run's score must reach its ledger before the run ends, or the "
+            "dashboard shows a finished run with no score",
+        )
+        self.assertEqual(evs[-2]["metrics"], {"abnormal_frames": 3, "run_dir": self.out})
+
+    def test_a_score_that_fails_leaves_the_run_ok(self):
+        def boom(_self, run_dir):
+            raise ValueError("unreadable run directory")
+
+        self._with_metrics(boom)
+        self.assertEqual(self._run(FakeManager()), 0)
+        evs = read_events(os.path.join(self.out, "progress.jsonl"))
+        self.assertNotIn("run_metrics", [e["kind"] for e in evs])
+        self.assertEqual(evs[-1]["status"], "ok", "a scoring error must not fail the run")
+
+    def test_a_campaign_unit_is_left_to_its_campaign_to_score(self):
+        self._with_metrics(lambda _self, run_dir: {"abnormal_frames": 3})
+        col = Collector()
+        self._run(FakeManager(), progress=col)
+        self.assertNotIn(
+            "run_metrics",
+            [e["kind"] for e in col.events],
+            "the campaign scores its units itself; a second run_metrics would count twice",
+        )
+
     def test_planner_label_on_run_start(self):
         args = self._args()
         args.attack_driver, args.attacker_profile = "planner", "stealthy"
