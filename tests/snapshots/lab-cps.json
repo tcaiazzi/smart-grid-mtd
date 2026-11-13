@@ -2,7 +2,11 @@
  "attacker": {
   "guest_files": [
    "/exploit_client.py",
-   "/ot_registers.py"
+   "/ot_registers.py",
+   "/red_agent.py",
+   "/planner.py",
+   "/steps.py",
+   "/tree_doc.py"
   ],
   "settings": {
    "0": "IT",

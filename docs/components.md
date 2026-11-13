@@ -84,7 +84,7 @@ the run's `--seed` (unseeded when the run is).
 | `ScmcPublisher` | traffic | guest | scmc · `kathara/mqtt` | mqtt-mtd |
 | `VulnApp` | attack | guest | hmi · `kathara/cps` | cps |
 | `ScriptedChain` | attack | host → guest | attacker · `kathara/cps` | cps |
-| `PlannedAttacker` | attack | host → guest | attacker · `kathara/cps` | cps |
+| `PlannedAttacker` | attack | guest + host | attacker · `kathara/cps` | cps |
 | `RedConsole` | attack | guest + host | attacker · `kathara/cps` | cps-advisor (`--teams`) |
 | `PassiveFingerprinter` | attack | guest + host | attacker · any image with tcpdump | mqtt-mtd |
 | `DeliveryAttack` | attack | host → guest | router, scmc · `kathara/mqtt` | mqtt-mtd |
@@ -123,7 +123,7 @@ Shared helpers:
 | Helper | Module | Purpose |
 |---|---|---|
 | `emit_attack_writes(ctx)` | `cyberrange.planes.attack.components` | Copies the attack's Modbus writes from the ground truth onto the ledger. |
-| `manual_steps(tree, target_url, engine_ip, engine_port, interval=0.5)` | `cyberrange.planes.attack.components` | The attack tree's feasible, executable nodes as data for `RedConsole`: each with its stage, ATT&CK technique, prerequisites and the command that realises it. |
+| `build_steps(tree, target_url, engine_ip, engine_port, interval=0.5)` | `nodes/redteam/red_steps.py` (guest) | The attack tree's feasible, executable nodes as data for `RedConsole`, built in the lab: each with its stage, ATT&CK technique, prerequisites and the command that realises it. |
 | `detect_nanogrid_ip(...)`, `BLOCK_POLICIES` | `cyberrange.planes.attack.components` | The CNN fingerprinting step. |
 | `generate_shared_key()` | `cyberrange.planes.defense.components` | The key that stands in for the QKD device's output. |
 
@@ -240,7 +240,10 @@ runs on the attacker node.
 
 ### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5, tree=None)`
 
-A reactive attacker (`cyberrange/planes/attack/planner`). It walks the attack tree of the
+A reactive attacker whose brain runs **in the lab** (`nodes/redteam/red_agent.py`,
+with the planner), the red counterpart of `SocAnalytics`. This component launches
+it with the attack tree as data and reconstructs the ground truth from the record
+it leaves, so the oracle stays off the lab. The agent walks the attack tree of the
 **deployed** lab and runs one step at a time
 (`it_access`, `it_exec`, `pivot`, then an impact). `tree` is a function
 `ctx -> tree document` supplied by the scenario (CPS: the `tree.json` the run
@@ -259,7 +262,8 @@ closes its path, it tries another branch, or stops.
 | **Options** | `dwell` = seconds between steps (the defender's window); `max_steps` = step budget |
 | **Ground truth** | `attack_start` (mode `planner:<profile>`); `plan_step` per step; `rce`; `modbus_write`; `attack_end` (success, stage reached) |
 | **Ledger** | `plan_step` per step; `attack_write` |
-| **Artifacts** | `attacker.exploit.log` |
+| **When the agent dies** | With no record at all, `attack(ctx)` raises and the run fails: it would otherwise be scored as a run without an attack. With a record cut short, the host writes the `attack_end` itself (`aborted`, the stage of the last step that succeeded). |
+| **Artifacts** | `attacker.red_agent.log` (every step's output), `attacker.red_actions.jsonl` |
 | **`label`** | `planner:<profile>` |
 
 ### `PassiveFingerprinter(node, iface, model, scaler, block_policy="top1", threshold=None)`
@@ -376,7 +380,7 @@ scenario (`nodes/common/team-access.sh`, `command_audit.sh`,
 | `WebTerminal(node, port, user, password)` | monitor | A shell of `node` served to a browser (`ttyd`) behind `user:password`. Artifacts: `<node>.terminal.typescript`, every session whole; `<node>.terminal.log`. |
 | `RecordedShell(node, team, intruder=None, witnessed=False, jump=None, entry=None)` | monitor | Loads the command record into the node's interactive shells and polls it: ledger `team_command{team, node, cmd, via}`. The team is read from how the shell got there: `team` over SSH (from `jump` only, when given) or through the node's `WebTerminal`; `intruder` for a shell that descends from `entry` (the service it gets in through), one a service left behind as an orphan, or SSH from elsewhere; `control` for anything else (the referee). The intruder's commands, and a `witnessed` team's, also go to the ground truth (`command`); `control`'s never do. Artifact: `<node>.commands.jsonl`. |
 | `JumpHost(node, hosts)` | defense | SSH from `node` to `hosts` (`{name: listen address}`): the node makes its key pair, the platform installs the public key, each host accepts it only, on that address only. Artifact: `<host>.sshd.log`. |
-| `RedConsole(node, port, token, steps, terminal=None)` | attack | The red team's console (`red_console.py`), given the attack's `steps` as data (`manual_steps(tree, …)`). It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
+| `RedConsole(node, port, token, tree, target_url, engine_ip, engine_port, interval=0.5, terminal=None)` | attack | The red team's console (`red_console.py`), given the attack `tree` as data; it builds its executable steps in the lab (`red_steps.build_steps`), the same registry the autonomous planner reads. It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
 
 ### `WazuhManager(node, agents)` · `WazuhAgent(node, manager_ip, agent_id, key, responses=None, logs=())`
 
@@ -506,7 +510,7 @@ services     … the CPS services, then (extra_services):
 normal       as CPS
 engage       --teams only, once the ground truth is open:
              WebTerminal(attacker) → RecordedShell(attacker, red, witnessed=True)
-             → RedConsole(attacker, steps=manual_steps(tree, …))
+             → RedConsole(attacker, tree=…)  # builds its steps in the lab
 open         --playground: the lab stays up until Ctrl-C
 ```
 

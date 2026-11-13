@@ -209,18 +209,19 @@ class CpsAdvisorScenario(CpsScenario):
         if not a.teams:
             return
         links = self.links(a)[RED]
-        steps = attack.manual_steps(
-            self._attack_tree(ctx),
-            f"http://{T.HMI_IP}:{T.APP_PORT}",
-            T.ENGINE_IP,
-            T.MODBUS_PORT,
-            interval=a.attack_interval,
-        )
         ctx.start(monitor.WebTerminal("attacker", T.TERMINAL_GUEST_PORT, RED, a.red_token))
         ctx.start(monitor.RecordedShell("attacker", RED, witnessed=True))
         ctx.start(
             attack.RedConsole(
-                "attacker", T.CONSOLE_GUEST_PORT, a.red_token, steps, terminal=links["terminal"]
+                "attacker",
+                T.CONSOLE_GUEST_PORT,
+                a.red_token,
+                self._attack_tree(ctx),
+                f"http://{T.HMI_IP}:{T.APP_PORT}",
+                T.ENGINE_IP,
+                T.MODBUS_PORT,
+                interval=a.attack_interval,
+                terminal=links["terminal"],
             )
         )
         self.hand_over(RED, links)

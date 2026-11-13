@@ -375,8 +375,8 @@ simulated.
 ### Tree-guided attacker
 
 By default the attack is a fixed per-mode chain. `CPS_ATTACK_DRIVER=planner`
-runs a **reactive attacker** (`cyberrange/planes/attack/planner/`) that walks the
-same attack tree and picks its next step from the current state, composing the
+runs a **reactive attacker** in the lab (`nodes/redteam/red_agent.py`) that walks
+the same attack tree and picks its next step from the current state, composing the
 *same* lab primitives the scripted chain uses — no new offensive capability,
 lab-only. It learns by outcome: if a step fails because a countermeasure closed
 its path, it tries another feasible impact or gives up, so it exercises the

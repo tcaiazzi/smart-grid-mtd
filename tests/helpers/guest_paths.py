@@ -31,7 +31,8 @@ WAZUH_AGENT = NODES / "wazuh" / "agent"
 #: SOC node: the analytics (soc_analytics) and the SOAR modules it imports.
 #: ot_registers rides along in DEFENSE (a flat dual-use module).
 SOC = NODES / "soc"
-#: Attacker node, when people play the red team: its console.
+#: Attacker node: the autonomous attacker (red_agent, with its planner) and the
+#: red team's console.
 REDTEAM = NODES / "redteam"
 
 

@@ -230,16 +230,22 @@ class Episode(unittest.TestCase):
         self.assertEqual(phases, ["deploy", "services", "normal", "open", "download", "undeploy"])
         red = self.started(mgr, "attacker", "red_console.py")
         self.assertIn(f"--port 8090 --token {args.red_token}", red)
-        steps = json.loads(base64.b64decode(red.split("--steps-b64 ")[1].split()[0]))
-        self.assertEqual(
-            [s["id"] for s in steps][:3],
-            ["it_access", "it_exec", "pivot"],
-            "the steps are out of order",
-        )
-        self.assertIn(
-            "--step impact --attack breaker-open",
-            {s["id"]: s for s in steps}["breaker_open"]["command"],
-        )
+        # The console is handed the attack tree as data and the target to reach;
+        # it builds its executable steps in the lab (red_steps, tested in
+        # tests/planes/test_attack_planner.py).
+        self.assertIn("--target-url http://", red)
+        self.assertIn("--engine-ip ", red)
+        self.assertIn("--engine-port ", red)
+        tree = json.loads(base64.b64decode(red.split("--tree-b64 ")[1].split()[0]))
+        ids = set()
+
+        def _walk(n):
+            ids.add(n["id"])
+            for c in n.get("children") or []:
+                _walk(c)
+
+        _walk(tree)
+        self.assertLessEqual({"it_access", "it_exec", "pivot", "breaker_open"}, ids)
         teams = os.path.join(self.out, "teams.json")
         with open(teams) as f:
             self.assertEqual(sorted(json.load(f)), ["blue", "red"])

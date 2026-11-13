@@ -1,16 +1,20 @@
-"""planner.py — tree-guided attacker (host-side, pure: no Kathará, no network).
+#!/usr/bin/env python3
+"""planner.py — tree-guided attacker (pure: no Kathará, no network).
 
 AttackPlanner picks an impact goal per its profile, walks the prerequisite steps
 to it, and executes each by calling the injected ``exec_step(node) -> outcome``.
 When a step fails (a countermeasure closed its path) it marks the branch blocked
 and tries another feasible impact, or stops ("defended"). Deterministic given
 the seed, so an episode can be replayed.
+
+Copied flat onto the attacker node with steps.py, tree_doc.py and red_agent.py
+(see the scenario's guest_files.py). Stdlib only.
 """
 
 import random
 
-from cyberrange.planes.attack.planner import steps as S
-from cyberrange.planes.attack.planner import tree_doc
+import steps as S
+import tree_doc
 
 PROFILES = ("opportunistic", "targeted", "stealthy")
 

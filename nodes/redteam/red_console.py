@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """red_console.py — the red team's console: the attack's steps, run on demand.
 
-The attacker's planner chooses its steps by itself; here a person does. The
-console is given the steps of the attack tree as data — each with the command
-that realises it on this node — and runs the one asked for, keeping what came
-of it. It decides nothing and knows nothing of the target beyond those steps.
+The attacker's planner (red_agent.py) chooses its steps by itself; here a person
+does. The console is given the attack tree as data (--tree-b64) and builds its
+executable steps on this node (red_steps.build_steps) — each with the command
+that realises it — then runs the one asked for, keeping what came of it. It
+decides nothing and knows only what the tree tells it.
 
     GET  /             the console page (red_console.html)
     GET  /state        {"steps": [...], "history": [...], "terminal": url}
@@ -26,6 +27,8 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import red_steps
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "red_console.html")
 STEP_TIMEOUT_S = 60.0
@@ -206,13 +209,20 @@ class RedConsole:
 
 def main():
     ap = argparse.ArgumentParser(description="Red team console: the attack's steps on demand")
-    ap.add_argument("--steps-b64", required=True, help="the steps, base64 of a JSON list")
+    ap.add_argument("--tree-b64", required=True, help="attack tree document, base64 of JSON")
+    ap.add_argument("--target-url", required=True)
+    ap.add_argument("--engine-ip", required=True)
+    ap.add_argument("--engine-port", type=int, required=True)
+    ap.add_argument("--interval", type=float, default=0.5)
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--token", required=True)
     ap.add_argument("--record", default="/red_actions.jsonl")
     ap.add_argument("--terminal", default=None, help="URL of the team's web terminal")
     args = ap.parse_args()
-    steps = json.loads(base64.b64decode(args.steps_b64))
+    tree = json.loads(base64.b64decode(args.tree_b64))
+    steps = red_steps.build_steps(
+        tree, args.target_url, args.engine_ip, args.engine_port, interval=args.interval
+    )
     console = RedConsole(Bench(steps, args.record), args.token, args.port, terminal=args.terminal)
     print(f"red console on port {console.port}, {len(steps)} steps", flush=True)
     console.httpd.serve_forever()

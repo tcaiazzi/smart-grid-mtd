@@ -18,7 +18,7 @@ on the host. No guest agent imports it, so it may use networkx.
 | [nodes/soc/soar_mapping.py](../nodes/soc/soar_mapping.py) | findings → evidence on tree nodes → belief (`CampaignState`) |
 | [nodes/soc/soar_policy.py](../nodes/soc/soar_policy.py) | belief → decisions: the rules playbook and the solver |
 | [nodes/soc/soc_analytics.py](../nodes/soc/soc_analytics.py) | the SOC node's runtime loop (decision + requests); its engine, offline, is the replay |
-| [cyberrange/planes/attack/planner/](../cyberrange/planes/attack/planner/) | the attacker that walks the same tree, read from `tree.json` |
+| [nodes/redteam/](../nodes/redteam/) | the attacker (`red_agent.py` + planner) that walks the same tree in the lab, read from `tree.json` |
 
 ## 1. The pipeline
 
@@ -350,7 +350,7 @@ deployed. There is no stored copy that could drift from the lab.
 |---|---|---|
 | before deploy | `core.lifecycle` → `CpsScenario.write_structure(ctx)` | `kg.json` and `tree.json` in the run directory, from the inventory (via `soc_tool`, a subprocess). The countermeasures include the IT ones when `--it-telemetry` is on |
 | SOC analytics start | `SocAnalytics` → `soc_analytics.py` on the node | its own graph from the inventory, the tree, the countermeasures, an empty `CampaignState`; it writes `kg.json`/`tree.json` on the node |
-| attack phase with `--attack-driver planner` | `PlannedAttacker.attack` → `drive_attack_planned` | the tree document the run recorded (`tree.json`) |
+| attack phase with `--attack-driver planner` | `PlannedAttacker.attack` → `red_agent.py` on the attacker node | the tree document the run recorded (`tree.json`), passed to the agent as data |
 | dashboard, for a run without `kg.json` | `CpsScenario.structure()` → `soc_tool` | rebuilt from today's inventory, in a subprocess; the card says "rebuilt" |
 | offline | `python -m cyberrange.scenarios.cps.responder --replay <run>` | rebuilt from the declared topology |
 
@@ -566,15 +566,15 @@ same belief, so the solver offers its next-best set; one left unanswered for
 
 ## 7. The attacker walks the same tree
 
-`AttackPlanner` ([planes/attack/planner/planner.py](../cyberrange/planes/attack/planner/planner.py))
-uses the tree as a plan:
+`AttackPlanner` ([nodes/redteam/planner.py](../nodes/redteam/planner.py)), run in
+the lab by [red_agent.py](../nodes/redteam/red_agent.py), uses the tree as a plan:
 
 1. **Candidate goals.** The impact leaves that are `feasible` on the graph,
    ordered by profile:
    - *opportunistic*: the biggest `impact` first;
    - *targeted*: only `--attack-goal`;
    - *stealthy*: the lowest `DETECTABILITY` first
-     ([steps.py](../cyberrange/planes/attack/planner/steps.py)).
+     ([steps.py](../nodes/redteam/steps.py)).
 2. **Steps.** For a goal: its `prerequisites` in stage order
    (`it_access → it_exec → pivot`), then the leaf. Each step is one
    `exploit_client.py --step …` run on the attacker container.
@@ -635,7 +635,7 @@ several modules. A new impact leaf touches all of these:
 | `mapping.IMPACT_LEAVES` | so it counts as an impact (explaining away, residual, `active_impacts`) |
 | `trees.cps_countermeasures` | which actions prevent or restore it |
 | `policy.RulesPolicy.PLAYBOOK` / `TRIGGERS` | what the baseline does when it is confirmed |
-| `planner/steps.py` `IMPACT_MODE`, `DETECTABILITY` | how the attacker realises it, and how loud it is |
+| `nodes/redteam/steps.py` `IMPACT_MODE`, `DETECTABILITY` | how the attacker realises it, and how loud it is |
 | `scenarios/cps/metrics.py` `expected_response` | what a correct response to it is |
 | tests | `test_soar_trees`, `test_soar_mapping`, `test_soar_policy`, `test_attack_planner` |
 

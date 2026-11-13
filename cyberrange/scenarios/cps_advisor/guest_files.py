@@ -17,8 +17,12 @@ TEAM_FILES = [
 # SOC node: the page of the operator console that soc_operator.py serves.
 SOC_CONSOLE_FILES = [("nodes/soc/soc_console.html", "/soc_console.html")]
 
-# Attacker node, when a red team plays: its console.
+# Attacker node, when a red team plays: its console. The console builds the
+# attack tree's steps in the lab (red_steps), the same registry (steps.py,
+# tree_doc.py — staged on the attacker by the cps lab) the autonomous planner
+# reads.
 RED_FILES = [
     ("nodes/redteam/red_console.py", "/red_console.py"),
     ("nodes/redteam/red_console.html", "/red_console.html"),
+    ("nodes/redteam/red_steps.py", "/red_steps.py"),
 ]

@@ -41,7 +41,8 @@ profile, the active response that applies a countermeasure). The components
 that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
 
 Next to it: `nodes/soc/` (the SOC's analytics and its operator console),
-`nodes/redteam/` (the red team's console, on the attacker node) and
+`nodes/redteam/` (the attacker node's brains: the autonomous tree-guided
+attacker `red_agent.py` with its planner, and the red team's console) and
 `nodes/common/` (what any host a person works on needs: the web terminal and
 SSH set-up around `ttyd` and OpenSSH, and the record of the commands typed).
 

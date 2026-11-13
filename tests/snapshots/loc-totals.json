@@ -1,7 +1,7 @@
 {
- "cps": 7080,
- "cps-advisor": 1014,
+ "cps": 7099,
+ "cps-advisor": 1060,
  "mqtt-mtd": 8481,
- "platform": 3763,
+ "platform": 3840,
  "shared": 1160
 }

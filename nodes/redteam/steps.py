@@ -1,9 +1,13 @@
+#!/usr/bin/env python3
 """steps.py — map attack-tree leaf nodes to the lab step that realises them.
 
 Each entry is data: which single exploit_client.py step runs the node, how loud
 it is (detectability, used by the stealthy profile), and which stage it belongs
 to. The commands compose the primitives the scripted chain already uses — this
 registry only lets the planner invoke them one node at a time.
+
+Copied flat onto the attacker node (see the scenario's guest_files.py), where
+planner.py, red_agent.py and red_console.py all ``import steps``. Stdlib only.
 """
 
 # Ordered prerequisite steps shared by every "through the HMI" impact.

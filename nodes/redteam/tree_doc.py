@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """tree_doc.py — reading an attack tree as a document.
 
 The attacker plans on what it knows of the target: an attack tree handed to it
@@ -7,6 +8,9 @@ says whether it is feasible. It does not run the defender's code to find out.
 A node is a dict: ``id``, ``gate`` (AND | OR | LEAF), ``children``, ``impact``,
 ``attck``, ``feasible``. AND children are ordered steps; OR children are
 alternatives.
+
+Copied flat onto the attacker node (see the scenario's guest_files.py), where
+planner.py and red_steps.py ``import tree_doc``. Stdlib only.
 """
 
 AND = "AND"

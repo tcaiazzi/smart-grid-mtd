@@ -82,8 +82,15 @@ HMI_FILES = [
     ("cyberrange/planes/defense/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
 ] + WAZUH_AGENT_FILES
 
-# Attacker node: drives the exploit over HTTP against the HMI host.
+# Attacker node: drives the exploit over HTTP against the HMI host. The
+# autonomous attacker's brain runs here too (red_agent.py with the planner):
+# the exploit primitives it drives are already on this node, and the oracle
+# stays off the lab — the host reconstructs the ground truth from its record.
 ATTACKER_CPS_FILES = [
     ("cyberrange/planes/attack/agents/exploit_client.py", "/exploit_client.py"),
     ("cyberrange/planes/defense/ot_registers.py", "/ot_registers.py"),
+    ("nodes/redteam/red_agent.py", "/red_agent.py"),
+    ("nodes/redteam/planner.py", "/planner.py"),
+    ("nodes/redteam/steps.py", "/steps.py"),
+    ("nodes/redteam/tree_doc.py", "/tree_doc.py"),
 ]

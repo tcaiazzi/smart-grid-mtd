@@ -35,11 +35,11 @@ nodes/                                 imports none of them, and none imports it
 |---|---|
 | `cyberrange/core/` | The platform: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry, progress ledger and dashboard |
 | `cyberrange/planes/traffic/` | Background trace replay, the nanogrid MQTT publishers, the plant and PLC |
-| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain, the tree-guided planner, the launcher of the red team's console |
+| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain, the launchers of the in-lab tree-guided attacker and of the red team's console |
 | `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, the launchers of Wazuh and of the SOC's analytics, the QKD-simulated cert bootstrap |
 | `cyberrange/planes/monitor/` | Capture, the telemetry/plant mirrors, the web terminals and the record of what people type in them |
 | `cyberrange/scenarios/<name>/` | One scenario, whole: topology, episode, CLI, campaign, deploy manifest, metrics, `analysis/`, `training/` |
-| `nodes/` | Node software: the Wazuh configuration and active response (`wazuh/`), the SOC's analytics, SOAR reasoning and operator console (`soc/`), the red team's console (`redteam/`), shell access and command recording (`common/`) |
+| `nodes/` | Node software: the Wazuh configuration and active response (`wazuh/`), the SOC's analytics, SOAR reasoning and operator console (`soc/`), the autonomous tree-guided attacker with its planner and the red team's console (`redteam/`), shell access and command recording (`common/`) |
 | `tests/`, `make/`, `scripts/`, `tools/`, `docs/` | Tests by area, the makefiles, the manual single-run script, cross-scenario tooling, documentation |
 
 Each plane exposes its reusable building blocks in `components.py`; a scenario

@@ -54,9 +54,9 @@ team's bearer token:
   own initiative, through the manager like the SOC's own responses;
 - `POST /mode` `{"mode": "advise" | "auto"}`.
 
-**The red console is given the attack's steps as data**: every feasible,
-executable node of the attack tree, with the command that realises it
-(`exploit_client.py --step …`). It decides nothing. A step marked *not ready*
+**The red console is given the attack tree as data** and builds its steps on
+the node (`red_steps.py`): every feasible, executable node of the tree, with the
+command that realises it (`exploit_client.py --step …`). It decides nothing. A step marked *not ready*
 has a prerequisite that has not succeeded; it can be tried anyway. Its API,
 behind the red team's token: `GET /state` and `POST /steps/<id>`.
 

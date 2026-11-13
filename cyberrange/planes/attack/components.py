@@ -4,7 +4,7 @@ Every attack records what it really did in the run's ground truth (host-only):
 
     VulnApp              the deliberately vulnerable diagnostics web app (CPS foothold)
     ScriptedChain        fixed per-mode chain: RCE -> pivot -> unauthorized Modbus writes
-    PlannedAttacker      reactive, tree-guided attacker (cyberrange/planes/attack/planner)
+    PlannedAttacker      reactive, tree-guided attacker, run in the lab (red_agent.py)
     RedConsole           the same steps, run by a person from a console on the attacker
     PassiveFingerprinter sniff -> CNN fingerprint of the nanogrid -> pick the IP to block
     DeliveryAttack       blackhole episodes + benign faults (cyberrange/detection_scenario)
@@ -112,9 +112,14 @@ class ScriptedChain(_ExploitDriver):
 
 class PlannedAttacker(_ExploitDriver):
     """A reactive attacker choosing each step on an attack tree of the lab, by
-    profile (opportunistic | targeted | stealthy)."""
+    profile (opportunistic | targeted | stealthy). The planner runs in the lab
+    (nodes/redteam/red_agent.py): this component launches it with the tree as
+    data and reconstructs the ground truth from the record it leaves, so the
+    oracle stays off the lab and the DPI sensor never sees it."""
 
     name = "planned_attacker"
+    RECORD = "/red_actions.jsonl"
+    LOG = "/red_agent.log"
 
     def __init__(
         self,
@@ -130,70 +135,138 @@ class PlannedAttacker(_ExploitDriver):
     ):
         super().__init__(target_url, engine_ip, engine_port, interval)
         self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
-        # ctx -> the attack tree as a document (planner.tree_doc). The scenario
-        # supplies it: which tree describes a lab is the scenario's knowledge,
-        # and the attacker reads a document, never the defender's code.
+        # ctx -> the attack tree as a document (tree_doc). The scenario supplies
+        # it: which tree describes a lab is the scenario's knowledge, and the
+        # attacker reads a document, never the defender's code.
         self.tree = tree
 
     @property
     def label(self):
         return f"planner:{self.profile}"
 
+    def artifacts(self):
+        return [
+            Artifact(self.node, self.LOG, f"{self.node}.red_agent.log"),
+            Artifact(self.node, self.RECORD, f"{self.node}.red_actions.jsonl"),
+        ]
+
     def attack(self, ctx):
-        summary = active_attack.drive_attack_planned(
-            ctx.manager,
-            ctx.machines,
-            ctx.gt,
-            self.tree(ctx),
-            target_url=self.target_url,
-            engine_ip=self.engine_ip,
-            engine_port=self.engine_port,
-            profile=self.profile,
-            goal=self.goal,
-            seed=ctx.seed,
-            dwell=self.dwell,
-            max_steps=self.max_steps,
-            interval=self.interval,
-            emit=ctx.emit,
+        tree_b64 = base64.b64encode(json.dumps(self.tree(ctx)).encode()).decode()
+        goal = f"--goal {self.goal} " if self.goal else ""
+        seed = f"--seed {ctx.seed} " if ctx.seed is not None else ""
+        cmd = (
+            f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 red_agent.py '
+            f"--tree-b64 {tree_b64} --profile {self.profile} {goal}{seed}"
+            f"--dwell {self.dwell} --max-steps {self.max_steps} "
+            f"--target-url {self.target_url} --engine-ip {self.engine_ip} "
+            f"--engine-port {self.engine_port} --interval {self.interval} "
+            f'--record {self.RECORD} 2>&1 | tee {self.LOG}"'
         )
-        emit_attack_writes(ctx)
+        log.info("[Attack] autonomous red agent (planner:%s) on %s", self.profile, self.node)
+        # Blocks until the in-lab agent exits; then its record is the only source
+        # of truth about what it did (the planner decided in the lab, not here).
+        out, _err, rc = ctx.run(self.node, cmd, wait=True)
+        return self._reconstruct(ctx, rc, (out or b"").decode(errors="replace"))
+
+    def _reconstruct(self, ctx, rc, output):
+        """Replay the agent's record into the ground truth and the ledger:
+        attack_start, per-step plan_step, the Modbus writes, the foothold,
+        attack_end. ``rc`` and ``output`` are the agent's own, to report a record
+        that is missing or cut short."""
+        summary = {"success": False, "stage_reached": "none", "writes_ok": 0}
+        if ctx.gt is None:
+            return summary
+        seen = set()
+        for line in ctx.exec_text(self.node, f"cat {self.RECORD}").splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            seen.add(row.get("kind"))
+            self._record_row(ctx, row, summary)
+        tail = output[-500:].strip()
+        if "attack_start" not in seen:
+            # A run asked to attack whose ground truth holds no attack is scored
+            # as a quiet one, every finding a false alarm: fail it instead.
+            raise RuntimeError(f"the red agent left no record on {self.node} (rc={rc}): {tail}")
+        if "attack_end" not in seen:
+            # The agent died mid-attack. What it did is on record; the attack is
+            # closed here, or the metrics would find no outcome for it.
+            log.warning("red agent stopped before its attack_end (rc=%s): %s", rc, tail)
+            ctx.gt.record("attack_end", mode=self.label, aborted=True, **summary)
         return summary
 
-
-def manual_steps(tree, target_url, engine_ip, engine_port, interval=0.5):
-    """The steps a person may run, as data for the red team's console: every
-    executable, feasible node of the attack ``tree`` (a document), in the order
-    the steps build on each other, each with the command that realises it."""
-    from cyberrange.planes.attack.planner import steps as S
-    from cyberrange.planes.attack.planner import tree_doc
-
-    ctx = {
-        "target_url": target_url,
-        "engine_ip": engine_ip,
-        "engine_port": engine_port,
-        "interval": interval,
-    }
-    nodes = [n for n in tree_doc.walk(tree) if S.is_step(n["id"]) and tree_doc.feasible(n)]
-    nodes.sort(key=lambda n: S.STAGE_INDEX[S.stage_of(n["id"])])
-    known = {n["id"] for n in nodes}
-    return [
-        {
-            "id": n["id"],
-            "label": n.get("label") or n["id"],
-            "attck": n.get("attck"),
-            "attck_name": n.get("attck_name"),
-            "stage": S.stage_of(n["id"]),
-            "detectability": S.DETECTABILITY.get(n["id"]),
-            "needs": [p for p in tree_doc.prerequisites(tree, n["id"]) if p in known],
-            "command": S.step_command(n["id"], ctx),
-        }
-        for n in nodes
-    ]
+    def _record_row(self, ctx, row, summary):
+        kind = row.get("kind")
+        if kind == "attack_start":
+            ctx.gt.record(
+                "attack_start",
+                t=row.get("t"),
+                mode=row.get("mode"),
+                target_url=row.get("target_url"),
+                engine_ip=row.get("engine_ip"),
+                engine_port=row.get("engine_port"),
+                goal=row.get("goal"),
+                dwell=row.get("dwell"),
+            )
+        elif kind == "plan_step":
+            entry = {
+                k: row.get(k)
+                for k in ("node", "stage", "attck", "ok", "chosen_among", "target", "writes")
+            }
+            ctx.gt.record("plan_step", t=row.get("t"), mode=row.get("mode"), **entry)
+            ctx.emit("plan_step", guest_t=row.get("t"), **entry)
+            # Steps succeed in stage order, so the last one that did is how far
+            # the attack got, should the agent never report its end.
+            if row.get("ok"):
+                summary["stage_reached"] = row.get("stage")
+            summary["writes_ok"] += int(row.get("writes") or 0)
+            for e in row.get("phases") or []:
+                if e.get("phase") != "modbus_write":
+                    continue
+                write = dict(
+                    register=e.get("register"),
+                    register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
+                    value=e.get("value"),
+                    ok=e.get("ok"),
+                )
+                ctx.gt.record(
+                    "modbus_write",
+                    t=e.get("t_send", e.get("t")),
+                    mode=row.get("mode"),
+                    attempt=e.get("attempt"),
+                    source="pivot",
+                    unauthorized=True,
+                    **write,
+                )
+                ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
+            foothold = active_attack.STAGE_TO_GT.get(row.get("node"))
+            if foothold and row.get("ok"):
+                ctx.gt.record(foothold, t=row.get("t"), mode=row.get("mode"))
+        elif kind == "attack_end":
+            ctx.gt.record(
+                "attack_end",
+                t=row.get("t"),
+                mode=row.get("mode"),
+                success=row.get("success"),
+                stage_reached=row.get("stage_reached"),
+                writes_ok=row.get("writes_ok"),
+            )
+            summary.update(
+                success=bool(row.get("success")),
+                stage_reached=row.get("stage_reached"),
+                writes_ok=row.get("writes_ok", 0),
+            )
 
 
 class RedConsole(GuestAgent):
     """The red team's console on the attacker node (nodes/redteam/red_console.py):
-    a person runs the attack's ``steps`` (see manual_steps) one at a time.
+    a person runs the attack's steps one at a time. The console is given the
+    attack ``tree`` as data and builds its executable steps in the lab
+    (red_steps.build_steps), the same registry the autonomous planner reads.
 
     What they run is the attack, so it is this component that writes the
     ground truth: it follows the console's record and turns every step into
@@ -203,12 +276,24 @@ class RedConsole(GuestAgent):
     RECORD = "/red_actions.jsonl"
     MODE = "manual"
 
-    def __init__(self, node, port, token, steps, terminal=None):
-        packed = base64.b64encode(json.dumps(steps).encode()).decode()
+    def __init__(
+        self,
+        node,
+        port,
+        token,
+        tree,
+        target_url,
+        engine_ip,
+        engine_port,
+        interval=0.5,
+        terminal=None,
+    ):
+        packed = base64.b64encode(json.dumps(tree).encode()).decode()
         super().__init__(
             node,
-            f"python3 red_console.py --port {port} --token {token} --steps-b64 {packed}"
-            + (f" --terminal {terminal}" if terminal else ""),
+            f"python3 red_console.py --port {port} --token {token} --tree-b64 {packed} "
+            f"--target-url {target_url} --engine-ip {engine_ip} --engine-port {engine_port} "
+            f"--interval {interval}" + (f" --terminal {terminal}" if terminal else ""),
             "red_console.log",
             plane=PLANE,
             name="red_console",
