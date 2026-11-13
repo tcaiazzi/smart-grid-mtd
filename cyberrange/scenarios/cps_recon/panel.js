@@ -6,8 +6,9 @@
 // is what that attacker believes: the attack tree keeps the defender's belief
 // and the attacker's progress, and frames in red the real nodes the attacker
 // does not know; nodes it believes in that are not real are listed in the
-// legend. The belief comes live from the ledger (attacker_belief); a run
-// recorded without it falls back to the leaves its scored tree_fidelity lists.
+// legend. Seen from the attacker's side, the view draws the tree it built. The
+// belief comes live from the ledger (attacker_belief); a run recorded without
+// it falls back to the leaves its scored tree_fidelity lists.
 (function () {
   "use strict";
   function ids(node, out) {
@@ -24,7 +25,9 @@
     const overlayAt = (r, t) => {
       const ov = base.graph.overlayAt(r, t);
       const belief = r.x && r.x.red && r.x.red.belief;
-      if (belief && (t == null || belief.t <= t + 1e-6)) return { ...ov, redKnows: ids(belief.tree, new Set()) };
+      // The tree it built is also what the attack-tree view draws from its side.
+      if (belief && (t == null || belief.t <= t + 1e-6))
+        return { ...ov, redKnows: ids(belief.tree, new Set()), redTree: belief.tree };
       const fid = r.metrics && r.metrics.tree_fidelity;
       if (fid) return { ...ov, redKnows: new Set([...(fid.discovered || []), ...(fid.extra || [])]), redLeavesOnly: true };
       return ov;

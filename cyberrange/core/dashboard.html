@@ -40,7 +40,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+main { margin: 0 auto; padding: 16px 24px; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; }
 h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
@@ -62,9 +62,23 @@ select { max-width: 100%; }
 .tile .note { color: var(--muted); font-size: 12px; }
 .bar { height: 10px; border-radius: 999px; background: var(--wash); overflow: hidden; display: flex; gap: 2px; margin: 4px 0 16px; }
 .bar > span { display: block; height: 100%; }
-.grid2 { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; }
-.grid2 > .card { margin-bottom: 0; }
-@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .grid2 > .card { margin-bottom: 16px; } }
+/* The page is one 12-column grid: each section says how many columns it takes
+   (data-span), the scenario's view says which sections show and in what order. */
+#board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; grid-auto-flow: row dense; }
+#board > .card { margin-bottom: 0; grid-column: span 12; }
+#board > .card[data-span="4"] { grid-column: span 4; }
+#board > .card[data-span="8"] { grid-column: span 8; }
+#board > .card[data-span="6"] { grid-column: span 6; }
+#board > .card.wide { grid-column: span 12; }
+#board > .offview { display: none !important; }
+@media (max-width: 1100px) { #board > .card[data-span] { grid-column: span 12; } }
+/* Every card can be closed: its head stays, the rest goes. */
+.card-head { display: flex; align-items: baseline; gap: 8px; }
+.card-head h2 { flex: 1; cursor: pointer; }
+.card-head button { padding: 0 7px; line-height: 20px; color: var(--ink-2); }
+.card.collapsed > :not(.card-head) { display: none !important; }
+.card.collapsed { padding-bottom: 10px; }
+.help { background: var(--wash); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; font-size: 13px; color: var(--ink-2); white-space: pre-line; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 6px 8px; vertical-align: bottom; }
@@ -108,7 +122,6 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
 .gbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 4px; }
 .gbar .tabs { margin-bottom: 0; }
 .gbar label { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
-#g-time { width: min(320px, 100%); }
 .gwrap { position: relative; overflow-x: auto; }
 .gview svg.graph { display: block; width: 100%; height: auto; }
 .gwrap .tip { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
@@ -125,8 +138,14 @@ td.wrap { white-space: normal; min-width: 280px; }
 .sug details { margin: 6px 0; font-size: 13px; }
 .sug summary { cursor: pointer; color: var(--ink-2); }
 .team { font-weight: 600; }
-.timebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
-.timebar label { display: inline-flex; align-items: center; gap: 6px; }
+/* The time bar keeps its shape while it is used: the slider takes the free
+   width, the label after it has a fixed one. */
+.timebar { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
+.timebar input[type=range] { flex: 1 1 auto; min-width: 120px; margin: 0; }
+.timebar .tlabel { flex: 0 0 38ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); }
+.timebar button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+@media (max-width: 760px) { .timebar { flex-wrap: wrap; } .timebar input[type=range] { order: -1; flex-basis: 100%; } .timebar .tlabel { flex-basis: 100%; } }
+.viewtabs { margin: 0; }
 /* Neutral blocks a panel's cards are built from: two sides, key/value lines, lanes. */
 .cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 @media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }
@@ -147,6 +166,7 @@ td.wrap { white-space: normal; min-width: 280px; }
     <h1>Experiment progress</h1>
     <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
     <span class="spacer"></span>
+    <span class="tabs viewtabs" id="views" role="group" aria-label="View"></span>
     <label class="sub" style="margin:0" for="ledger">Experiment</label>
     <select id="ledger" aria-label="Campaign or run"></select>
     <button id="theme" type="button" title="Toggle light/dark">Theme</button>
@@ -154,21 +174,30 @@ td.wrap { white-space: normal; min-width: 280px; }
 
   <section class="tiles" id="tiles"></section>
   <div class="bar" id="pbar" role="img" aria-label="campaign progress"></div>
-  <div class="timebar" id="timebar" style="display:none">
-    <label for="g-time">state of the run at <b id="g-tlabel">live</b></label>
-    <input type="range" id="g-time" min="0" max="0" value="0" step="1">
-    <button type="button" id="g-live" title="Follow the latest state">Live</button>
+  <div class="timebar" id="timebar" style="display:none" role="group" aria-label="Time of the run shown">
+    <button type="button" id="t-prev" title="Previous fact of the run (← key)">◀</button>
+    <button type="button" id="t-next" title="Next fact of the run (→ key)">▶</button>
+    <button type="button" id="t-play" title="Replay the run from the time shown (Space)" aria-pressed="false">▶ Play</button>
+    <select id="t-speed" title="Replay speed" aria-label="Replay speed">
+      <option value="1">×1</option><option value="5">×5</option><option value="20">×20</option>
+    </select>
+    <input type="range" id="g-time" min="0" max="0" value="0" step="1" aria-label="Time of the run shown"
+      title="Drag to see the run as it stood at that time; Shift+←/→ moves 10 s">
+    <button type="button" id="g-live" title="Follow the run as it happens (End key)">Live</button>
+    <span class="tlabel" id="g-tlabel">live</span>
   </div>
 
-  <div class="grid2">
-    <section class="card">
+  <div id="board">
+    <section class="card" id="queue-card" data-span="4"
+      data-help="One row per run of the selected experiment. A standalone run has one; a campaign one per configuration and seed.&#10;status: pending · running · scoring · done · failed · interrupted (its writer stopped) · retrying.&#10;time: how long the run took, or has been running.&#10;The other columns are the scenario's: hover their headers.">
       <h2>Queue</h2>
       <p class="sub">One row per run; click a row to inspect it. Results appear as each run is scored.</p>
       <div class="scroll"><table id="queue"></table></div>
       <p class="sub" style="margin:8px 0 0" id="q-note"></p>
     </section>
 
-    <section class="card" id="detail">
+    <section class="card" id="detail" data-span="8"
+      data-help="The selected run: its phases (bar width = expected length, fill = how far it got), then the scenario's view of it: state chips, chart and table. Hover a phase, a chip or a column header for its meaning.">
       <h2 id="d-title">Run</h2>
       <p class="sub" id="d-sub"></p>
       <div class="phases" id="d-phases"></div>
@@ -180,11 +209,9 @@ td.wrap { white-space: normal; min-width: 280px; }
       <p class="sub" id="f-sub"></p>
       <div class="scroll"><table id="d-findings"></table></div>
     </section>
-  </div>
 
-  <div id="cards" style="margin-top:16px"></div>
-
-  <section class="card" id="graph-card">
+  <section class="card" id="graph-card"
+    data-help="The lab as structure, drawn as of the time the bar above selects.&#10;Topology: zones, hosts, addresses, services and the allowed flows.&#10;Knowledge graph: every typed node and how they relate (hover a node).&#10;Attack tree: the ways to the plant's impact. The switches above the drawing choose what is shown; the legend says what each colour and mark means.">
     <h2>Topology · knowledge graph · attack tree</h2>
     <p class="sub" id="g-sub">Select a run.</p>
     <div class="gbar">
@@ -199,25 +226,29 @@ td.wrap { white-space: normal; min-width: 280px; }
     <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
   </section>
 
-  <section class="card" id="op-card" style="margin-top:16px;display:none">
+  <section class="card" id="op-card" style="display:none"
+    data-help="Each suggestion the defender's analytics put to its human operator: what it proposed, why, and whether it was approved, rejected or left to expire. Answered at the defender's console, never here.">
     <h2>Operator suggestions</h2>
     <p class="sub">What the defender put to its operator, and what came of it. Shown here only: it is answered at the defender's own console.</p>
     <div id="op-pending"></div>
     <div class="scroll"><table id="op-history"></table></div>
   </section>
 
-  <section class="card" id="teams-card" style="margin-top:16px;display:none">
+  <section class="card" id="teams-card" style="display:none"
+    data-help="What people in the lab did, newest first: a step run from a team console, a countermeasure applied or reverted by hand, a mode change, and every command typed in a lab shell, with the host and the team it is attributed to.">
     <h2>Teams</h2>
     <p class="sub">What the people in the lab did, both sides on one timeline: steps and commands, newest first.</p>
     <div class="scroll"><table id="teams"></table></div>
   </section>
 
-  <section class="card" style="margin-top:16px">
+  <section class="card" id="results-card"
+    data-help="The campaign's aggregate over its scored runs: the scenario's tabs, and the mean with its 95% confidence interval for every metric. A standalone run has no aggregate: its score is in the run's detail.">
     <h2>Results</h2>
     <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
     <div class="tabs" id="r-tabs" role="group" aria-label="Results table"></div>
     <div class="scroll"><table id="results"></table></div>
   </section>
+  </div>
 </main>
 
 <script src="graph.js"></script>
@@ -435,6 +466,10 @@ const panelApi = {
   shownRunId: () => shownRunId(),
   select(id) { selectedRun = id; render(); },
   render: () => render(),
+  // The time the run is shown at (null = live) and the view the reader chose.
+  time: () => gTime,
+  setTime(t) { gTime = t; render(); },
+  view: () => curView,
 };
 const panels = Object.fromEntries(
   Object.entries(window.CyberRangePanels || {}).map(([name, make]) => {
@@ -448,6 +483,8 @@ const panel = () => panels[S.scenario || ledgerScenario()] || null;
 // in its own card, the rest of the page is drawn as usual.
 function guard(id, fn) {
   const box = $(id), card = box.closest(".card") || box;
+  // A closed card, or one the view hides, is not drawn: it is redrawn when shown.
+  if (card.classList.contains("collapsed") || card.classList.contains("offview")) return;
   let note = card.querySelector(":scope > .err.guard");
   try {
     fn();
@@ -463,12 +500,13 @@ function render() {
   const lst = ledgerStatus();
   $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
   if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
+  guard("views", renderViews);
   guard("tiles", () => renderTiles(lst));
   guard("queue", renderQueue);
   guard("detail", renderDetail);
   guard("results", renderResults);
   guard("timebar", renderTimebar);
-  guard("cards", renderCards);
+  guard("board", renderCards);
   guard("graph-card", renderGraph);
   guard("op-card", renderOperator);
   guard("teams-card", renderTeams);
@@ -484,8 +522,15 @@ function counts() {
   return c;
 }
 
+const TILE_HELP = {
+  "Runs done": "Runs finished and scored, out of all the runs of the experiment",
+  "Failed": "Runs that ended in an error (the queue says which)",
+  "Elapsed": "Wall-clock time since the experiment started",
+  "Time left": "Estimated from each phase's expected length and the phases seen so far",
+  "Now": "The run, and its phase, under way right now",
+};
 function tile(label, value, note) {
-  return h("div", { class: "tile" }, h("div", { class: "label" }, label), h("div", { class: "value" }, value),
+  return h("div", { class: "tile", title: TILE_HELP[label] || null }, h("div", { class: "label" }, label), h("div", { class: "value" }, value),
     h("div", { class: "note" }, note || " "));
 }
 
@@ -522,7 +567,9 @@ function renderTiles(lst) {
 function queueTable({ note, columns, cells }) {
   const q = $("q-note");
   if (note && note.html) q.innerHTML = note.html; else q.textContent = note || "";
-  const head = h("tr", {}, h("th", {}, "run"), h("th", {}, "status"), h("th", { class: "num" }, "time"),
+  const head = h("tr", {}, h("th", { title: "The run's id: click a row to inspect it" }, "run"),
+    h("th", { title: "pending · running · scoring · done · failed · interrupted · retrying" }, "status"),
+    h("th", { class: "num", title: "How long the run took, or has been running" }, "time"),
     ...columns.map(c => h("th", c.attrs || (c.num ? { class: "num" } : {}), c.label)));
   const rows = S.order.map(id => {
     const r = S.runs[id];
@@ -643,7 +690,7 @@ function renderResults() {
 // ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
 const QS = new URLSearchParams(location.search);
 let wantRun = QS.get("run"), gView = ["topology", "kg", "tree"].includes(QS.get("view")) ? QS.get("view") : "topology";
-let gOpts = null, gTimeIdx = null, gSig = "";
+let gOpts = null, gTime = null, gSig = "";
 const gStruct = {};
 const gTip = {
   show(ev, title, rows) {
@@ -663,14 +710,23 @@ async function loadStructure(lid, id) {
   catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
   gSig = ""; renderGraph();
 }
-// The time the run's time bar selects: its stops are the panel's marks (the
-// facts of the run, in order), its last stop is live (t = null).
+// ── the run's time ──────────────────────────────────────────────────────────
+// The time bar is on the run's own clock: the slider is a time (stable while
+// it is dragged), its stops for ◀ ▶ are the facts the panel marks. gTime is
+// the time shown, null when following the run live.
 function runTime(r) {
   const mk = panel()?.graph?.marks;
-  const marks = r && mk ? mk(r) : [], N = marks.length;
-  const idx = gTimeIdx == null ? N : Math.min(gTimeIdx, N);
-  const t = idx >= N ? null : (idx === 0 ? (marks[0] ? marks[0].t - 1e-3 : null) : marks[idx - 1].t);
-  return { marks, N, idx, t };
+  const marks = r && mk ? mk(r) : [];
+  const t0 = r?.start_t ?? marks[0]?.t ?? 0;
+  const lastFact = Math.max(t0, ...marks.map(m => m.t));
+  const live = r && r.status === "running";
+  const planned = r ? t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0) : t0;
+  // A live run is laid on its planned length, so the thumb does not jump as
+  // facts arrive; a finished one on what it lasted.
+  const edge = live ? Math.max(lastFact, now()) : Math.max(lastFact, r?.end_t ?? lastFact);
+  const t1 = Math.max(live ? Math.max(planned, edge) : edge, t0 + 1);
+  const t = gTime == null ? null : Math.min(Math.max(gTime, t0), t1);
+  return { marks, t, t0, t1, edge };
 }
 function relLabel(r, t) {
   if (t == null) return "live";
@@ -681,44 +737,172 @@ function relLabel(r, t) {
 function renderTimebar() {
   const id = shownRunId(), r = id ? S.runs[id] : null, p = panel(), T = runTime(r);
   $("timebar").style.display = r && (p?.graph || p?.cards?.length) ? "" : "none";
-  const slider = $("g-time");
-  slider.max = String(T.N); slider.value = String(T.idx); slider.disabled = T.N === 0;
-  $("g-tlabel").textContent = T.idx >= T.N ? "live" : T.idx === 0 ? "before the first event"
-    : `${relLabel(r, T.t)} (${T.marks[T.idx - 1].kind})`;
+  if (!r) return;
+  const slider = $("g-time"), span = T.t1 - T.t0;
+  slider.max = String(Math.round(span * 10));
+  if (document.activeElement !== slider || gTime == null)
+    slider.value = String(Math.round(((T.t ?? T.edge) - T.t0) * 10));
+  const before = T.marks.filter(m => T.t == null || m.t <= T.t + 1e-6);
+  const fact = before.length ? before[before.length - 1].kind : "before the first fact";
+  const text = `${T.t == null ? "live" : relLabel(r, T.t)} · ${fact}`;
+  const lab = $("g-tlabel");
+  if (lab.textContent !== text) { lab.textContent = text; lab.title = text; }
+  $("g-live").setAttribute("aria-pressed", String(gTime == null));
+  $("t-play").textContent = playing ? "❚❚ Pause" : "▶ Play";
+  $("t-play").setAttribute("aria-pressed", String(!!playing));
+}
+function shownRun() { const id = shownRunId(); return id ? S.runs[id] : null; }
+// One fact back or forward; past the last fact is live.
+function stepFact(dir) {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), cur = T.t ?? Infinity;
+  if (dir < 0) {
+    const prev = T.marks.filter(m => m.t < cur - 1e-6);
+    gTime = prev.length ? prev[prev.length - 1].t : T.t0;
+  } else {
+    const next = T.marks.find(m => m.t > cur + 1e-6);
+    gTime = next ? next.t : null;
+  }
+  render();
+}
+function shiftTime(ds) {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), t = (T.t ?? T.edge) + ds;
+  gTime = t >= T.edge ? null : Math.max(T.t0, t);
+  render();
+}
+let playing = null;
+function setPlaying(on) {
+  if (playing) { clearInterval(playing); playing = null; }
+  if (on) {
+    const r = shownRun(); if (!r) return;
+    if (gTime == null) gTime = runTime(r).t0;  // replaying from live starts over
+    playing = setInterval(() => {
+      const run = shownRun(); if (!run) return setPlaying(false);
+      const T = runTime(run), speed = +$("t-speed").value || 1;
+      gTime = (gTime ?? T.t0) + 0.2 * speed;
+      if (gTime >= T.edge) { gTime = null; setPlaying(false); }
+      render();
+    }, 200);
+  }
+  renderTimebar();
 }
 
-// A panel's own cards, each drawn at the time the bar selects and guarded on
-// its own: one that throws shows its error and leaves the others drawn.
+// ── views ───────────────────────────────────────────────────────────────────
+// A panel may compose the page into views ({id, label, help, sections,
+// options}): which sections show, in what order, and the graph switches set on
+// entering it. Without views every section shows, in page order.
+let curView = null, viewSig = "";
+function renderViews() {
+  const views = panel()?.views || [];
+  if (!views.some(v => v.id === curView)) {
+    let saved = null; try { saved = localStorage.getItem("platform-dash-view"); } catch (e) {}
+    const want = QS.get("show") || saved;
+    curView = views.find(v => v.id === want)?.id ?? views[0]?.id ?? null;
+    if (curView) enterView(curView, false);
+  }
+  const sig = views.map(v => v.id).join("|") + "#" + curView;
+  if (sig !== viewSig) {
+    viewSig = sig;
+    $("views").replaceChildren(...views.map(v => h("button", { type: "button", title: v.help || null,
+      "aria-pressed": String(v.id === curView), onclick: () => enterView(v.id, true) }, v.label)));
+  }
+  applyView(views.find(v => v.id === curView));
+}
+function enterView(id, byHand) {
+  curView = id;
+  const v = (panel()?.views || []).find(x => x.id === id);
+  const g = panel()?.graph;
+  if (g) { graphOpts(g); Object.assign(gOpts, v?.options || {}); gSig = ""; }
+  if (byHand) { try { localStorage.setItem("platform-dash-view", id); } catch (e) {} render(); }
+}
+function applyView(v) {
+  const order = v ? v.sections : null;
+  for (const el of $("board").children) {
+    if (!el.id) continue;
+    const i = order ? order.indexOf(el.id) : -1;
+    el.classList.toggle("offview", !!order && i < 0);
+    el.style.order = order && i >= 0 ? String(i) : "";
+  }
+  // The run detail takes the whole row when the queue beside it is hidden.
+  $("detail").classList.toggle("wide", $("queue-card").classList.contains("offview"));
+}
+
+// ── cards: every one can be closed and can explain itself ───────────────────
+let closedCards = new Set();
+try { closedCards = new Set(JSON.parse(localStorage.getItem("platform-dash-closed") || "[]")); } catch (e) {}
+function collapsible(sec) {
+  if (sec.querySelector(":scope > .card-head")) return;
+  const h2 = sec.querySelector(":scope > h2");
+  if (!h2 || !sec.id) return;
+  const toggle = h("button", { type: "button", title: "Close or open this card", "aria-expanded": "true" }, "▾");
+  const set = closed => {
+    sec.classList.toggle("collapsed", closed);
+    toggle.textContent = closed ? "▸" : "▾";
+    toggle.setAttribute("aria-expanded", String(!closed));
+  };
+  const flip = () => {
+    const closed = !sec.classList.contains("collapsed");
+    set(closed);
+    if (closed) closedCards.add(sec.id); else closedCards.delete(sec.id);
+    try { localStorage.setItem("platform-dash-closed", JSON.stringify([...closedCards])); } catch (e) {}
+    gSig = ""; render();
+  };
+  toggle.addEventListener("click", flip);
+  h2.addEventListener("click", flip);
+  const head = h("div", { class: "card-head" });
+  sec.insertBefore(head, h2);
+  head.append(h2);
+  if (sec.dataset.help) {
+    const note = h("div", { class: "help", style: "display:none" }, sec.dataset.help);
+    head.after(note);
+    head.append(h("button", { type: "button", title: "What this card shows", onclick: () => {
+      note.style.display = note.style.display === "none" ? "" : "none"; } }, "ⓘ"));
+  }
+  head.append(toggle);
+  set(closedCards.has(sec.id));
+}
+
+// A panel's own cards, on the page's board, each drawn at the time the bar
+// selects and guarded on its own: one that throws shows its error and leaves
+// the others drawn.
 function renderCards() {
-  const box = $("cards"), list = panel()?.cards || [];
+  const board = $("board"), list = panel()?.cards || [];
   const id = shownRunId(), r = id ? S.runs[id] : null;
   const want = list.map(c => `card-${c.id}`);
-  for (const el of [...box.children]) if (!want.includes(el.id)) el.remove();
-  box.style.display = r && list.length ? "" : "none";
-  if (!r) return;
+  for (const el of [...board.querySelectorAll(":scope > [id^='card-']")]) if (!want.includes(el.id)) el.remove();
+  if (!r) { for (const c of list) $(`card-${c.id}`)?.classList.add("offview"); return; }
   const t = runTime(r).t;
   for (const c of list) {
     let sec = $(`card-${c.id}`);
     if (!sec) {
-      sec = h("section", { class: "card", id: `card-${c.id}` },
+      sec = h("section", { class: "card", id: `card-${c.id}`, "data-span": c.span || null, "data-help": c.help || null },
         h("h2", {}, c.title), h("p", { class: "sub" }, c.sub || ""), h("div", { class: "cbody" }));
-      box.append(sec);
+      board.insertBefore(sec, $("graph-card"));
+      collapsible(sec);
+      applyView((panel()?.views || []).find(v => v.id === curView));
     }
     guard(`card-${c.id}`, () => c.render(sec.querySelector(".cbody"), r, t));
   }
 }
 
-// Switches a graph panel declares ({id, label, view?, default}), shown above the
-// views they apply to and passed to its draw functions by id.
+// Switches a graph panel declares, shown above the views they apply to and
+// passed to its draw functions by id: {id, label, view?, default} is a check
+// box, with choices: [{id, label}] a row of buttons.
 function graphOpts(g) {
-  if (!gOpts) { gOpts = {}; for (const o of g.options || []) gOpts[o.id] = !!o.default; }
+  if (!gOpts) { gOpts = {}; for (const o of g.options || []) gOpts[o.id] = o.choices ? (o.default ?? o.choices[0].id) : !!o.default; }
   const shown = (g.options || []).filter(o => !o.view || o.view === gView);
-  const wrap = $("g-options"), sig = shown.map(o => o.id).join("|");
+  const wrap = $("g-options"), sig = shown.map(o => `${o.id}=${gOpts[o.id]}`).join("|");
   if (wrap.dataset.sig !== sig) {
     wrap.dataset.sig = sig;
-    wrap.replaceChildren(...shown.map(o => h("label", { class: "sub" },
-      h("input", { type: "checkbox", checked: gOpts[o.id] ? "" : null,
-        onchange: e => { gOpts[o.id] = e.target.checked; renderGraph(); } }), ` ${o.label}`)));
+    wrap.replaceChildren(...shown.map(o => o.choices
+      ? h("span", { class: "tabs", role: "group", "aria-label": o.label, title: o.help || null, style: "display:inline-flex;margin:0 0 0 8px" },
+          h("span", { class: "sub", style: "margin:0 4px 0 0;align-self:center" }, o.label),
+          ...o.choices.map(c => h("button", { type: "button", title: c.help || null, "aria-pressed": String(gOpts[o.id] === c.id),
+            onclick: () => { gOpts[o.id] = c.id; renderGraph(); } }, c.label)))
+      : h("label", { class: "sub", title: o.help || null },
+          h("input", { type: "checkbox", checked: gOpts[o.id] ? "" : null,
+            onchange: e => { gOpts[o.id] = e.target.checked; renderGraph(); } }), ` ${o.label}`)));
   }
   return gOpts;
 }
@@ -739,7 +923,7 @@ function renderGraph() {
   if (!st) loadStructure(cur.id, id);
   const T = runTime(r);
   const width = $("g-view").clientWidth;
-  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, opts, T.idx, T.N,
+  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, opts, T.t, T.marks.length,
     r.states.length, r.actions.length, r.writes.length, Math.round(width / 40)]);
   if (sig === gSig) return;
   gSig = sig;
@@ -755,7 +939,10 @@ function renderGraph() {
   let legend = [];
   try { legend = draw($("g-view"), st, ov, { width, tip: gTip, ...opts }) || []; }
   catch (e) { $("g-view").replaceChildren(h("div", { class: "err" }, `could not draw: ${e.message}`)); }
-  $("g-legend").replaceChildren(...legend.map(([c, label]) => h("span", {}, h("span", { class: "lk", style: `background:${c};height:3px` }), label)));
+  // A legend entry with no colour heads the group of entries after it.
+  $("g-legend").replaceChildren(...legend.map(([c, label]) => c
+    ? h("span", {}, h("span", { class: "lk", style: `background:${c};height:3px` }), label)
+    : h("span", { style: "font-weight:600;color:var(--ink);margin-left:6px" }, label)));
 }
 
 // ── people: what the defender asked its operator, what the teams did ────────
@@ -834,7 +1021,7 @@ async function getJSON(url) { const r = await fetch(url, { cache: "no-store" });
 
 function select(id) {
   if (id === cur.id) return;
-  cur = { id, since: 0 }; S = fresh(); selectedRun = null;
+  cur = { id, since: 0 }; S = fresh(); selectedRun = null; gTime = null; setPlaying(false);
   try { history.replaceState(null, "", `#${encodeURIComponent(id)}`); } catch (e) {}
 }
 
@@ -872,8 +1059,32 @@ async function pollEvents() {
 
 $("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
 document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
-$("g-time").addEventListener("input", e => { const v = +e.target.value; gTimeIdx = v >= +e.target.max ? null : v; render(); });
-$("g-live").addEventListener("click", () => { gTimeIdx = null; render(); });
+$("g-time").addEventListener("input", e => {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), t = T.t0 + (+e.target.value) / 10;
+  gTime = t >= T.edge - 0.05 ? null : t;
+  render();
+});
+$("g-live").addEventListener("click", () => { setPlaying(false); gTime = null; render(); });
+$("t-prev").addEventListener("click", () => { setPlaying(false); stepFact(-1); });
+$("t-next").addEventListener("click", () => { setPlaying(false); stepFact(1); });
+$("t-play").addEventListener("click", () => setPlaying(!playing));
+try { const sp = localStorage.getItem("platform-dash-speed"); if (sp) $("t-speed").value = sp; } catch (e) {}
+$("t-speed").addEventListener("change", e => { try { localStorage.setItem("platform-dash-speed", e.target.value); } catch (err) {} });
+// The keyboard moves the time too, except where keys already mean something
+// (a field, a list, a button the reader is on).
+document.addEventListener("keydown", e => {
+  const el = e.target, onSlider = el && el.id === "g-time";
+  if (!onSlider && el && el.closest && el.closest("input, select, textarea, button")) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault(); setPlaying(false);
+    const dir = e.key === "ArrowLeft" ? -1 : 1;
+    if (e.shiftKey) shiftTime(10 * dir); else stepFact(dir);
+  } else if (e.key === " " && !onSlider) { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === "End") { e.preventDefault(); setPlaying(false); gTime = null; render(); }
+});
+document.querySelectorAll("#board > .card").forEach(collapsible);
 $("theme").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
     ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

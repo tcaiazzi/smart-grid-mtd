@@ -190,10 +190,18 @@ show. Here too every command is recorded.
 consoles keep apart, on a single timeline:
 
 - the run's phases and the plant's state;
-- the **Attacker · Defender** card: for each team what it is doing and what it sees, a
-  lane timeline (attacker, defender, plant) and, for every attack step, when the
-  attacker did it and when the defender saw it; the time bar beneath the panels takes
-  it to any moment of the game;
+- three views, chosen in the header: **Overview** to referee, **Attacker** and
+  **Defender** to show each team, after the game, what the other did and saw at
+  the same moment;
+- the **kill chain**: for every attack step, when the attacker did it, when the
+  defender first suspected and confirmed it, and what stopped it; with the time to
+  detect, to respond and to impact;
+- the game's **journal**, filtered by team; a click on a row takes the dashboard to
+  that moment;
+- the **Attacker · Defender** card: for each team what it is doing and what it sees,
+  and a lane timeline (attacker, defender, plant). The time bar beneath the tiles
+  takes everything to any moment of the game: ◀ ▶ step from fact to fact, Play
+  replays it;
 - the SOC's **suggestions** with their outcome (approved, rejected, expired), as a
   history;
 - a **Teams** card with, in time order, the red team's steps, the blue team's actions

@@ -201,7 +201,7 @@ A campaign is a list of **units**, run in order on one ledger.
 - A command step may carry a `timeout` in seconds. When it expires the command and everything it started are stopped (interrupted first, so a lab run undeploys itself) and the step fails like any other, which is what lets `retries` take over. The MQTT campaigns set it on their lab steps from `--lab-timeout`; without it a step has no limit.
 - `skip_if()` reuses earlier results.
 - A **scored** step (`run_dir` + `metrics`) gets `metrics.json`, which is also what `--resume` skips on, and is folded into the aggregate after every run.
-- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the paper lists its figures).
+- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the MQTT evaluation lists its figures).
 - `core.aggregate.summarize` gives n / mean / std / 95% CI (Student t) / median / min / max of every numeric metric per group. It writes `ci.csv` and a mean [CI] table in `summary.md`.
 
 | Campaign | Units | Steps |
@@ -228,9 +228,15 @@ changes anything, in the lab or on disk. It shows two kinds of content.
 - campaign progress and ETA (fixed-length phases are flagged `timed`);
 - the queue;
 - the current run's phases;
-- one time bar for the selected run: its stops are the facts the scenario's
-  panel marks, and every time-aware view (the structure views and the panel's
-  cards) is drawn as of the stop it selects, or live;
+- one time bar for the selected run, on the run's own clock: the slider is a
+  time (a live run is laid on its planned length, so the thumb does not jump as
+  facts arrive), ◀ ▶ step through the facts the scenario's panel marks, Play
+  replays the run at ×1, ×5 or ×20, Live follows it. Keys, outside a field:
+  ←/→ previous or next fact, Shift+←/→ ten seconds, Space play or pause, End
+  live. Every time-aware view (the structure views and the panel's cards) is
+  drawn as of the time shown;
+- every card can be closed (▾, remembered by the browser) and explains itself
+  (ⓘ); a closed card is not redrawn;
 - results, with a mean [95% CI] tab. A standalone run is scored when it ends
   (`run_metrics` on its own ledger, from `Scenario.metrics`); a campaign scores
   each of its runs itself.
@@ -246,7 +252,8 @@ still shown as running; one whose writer died turns "interrupted" after
 
 **Per scenario**, drawn by the scenario's `panel.js` and not by the page. The
 page calls the panel's factory once with its helpers (`h`, `svg`, `$`, `num`,
-`dur`, `clock`, `queueTable`, …); every panel is served in one script, so a
+`dur`, `clock`, `queueTable`, `time()`/`setTime(t)` for the time shown,
+`view()` for the view chosen, …); every panel is served in one script, so a
 panel uses only these and its own names, never another panel's. The hooks, all
 optional:
 
@@ -256,14 +263,18 @@ optional:
 | `detail(run)` | chips, chart and table of the selected run |
 | `chart(run)` | the selected run's chart |
 | `reduce(run, ev)` | folds the event kinds only it knows into `run.x` |
-| `cards: [{id, title, sub, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live) |
-| `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches, `origin(run)` the time the bar counts from |
+| `cards: [{id, title, sub, help?, span?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the page |
+| `views: [{id, label, help, sections, options?}]` | buttons in the page's header, one per view: `sections` lists, in order, the page's sections (`queue-card`, `detail`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it |
+| `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches (`{id, label, view?, default}` a check box, with `choices: [{id, label}]` a row of buttons), `origin(run)` the time the bar counts from |
 | `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one |
 
-`tests/core/test_panels.py` checks the contract and draws an empty run and a run
-with every event kind through every hook of every panel.
+`tests/core/test_panels.py` checks the contract (a view lists only sections that
+exist) and draws an empty run and a run with every event kind through every hook
+of every panel, each card under every view and the attack tree from every
+perspective.
 
-- **CPS:** the plant voltage chart, findings and score; the **Attacker · Defender**
+- **CPS:** three views, *Overview*, *Attacker* and *Defender* (below); the plant
+  voltage chart, findings and score; the **Attacker · Defender**
   card — what each side is doing and what it can see (the attacker from its own
   record: steps, plans, recon, observations; the defender from its telemetry,
   belief and decisions), a lane timeline of both sides and the plant, and a

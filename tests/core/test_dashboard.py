@@ -132,6 +132,17 @@ class Server(_Fixture):
         for ext in (b'src="http', b"src='http", b'href="http', b"@import"):
             self.assertNotIn(ext, body)  # self-contained, no CDN
 
+    def test_the_time_bar_steps_plays_and_follows_live(self):
+        _status, _ctype, body = self.get("/")
+        for control in (
+            b'id="t-prev"',
+            b'id="t-next"',
+            b'id="t-play"',
+            b'id="g-time"',
+            b'id="g-live"',
+        ):
+            self.assertIn(control, body, "a run could no longer be replayed fact by fact")
+
 
 class Structure(_Fixture):
     """GET /api/structure: a run's kg.json / tree.json, resolved safely."""

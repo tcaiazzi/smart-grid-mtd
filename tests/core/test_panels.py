@@ -35,6 +35,7 @@ const api = {
   $: () => ({ replaceChildren: noop, style: {}, textContent: "", innerHTML: "" }),
   h: () => ({}), svg: () => ({}), num: noop, dur: noop, clock: noop, now: () => 0,
   statusBadge: () => ({}), shownRunId: noop, select: noop, render: noop,
+  time: () => null, setTime: noop, view: () => null,
   stepCell: () => ({}),
   // Records what a panel asks the shared table to draw, instead of drawing it.
   queueTable: (spec) => { globalThis.__queue = spec; },
@@ -48,7 +49,9 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
 console.log(JSON.stringify(out));
 """
 
-KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards"}
+KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards", "views"}
+# The page's own sections, which a view may list beside the panel's cards.
+PAGE_SECTIONS = {"queue-card", "detail", "results-card", "graph-card", "op-card", "teams-card"}
 GRAPH_KEYS = {"index", "overlayAt", "marks", "drawTopology", "drawKG", "drawTree"}
 GRAPH_OPTIONAL = {"options", "origin"}
 
@@ -187,9 +190,39 @@ console.log(JSON.stringify(out));""",
                     self.assertTrue(card["id"] and card["title"], f"unusable card {card}")
                     self.assertEqual("function", card["render"], f"card {card['id']} cannot draw")
 
+    def test_a_view_shows_sections_that_exist(self):
+        """A view lists the sections it shows, by id: one that names a section
+        nobody draws shows a blank where the reader expects a card, and two
+        views with one id cannot both be chosen."""
+        for name in registry.names():
+            path = registry.get(name).panel_js()
+            if path is None:
+                continue
+            script = (HARNESS % open(path).read()).replace(
+                "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
+                "{ views: panel.views || [], cards: (panel.cards || []).map(c => c.id) }",
+            )
+            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr.strip())
+            got = json.loads(result.stdout).get(name)
+            if not got or not got["views"]:
+                continue
+            known = PAGE_SECTIONS | {f"card-{c}" for c in got["cards"]}
+            with self.subTest(scenario=name):
+                ids = [v["id"] for v in got["views"]]
+                self.assertEqual(len(ids), len(set(ids)), "two views share an id")
+                for view in got["views"]:
+                    self.assertTrue(view.get("label"), f"view {view['id']} has no label")
+                    self.assertEqual(
+                        set(),
+                        set(view["sections"]) - known,
+                        f"view {view['id']} shows sections nobody draws",
+                    )
+
     def test_every_panel_draws_a_run(self):
         """Every hook of every panel, run on an empty run and on one with every
-        event kind of the cps family. All panels share one script on the page, so
+        event kind of the cps family, each card under every view and the attack
+        tree from every perspective. All panels share one script on the page, so
         a panel that uses a name only another panel defines passes every shape
         test above and still throws the first time a run is selected."""
         sources = [

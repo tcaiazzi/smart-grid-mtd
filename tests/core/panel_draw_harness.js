@@ -36,8 +36,13 @@ globalThis.num = (v, d = 3) => v == null ? "—" : (typeof v === "number" ? +v.t
 globalThis.dur = s => s == null ? "—" : `${Math.round(s)}s`;
 globalThis.clock = t => String(t);
 globalThis.S = { kind: "run", scenario: null, runs: {}, order: [] };
+let VIEW = null, TIME = null;
 const api = { S, $, h, svg, num, dur, clock, now: () => 200, statusBadge: () => h("span"),
-  shownRunId: () => "r1", select() {}, render() {}, stepCell: () => h("td"), queueTable() {} };
+  shownRunId: () => "r1", select() {}, render() {}, stepCell: () => h("td"), queueTable() {},
+  time: () => TIME, setTime(t) { TIME = t; }, view: () => VIEW };
+// A panel may defer drawing to a microtask (once its box is on the page): run it
+// now, so that what it throws is caught and named like the rest.
+globalThis.queueMicrotask = fn => fn();
 
 function emptyRun() {
   return { id: "r1", mode: "planner:opportunistic", seed: 1, status: "running", start_t: 100,
@@ -104,12 +109,17 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
     if (label === "full run") for (const ev of EVENTS) step(`reduce ${ev.kind}`, () => panel.reduce?.(run, ev));
     step(`${label}: detail`, () => panel.detail?.(run));
     step(`${label}: chart`, () => panel.chart?.(run));
-    for (const card of panel.cards || []) for (const t of [null, 135])
-      step(`${label}: card ${card.id} at ${t}`, () => card.render(new El("div"), run, t));
-    if (panel.graph) for (const t of [null, 135]) step(`${label}: attack tree at ${t}`, () => {
-      panel.graph.marks(run);
-      panel.graph.drawTree(new El("div"), STRUCT, panel.graph.overlayAt(run, t), { width: 800 });
-    });
+    for (const view of [null, ...(panel.views || []).map(v => v.id)]) {
+      VIEW = view;
+      for (const card of panel.cards || []) for (const t of [null, 135])
+        step(`${label}: card ${card.id} in view ${view} at ${t}`, () => card.render(new El("div"), run, t));
+    }
+    const perspectives = (panel.graph?.options || []).find(o => o.id === "perspective")?.choices?.map(c => c.id) || [null];
+    if (panel.graph) for (const t of [null, 135]) for (const perspective of perspectives)
+      step(`${label}: attack tree (${perspective}) at ${t}`, () => {
+        panel.graph.marks(run);
+        panel.graph.drawTree(new El("div"), STRUCT, panel.graph.overlayAt(run, t), { width: 800, perspective });
+      });
   }
   step("chart with no run", () => panel.chart?.(null));
   out[name] = failures;

@@ -263,7 +263,30 @@ every ledger under `output/`; `make cps-dashboard` is the same dashboard with
 it was written. It can be
 started before, during or after a campaign.
 
-For the selected run, an **Attacker · Defender** card puts the two sides next to
+The panel composes the page into three views, chosen in the header; the run and
+the time shown stay the same across them, so one moment can be compared from both
+sides:
+
+- **Overview**: the kill chain, the Attacker · Defender card, the queue and the
+  run, the journal, the structure views (attack tree from both sides), the
+  operator's suggestions and the teams.
+- **Attacker**: only the attacker — its steps and what each one told it, its
+  plans (each choice of impact, the options open, the paths closed), its
+  reconnaissance, the journal of its facts and the plant's, and the attack tree
+  as it knows it.
+- **Defender**: only the defender — what it saw, believed and when (alerts as
+  intervals, each tree node's first suspected / inferred / confirmed), its
+  decisions with their trigger and costs, the journal of its facts and the
+  plant's, and the attack tree as it believes it.
+
+The **Kill chain** card puts each step of the attack on one axis: when the
+attacker did it, when the defender first suspected and confirmed it, the
+countermeasure that covered it, and four figures — time to detect, to respond,
+to impact, and who is ahead. The **Journal** lists every fact of the run in
+order, by side; a click on a row (or on a mark of the lanes) shows the run at
+that time.
+
+An **Attacker · Defender** card puts the two sides next to
 each other, each split into what it is *doing* and what it *knows* (attacker) or
 *sees and believes* (defender):
 
@@ -294,10 +317,13 @@ them the structure is rebuilt from today's lab model and the card says so.
   HMI on MGMT) shows in its address list, not as a link.
 - **Knowledge graph**: all typed nodes in layers, edges coloured by relation;
   hovering a node shows its attributes.
-- **Attack tree**: each node's state as the defender believes it (suspected /
-  confirmed / inferred) with the countermeasures that prevent (⊘) or restore (↺)
-  it, and a red badge for what the attacker really did (✓ done, ✗ failed, ◎ its
-  target).
+- **Attack tree**, from a chosen side (*show*: Both · Attacker's ·
+  Defender's). *Defender's*: each node's state as the defender believes it
+  (suspected / confirmed / inferred) with the countermeasures that prevent (⊘) or
+  restore (↺) it. *Attacker's*: the tree as the attacker knows it — the one it
+  was handed, or the one it built by reconnaissance — with what it did there.
+  *Both*: the defender's belief with a red badge for what the attacker really did
+  (✓ done, ✗ failed, ◎ its target).
 
 With the responder on, the response state is overlaid on all three: implicated
 hosts, blocked flow and attacker-write count, restored or isolated hosts, active
