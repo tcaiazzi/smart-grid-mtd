@@ -295,6 +295,10 @@ class IrisDesk:
             soc_id, name, "Countermeasures the SOC's analytics proposes during this run."
         )
         self._ready = True
+        # IRIS answers only seconds after it starts, so the warm-up retries above
+        # log failures; without this line the log ends on one and a healthy desk
+        # reads as a live fault.
+        self.log(f"iris: ready — case {soc_id!r} filed as cid {self._cid}")
 
     def _file(self):
         while True:
