@@ -14,6 +14,7 @@ cyber-physical systems safely, reproducibly and observably, with three
 | `mqtt-mtd` | The workshop paper's: MTD against ML traffic fingerprinting | [docs/scenario-mqtt.md](docs/scenario-mqtt.md) |
 | `cps` | A cyber-physical OT/Modbus plant: active IT→OT attack, DPI and IT sensors, a SOC (Wazuh + analytics) that decides and responds inside the lab | [docs/scenario-cps.md](docs/scenario-cps.md) |
 | `cps-advisor` | The `cps` lab with people in it: the SOC advises an operator instead of acting, and a red team can attack by hand against a blue team | [docs/scenario-cps-advisor.md](docs/scenario-cps-advisor.md), and for the players [docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md) |
+| `cps-recon` | The `cps` lab with an attacker that is not handed the attack tree: it derives it by reconnaissance (nmap, then living off the land on the HMI), and the run scores how close the derived tree is to the true one | [docs/scenario-cps-recon.md](docs/scenario-cps-recon.md) |
 
 How the platform is built and how to add a scenario:
 **[docs/platform.md](docs/platform.md)**. Every reusable component of the four
@@ -68,6 +69,7 @@ Node images:
 docker build -t kathara/mqtt docker/mqtt/   # MQTT scenario
 make cps-image                              # cps and cps-advisor: kathara/cps (plant nodes, Wazuh agent,
                                             # ttyd) and kathara/soc (Wazuh manager, ttyd)
+make cps-recon-image                        # cps-recon: kathara/redteam (the attacker's box: nmap)
 ```
 
 The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in

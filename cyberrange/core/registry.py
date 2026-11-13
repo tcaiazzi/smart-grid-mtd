@@ -10,6 +10,7 @@ SCENARIOS = {
     "mqtt-mtd": "cyberrange.scenarios.mqtt_mtd.scenario:MqttMtdScenario",
     "cps": "cyberrange.scenarios.cps.scenario:CpsScenario",
     "cps-advisor": "cyberrange.scenarios.cps_advisor.scenario:CpsAdvisorScenario",
+    "cps-recon": "cyberrange.scenarios.cps_recon.scenario:CpsReconScenario",
 }
 
 

@@ -80,10 +80,12 @@ applies to the dashboard: a scenario declares its own panel and structure
 rather than importing one scenario's knowledge graph.
 
 **A scenario may build on another scenario, never the reverse.** `cps-advisor`
-subclasses `CpsScenario` and deploys its lab under another name; `cps` knows
-nothing of it. What the derived scenario needs to vary is a hook or a class
-attribute on the base (`extra_services`, `engage`, `operator_api`,
-`check_approval`, `DEFAULT_*`), not a test on the scenario's name. Its `SOURCES`
+and `cps-recon` subclass `CpsScenario` and deploy its lab under another name;
+`cps` knows nothing of them. What a derived scenario needs to vary is a hook or a
+class attribute on the base (`extra_services`, `engage`, `operator_api`,
+`check_approval`, `attacker`, `topology`, `DEFAULT_*`), not a test on the
+scenario's name — `cps-recon` overrides `attacker` to return a `ReconAttacker`
+and `topology` to put that attacker on its own image. Its `SOURCES`
 list only its own directory and its `GUEST_MANIFESTS` only the files it adds to
 the nodes, so the shared lab is counted once, under `cps`.
 

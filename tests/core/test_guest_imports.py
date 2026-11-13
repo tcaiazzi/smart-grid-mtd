@@ -46,6 +46,7 @@ from cyberrange.scenarios.cps_advisor.guest_files import (  # noqa: E402
     SOC_CONSOLE_FILES,
     TEAM_FILES,
 )
+from cyberrange.scenarios.cps_recon.guest_files import RECON_FILES  # noqa: E402
 from cyberrange.scenarios.mqtt_mtd.guest_files import (  # noqa: E402
     ROUTER_FILES,
     SCMC_FILES,
@@ -68,12 +69,15 @@ MACHINES = {
     "soc": SOC_FILES + SOC_CONSOLE_FILES + TEAM_FILES,
     "hmi": HMI_FILES + TEAM_FILES,
     "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
+    # cps-recon: the attacker on its own red-team image, with the recon agents.
+    "attacker_recon": ATTACKER_CPS_FILES + RECON_FILES,
 }
 
 
 # The image each machine runs, as the Dockerfile that builds it.
 MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
 SOC_IMAGE = "docker/soc/Dockerfile"
+REDTEAM_IMAGE = "docker/redteam/Dockerfile"
 IMAGE_OF = {
     "semp": MQTT_IMAGE,
     "scmc": MQTT_IMAGE,
@@ -85,6 +89,7 @@ IMAGE_OF = {
     "soc": SOC_IMAGE,
     "hmi": CPS_IMAGE,
     "attacker_cps": CPS_IMAGE,
+    "attacker_recon": REDTEAM_IMAGE,
 }
 # Distributions whose import name is not their own.
 IMPORT_NAME = {"paho-mqtt": "paho"}

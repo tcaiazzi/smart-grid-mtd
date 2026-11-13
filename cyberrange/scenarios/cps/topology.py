@@ -105,11 +105,13 @@ def closed_on(iface, *ports):
 @dataclass
 class Extra:
     """What a scenario built on this lab adds to one node: files to stage,
-    host ports to publish ("HOST:GUEST/tcp"), startup commands."""
+    host ports to publish ("HOST:GUEST/tcp"), startup commands, and optionally a
+    different node image (e.g. the attacker on its own red-team image)."""
 
     files: list = field(default_factory=list)
     ports: list = field(default_factory=list)
     startup: list = field(default_factory=list)
+    image: str = None
 
 
 def firewall_rules():
@@ -142,6 +144,8 @@ def topology(args, name=LAB_NAME, extras=None) -> Topology:
         node.startup = list(node.startup) + list(extra.startup)
         if extra.ports:
             node.mgmt_port = node.published_ports() + list(extra.ports)
+        if extra.image:
+            node.image = extra.image
     return Topology(name, default_image=IMAGE, nodes=nodes)
 
 

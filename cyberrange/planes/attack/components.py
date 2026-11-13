@@ -262,6 +262,68 @@ class PlannedAttacker(_ExploitDriver):
             )
 
 
+class ReconAttacker(PlannedAttacker):
+    """An attacker that is NOT handed the tree: it derives it by reconnaissance
+    (nodes/redteam/red_recon_agent.py) — nmap on its own box for the IT side, then
+    living off the land on the compromised HMI for the OT side — builds a belief
+    tree and plans on it. Given only a scan scope, never the target's structure.
+
+    Reuses PlannedAttacker's ground-truth reconstruction; it adds the ``recon``
+    events (what it discovered) and the belief tree as an artifact. The oracle
+    stays off the lab: the host reconstructs the truth from the agent's record."""
+
+    name = "recon_attacker"
+    LOG = "/red_recon_agent.log"
+    BELIEF = "/belief_tree.json"
+
+    def __init__(
+        self, profile, it_cidr, scan_ports="22,80,502,5020,8080", goal=None, dwell=0.0,
+        max_steps=12, interval=0.5
+    ):  # fmt: skip
+        # target_url / engine are discovered in the lab, not given: the host only
+        # launches the agent and reconstructs what it recorded.
+        super().__init__(
+            profile, "", "", 0, goal=goal, dwell=dwell, max_steps=max_steps, interval=interval
+        )
+        self.it_cidr, self.scan_ports = it_cidr, scan_ports
+
+    @property
+    def label(self):
+        return f"recon:{self.profile}"
+
+    def artifacts(self):
+        return super().artifacts() + [
+            Artifact(self.node, self.BELIEF, f"{self.node}.belief_tree.json")
+        ]
+
+    def attack(self, ctx):
+        goal = f"--goal {self.goal} " if self.goal else ""
+        seed = f"--seed {ctx.seed} " if ctx.seed is not None else ""
+        cmd = (
+            f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 red_recon_agent.py '
+            f"--it-cidr {self.it_cidr} --scan-ports {self.scan_ports} --profile {self.profile} "
+            f"{goal}{seed}--dwell {self.dwell} --max-steps {self.max_steps} "
+            f"--interval {self.interval} --record {self.RECORD} --belief-out {self.BELIEF} "
+            f'2>&1 | tee {self.LOG}"'
+        )
+        log.info("[Attack] recon-driven red agent (recon:%s) on %s", self.profile, self.node)
+        out, _err, rc = ctx.run(self.node, cmd, wait=True)
+        return self._reconstruct(ctx, rc, (out or b"").decode(errors="replace"))
+
+    def _record_row(self, ctx, row, summary):
+        if row.get("kind") == "recon":
+            fields = dict(
+                stage=row.get("stage"),
+                foothold=row.get("foothold"),
+                engine_ip=row.get("engine_ip"),
+                modbus_ok=row.get("modbus_ok"),
+            )
+            ctx.gt.record("recon", t=row.get("t"), **fields)
+            ctx.emit("recon", guest_t=row.get("t"), **fields)
+            return
+        super()._record_row(ctx, row, summary)
+
+
 class RedConsole(GuestAgent):
     """The red team's console on the attacker node (nodes/redteam/red_console.py):
     a person runs the attack's steps one at a time. The console is given the

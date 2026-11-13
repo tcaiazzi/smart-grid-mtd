@@ -12,6 +12,7 @@ metrics.
                  │  mqtt-mtd (MQTT smart grid, MTD vs CNN)      │
                  │  cps      (OT/Modbus, active attack, SOAR)   │
                  │  cps-advisor (cps, the SOC advises a person) │
+                 │  cps-recon   (cps, attacker derives the tree)│
                  └───────────────┬──────────────────────────────┘
                      compose     │
    ┌──── plane components (cyberrange/planes/<x>/components.py) ────┐

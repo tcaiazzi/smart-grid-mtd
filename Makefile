@@ -35,8 +35,9 @@ include make/common.mk
 include make/mqtt.mk
 include make/cps.mk
 include make/cps-advisor.mk
+include make/cps-recon.mk
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams cps-recon-image cps-recon-lab cps-recon cps-recon-dashboard dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"

@@ -75,6 +75,52 @@ def _find(out_dir, *names):
     return None
 
 
+def _feasible_leaves(node, out):
+    """Ids of the actionable (leaf) nodes a tree document marks feasible."""
+    kids = node.get("children") or []
+    if not kids:
+        if node.get("feasible", True):
+            out.add(node.get("id"))
+        return out
+    for c in kids:
+        _feasible_leaves(c, out)
+    return out
+
+
+def _tree_fidelity(out_dir):
+    """How close the attacker's derived tree is to the true one (cps-recon only).
+
+    Compares the feasible leaves of the belief tree the attacker left as an
+    artifact against the true tree.json recorded at deploy. Returns precision
+    (of what it believed feasible, how much is real), recall (of what is really
+    feasible, how much it found), and the id lists the panel colours by. None
+    when there is no belief tree — so cps / cps-advisor runs are unaffected."""
+    belief_path = _find(out_dir, "attacker.belief_tree.json", "belief_tree.json")
+    true_path = os.path.join(out_dir, "tree.json")
+    if not belief_path or not os.path.exists(true_path):
+        return None
+    try:
+        with open(belief_path) as f:
+            belief = json.load(f)
+        with open(true_path) as f:
+            true_tree = json.load(f).get("attack_tree")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not true_tree:
+        return None
+    t, b = _feasible_leaves(true_tree, set()), _feasible_leaves(belief, set())
+    discovered = sorted(t & b)
+    return {
+        "precision": round(len(discovered) / len(b), 3) if b else None,
+        "recall": round(len(discovered) / len(t), 3) if t else None,
+        "discovered": discovered,
+        "missing": sorted(t - b),  # real but the attacker missed it
+        "extra": sorted(b - t),  # the attacker believed it, but it is not real
+        "true_feasible": sorted(t),
+        "belief_feasible": sorted(b),
+    }
+
+
 DETECTORS = ("rules", "model")
 SLACK_S = 1.0  # clock slack between guest and host timestamps
 
@@ -397,6 +443,9 @@ def compute_metrics(out_dir: str) -> dict:
         ]
         if planner
         else None,
+        # Recon-driven attacker (cps-recon): how good the derived tree was. None
+        # for runs without a belief tree (cps / cps-advisor).
+        "tree_fidelity": _tree_fidelity(out_dir),
         "max_abs_deviation_pu": round(max((abs(v - V_NOMINAL) for v in vs), default=0.0), 4),
         "v_min": round(min(vs), 4) if vs else None,
         "v_max": round(max(vs), 4) if vs else None,
