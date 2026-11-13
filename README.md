@@ -121,6 +121,7 @@ make fmt                  # ruff format: layout only, never logic
 make lint                 # what fmt cannot fix: dead imports, long lines
 make selftest-fast        # the suite without the heavy tests
 make platform-loc         # how much code is platform and how much is scenario
+make docs-serve           # the documentation site, live, on http://127.0.0.1:8000
 ```
 
 Conventions, the rules that are not negotiable, and the gate to pass before

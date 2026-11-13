@@ -116,6 +116,8 @@ help:
 	@echo "  selftest-fast       Same, without the heavy tests (-m 'not slow')"
 	@echo "  lab-conf            Export SCENARIO=$(SCENARIO) as a Kathará lab dir -> $(OUTPUT_ROOT)/labconf/$(SCENARIO)/"
 	@echo "  platform-loc        Code size: platform core vs plane components vs scenarios"
+	@echo "  docs-serve          Serve the documentation site with live reload (http://127.0.0.1:8000)"
+	@echo "  docs-build          Build the documentation site -> $(OUTPUT_ROOT)/site/"
 	@echo "  clean               Remove all generated outputs"
 	@echo ""
 	@echo "RL coordinator: add RL=1 to datasets/train/attack to use the trained policy"

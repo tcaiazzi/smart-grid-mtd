@@ -1,241 +1,237 @@
-# Playground red team contro blue team
+# Red team vs blue team playground
 
-Guida per chi gioca e per chi arbitra. Spiega lo scenario, cosa ha in mano
-ciascuna squadra e cosa può fare. I dettagli tecnici di come è costruito sono in
-[scenario-cps-advisor.md](scenario-cps-advisor.md) e [scenario-cps.md](scenario-cps.md).
+A guide for the people playing and for the referee. It explains the scenario, what
+each team holds and what it can do. The technical details of how it is built are in
+[scenario-cps-advisor.md](scenario-cps-advisor.md) and [scenario-cps.md](scenario-cps.md).
 
-## 1. Lo scenario in breve
+## 1. The scenario in brief
 
-Un piccolo impianto di distribuzione elettrica in bassa tensione, emulato: una
-linea con un generatore distribuito (DG) e un interruttore, regolata da un PLC.
-L'impianto è un gemello digitale: tensioni e carichi sono calcolati, non recitati,
-quindi un comando sbagliato produce davvero una sovratensione o un distacco.
+A small low-voltage electricity-distribution plant, emulated: a line with a
+distributed generator (DG) and a breaker, regulated by a PLC. The plant is a digital
+twin — voltages and loads are computed, not acted — so a wrong command really does
+produce an over-voltage or a trip.
 
-- Il **red team** parte da una macchina sulla rete degli uffici (IT) e vuole
-  produrre un effetto fisico sull'impianto.
-- Il **blue team** siede nel SOC: vede ciò che i sensori rilevano, riceve i
-  suggerimenti del sistema di risposta e decide cosa applicare.
-- L'**arbitro** osserva entrambe le squadre da una dashboard in sola lettura.
+- The **red team** starts from a machine on the office (IT) network and wants to
+  produce a physical effect on the plant.
+- The **blue team** sits in the SOC: it sees what the sensors detect, receives the
+  response system's suggestions, and decides what to apply.
+- The **referee** watches both teams from a read-only dashboard.
 
-Il SOC qui **non agisce da solo**: propone ogni contromisura con la sua
-spiegazione e aspetta che una persona la approvi. Un suggerimento senza risposta
-scade e non viene applicato.
+The SOC here **does not act on its own**: it proposes each countermeasure with its
+explanation and waits for a person to approve it. A suggestion left unanswered expires
+and is not applied.
 
-## 2. La mappa
+## 2. The map
 
 ```
-      RETE IT 10.10.0.0/24          FIREWALL            RETE OT 10.20.0.0/24
+      IT NETWORK 10.10.0.0/24          FIREWALL           OT NETWORK 10.20.0.0/24
    ┌────────────────────────┐   10.10.0.1 | 10.20.0.1   ┌───────────────────────┐
    │ attacker   10.10.0.10  │   ┌──────────────────┐    │ plc      10.20.0.10   │
-   │ hmi        10.10.0.20  │──▶│ passa solo        │──▶│ engine   10.20.0.20   │
-   │  (postazione operatore │   │ HMI → engine      │    │  (impianto, Modbus    │
-   │   + app diagnostica)   │   │ Modbus tcp/5020   │    │   tcp/5020)           │
+   │ hmi        10.10.0.20  │──▶│ only HMI → engine │──▶│ engine   10.20.0.20   │
+   │  (operator workstation │   │ Modbus tcp/5020   │    │  (plant, Modbus       │
+   │   + diagnostics app)   │   │ passes            │    │   tcp/5020)           │
    └───────────┬────────────┘   └────────┬─────────┘    └──────────┬────────────┘
-               │                          │                         │ ascolto passivo
+               │                          │                         │ passive listening
    ────────────┴──────────────────────────┴─────────────────────────┴────────────
-      RETE DI GESTIONE (MGMT) 10.30.0.0/24
+      MANAGEMENT NETWORK (MGMT) 10.30.0.0/24
       hmi 10.30.0.30    firewall 10.30.0.1    sensor 10.30.0.10    soc 10.30.0.20
 ```
 
-Tre fatti da tenere a mente:
+Three facts to keep in mind:
 
-1. **L'attaccante non raggiunge l'impianto direttamente.** Il firewall lascia
-   passare verso la rete OT un solo flusso: dall'HMI all'engine, in Modbus.
-2. **L'HMI è l'unica porta.** È la postazione dell'operatore, ha un'applicazione
-   web di diagnostica vulnerabile ed è collegata a tutte e due le reti che
-   contano: IT e gestione.
-3. **Il sensore ascolta senza parlare.** Vede tutto il traffico Modbus della rete
-   OT e manda ciò che rileva al SOC sulla rete di gestione.
+1. **The attacker cannot reach the plant directly.** The firewall lets a single flow
+   through to the OT network: from the HMI to the engine, over Modbus.
+2. **The HMI is the only door.** It is the operator's workstation, it runs a
+   vulnerable diagnostics web application, and it is connected to both of the networks
+   that matter: IT and management.
+3. **The sensor listens without speaking.** It sees all of the OT network's Modbus
+   traffic and sends what it detects to the SOC over the management network.
 
-### I comandi dell'impianto
+### The plant's commands
 
-L'impianto si comanda scrivendo tre registri Modbus sull'engine:
+The plant is commanded by writing three Modbus registers on the engine:
 
-| Registro | Nome | Significato | Valori |
+| Register | Name | Meaning | Values |
 |---|---|---|---|
-| 0 | `dg_setpoint` | potenza richiesta al generatore | kW × 10; normale 200 (= 20 kW), massimo ammesso 600 (= 60 kW) |
-| 1 | `switch_cmd` | interruttore della linea | 0 = chiuso, 1 = aperto |
-| 2 | `ctrl_mode` | chi regola | 0 = AUTO (il PLC), 1 = MANUAL (l'operatore) |
+| 0 | `dg_setpoint` | power requested of the generator | kW × 10; normal 200 (= 20 kW), maximum allowed 600 (= 60 kW) |
+| 1 | `switch_cmd` | line breaker | 0 = closed, 1 = open |
+| 2 | `ctrl_mode` | who regulates | 0 = AUTO (the PLC), 1 = MANUAL (the operator) |
 
-In AUTO il PLC corregge da solo un setpoint sbagliato. In MANUAL si fa da parte:
-ciò che viene scritto resta.
+In AUTO the PLC corrects a wrong setpoint by itself. In MANUAL it stands aside: what
+is written stays.
 
-## 3. Come si svolge una partita
+## 3. How a game plays out
 
-1. L'arbitro avvia la dashboard di controllo e il laboratorio:
+1. The referee starts the control dashboard and the lab:
    ```sh
    make dashboard      # http://127.0.0.1:8765
    make cps-teams
    ```
-2. Il laboratorio sale e per circa un minuto l'impianto lavora normalmente: il
-   sensore impara com'è il traffico normale. **Il blue team entra subito**, il
-   red team no.
-3. Finita la calibrazione **entra il red team** e la partita comincia.
-4. La partita dura finché l'arbitro non chiude con Ctrl-C. Alla chiusura tutto
-   ciò che è successo viene salvato nella cartella del run.
+2. The lab comes up and for about a minute the plant runs normally: the sensor learns
+   what normal traffic looks like. **The blue team enters right away**, the red team
+   does not.
+3. Once calibration is over **the red team enters** and the game begins.
+4. The game runs until the referee ends it with Ctrl-C. On shutdown, everything that
+   happened is saved in the run directory.
 
-A ogni squadra l'arbitro consegna **due link**, e nient'altro: la console e il
-terminale. Sono stampati sul terminale da cui è partito il laboratorio (quelli
-del red team solo a calibrazione finita) e scritti in
-`output/cps-advisor/run-1/teams.json`. Ogni link contiene il segreto della
-squadra: chi ha il link entra.
+To each team the referee hands **two links**, and nothing else: the console and the
+terminal. They are printed on the terminal the lab was started from (the red team's
+only once calibration is over) and written to
+`output/cps-advisor/run-1/teams.json`. Each link carries the team's secret: whoever
+has the link gets in.
 
-| | Console | Terminale |
+| | Console | Terminal |
 |---|---|---|
 | Blue team | `http://127.0.0.1:8766/#token=…` | `http://blue:…@127.0.0.1:8767/` |
 | Red team | `http://127.0.0.1:8768/#token=…` | `http://red:…@127.0.0.1:8769/` |
 
 ## 4. Red team
 
-### Obiettivo
+### Goal
 
-Arrivare a un effetto fisico sull'impianto. Ce ne sono tre, diversi per rumore e
-per durata:
+Reach a physical effect on the plant. There are three, differing in noise and in how
+long they last:
 
-| Effetto | Come | Quanto si nota | Cosa succede |
+| Effect | How | How noticeable | What happens |
 |---|---|---|---|
-| Setpoint fuori scala | potenza del DG oltre il massimo | molto | il PLC lo rifiuta e recupera: va ripetuto per avere effetto |
-| Apertura dell'interruttore | `switch_cmd = 1` | molto | la linea si stacca finché qualcuno non richiude |
-| Presa del controllo manuale | `ctrl_mode = 1`, poi un setpoint alto ma lecito | poco | ogni valore è nella norma e arriva dall'HMI; il PLC non corregge, l'effetto resta |
+| Out-of-range setpoint | DG power beyond the maximum | very | the PLC rejects it and recovers: it must be repeated to have an effect |
+| Opening the breaker | `switch_cmd = 1` | very | the line is cut off until someone recloses it |
+| Taking manual control | `ctrl_mode = 1`, then a high but legal setpoint | little | every value is within the norm and comes from the HMI; the PLC does not correct it, the effect stays |
 
-### La strada
+### The path
 
-L'impianto si raggiunge solo passando dall'HMI, in quest'ordine:
+The plant is reached only by going through the HMI, in this order:
 
-1. **Accesso iniziale**: sfruttare l'applicazione di diagnostica dell'HMI.
-2. **Esecuzione di comandi** sull'HMI.
-3. **Pivot**: dall'HMI, raggiungere l'engine sulla porta Modbus.
-4. **Azione sull'impianto**: una delle tre scritture sopra.
+1. **Initial access**: exploit the HMI's diagnostics application.
+2. **Command execution** on the HMI.
+3. **Pivot**: from the HMI, reach the engine on the Modbus port.
+4. **Action on the plant**: one of the three writes above.
 
-### La console
+### The console
 
-Elenca questi passi, ciascuno con la tecnica ATT&CK, quanto è rumoroso e il
-comando esatto che esegue. **Run** lo lancia e mostra ciò che ha stampato.
+It lists these steps, each with its ATT&CK technique, how noisy it is, and the exact
+command it runs. **Run** launches it and shows what it printed.
 
-- Un passo marcato *not ready* ha un prerequisito non ancora riuscito. Si può
-  provare lo stesso: fallirà, e lo vedrete.
-- Si esegue un passo alla volta.
-- Lo storico in basso conserva l'esito di ogni tentativo.
+- A step marked *not ready* has a prerequisite that has not succeeded yet. You can try
+  it anyway: it will fail, and you will see it.
+- You run one step at a time.
+- The history at the bottom keeps the outcome of every attempt.
 
-### Il terminale
+### The terminal
 
-Una shell di root sulla macchina `attacker`, per tutto ciò che la console non
-prevede: guardarsi intorno sulla rete IT, provare a mano i comandi che i passi
-automatizzano, scrivere i registri Modbus con parametri propri. Gli strumenti
-sono già sulla macchina (`exploit_client.py`, `ot_write.py`, `curl`, `python3`).
+A root shell on the `attacker` machine, for everything the console does not cover:
+looking around the IT network, trying by hand the commands the steps automate, writing
+the Modbus registers with your own parameters. The tools are already on the machine
+(`exploit_client.py`, `ot_write.py`, `curl`, `python3`).
 
-Attenzione: **ogni comando digitato è registrato**, e una scrittura Modbus fatta
-a mano dalla shell, invece che da un passo della console, finisce nel registro
-dei comandi ma non tra gli effetti valutati. Per farsi riconoscere il merito di
-un effetto, conviene passare per i passi della console.
+Careful: **every typed command is recorded**, and a Modbus write done by hand from the
+shell, instead of from a console step, lands in the command record but not among the
+scored effects. To get credit for an effect, go through the console's steps.
 
 ## 5. Blue team
 
-### Obiettivo
+### Goal
 
-Accorgersi dell'attacco, idealmente **prima** che l'impianto ne risenta, e
-fermarlo con il minimo danno — senza, per esempio, staccare l'operatore legittimo
-se basta un blocco al confine.
+Notice the attack, ideally **before** the plant suffers for it, and stop it with the
+least damage — without, for example, cutting off the legitimate operator when a block
+at the boundary would do.
 
-### La console
+### The console
 
-Mostra, aggiornata in continuo:
+It shows, continuously updated:
 
-- **Suggerimenti**: ciò che il SOC propone di fare. Ogni suggerimento dice cosa
-  ha visto il sensore, cosa l'azione previene o ripristina, quanto è sicuro il
-  SOC, quanto costa, i comandi esatti che eseguirà e le alternative scartate. Si
-  **Approva** o si **Rifiuta**, con un conto alla rovescia: senza risposta, scade.
-- **Contromisure**: le si può applicare o revocare di propria iniziativa, senza
-  aspettare un suggerimento.
-- **Albero dell'attacco**: cosa il SOC crede che l'attaccante abbia fatto, passo
-  per passo, con il livello di certezza.
-- **Rilevamenti** e **risposte**: cosa i sensori hanno segnalato e cosa è stato
-  eseguito, su quale host e per volontà di chi.
+- **Suggestions**: what the SOC proposes to do. Each suggestion says what the sensor
+  saw, what the action prevents or restores, how confident the SOC is, what it costs,
+  the exact commands it will run, and the alternatives it discarded. You **Approve** or
+  **Reject**, with a countdown: left unanswered, it expires.
+- **Countermeasures**: you can apply or revoke them on your own initiative, without
+  waiting for a suggestion.
+- **Attack tree**: what the SOC believes the attacker has done, step by step, with the
+  level of certainty.
+- **Detections** and **responses**: what the sensors flagged and what was executed, on
+  which host and at whose decision.
 
-In alto si sceglie la **modalità del SOC**:
+At the top you choose the **SOC mode**:
 
-- **Advise** (predefinita): niente parte senza approvazione.
-- **Automatic**: il SOC esegue da solo ciò che la sua policy decide. Utile per
-  lasciargli le contromisure ovvie e concentrarsi sulle decisioni difficili.
+- **Advise** (default): nothing starts without approval.
+- **Automatic**: the SOC runs what its policy decides on its own. Useful for leaving it
+  the obvious countermeasures and focusing on the hard decisions.
 
-### Le contromisure
+### The countermeasures
 
-| Contromisura | Dove | Effetto | Si revoca |
+| Countermeasure | Where | Effect | Revocable |
 |---|---|---|---|
-| `notify` | nessuno | solo avvisa, non esegue nulla | — |
-| `block_flow` | firewall | blocca il flusso Modbus HMI → impianto al confine | sì |
-| `isolate_hmi` | hmi | stacca l'HMI dalla rete (anche l'operatore legittimo) | sì |
-| `force_auto` | firewall | riporta il controllo al PLC e il setpoint al valore nominale | — |
-| `restore_breaker` | firewall | richiude l'interruttore | — |
+| `notify` | nowhere | only warns, runs nothing | — |
+| `block_flow` | firewall | blocks the Modbus flow HMI → plant at the boundary | yes |
+| `isolate_hmi` | hmi | cuts the HMI off the network (the legitimate operator too) | yes |
+| `force_auto` | firewall | returns control to the PLC and the setpoint to its nominal value | — |
+| `restore_breaker` | firewall | recloses the breaker | — |
 
-Se la partita è avviata con il sensore lato IT (`CPS_IT=1`) il SOC vede anche i
-primi passi dell'attacco sull'HMI, e si aggiungono due contromisure: `kill_proc_tree`
-(termina i processi avviati dall'attaccante sull'HMI) e `block_web_src` (blocca
-l'indirizzo da cui arriva l'attacco all'applicazione di diagnostica).
+If the game is started with the IT-side sensor (`CPS_IT=1`) the SOC also sees the
+early steps of the attack on the HMI, and two more countermeasures are added:
+`kill_proc_tree` (kills the processes the attacker started on the HMI) and
+`block_web_src` (blocks the address the attack on the diagnostics application comes
+from).
 
-`block_flow` taglia la strada all'attaccante lasciando in piedi l'HMI;
-`isolate_hmi` è più drastica (l'operatore perde la postazione) e per questo è
-quella che il SOC segnala come più delicata.
+`block_flow` cuts the attacker's path while leaving the HMI standing; `isolate_hmi` is
+more drastic (the operator loses the workstation) and so is the one the SOC flags as
+most delicate.
 
-### Il terminale
+### The terminal
 
-Una shell sul SOC, che è anche il ponte verso gli altri host della difesa: da qui
-`ssh firewall`, `ssh sensor`, `ssh hmi` funzionano sulla rete di gestione. Serve
-per guardare lo stato di un host, le regole del firewall, i log — tutto ciò che
-la console non mostra. Anche qui ogni comando è registrato.
+A shell on the SOC, which is also the bridge to the other defence hosts: from here
+`ssh firewall`, `ssh sensor`, `ssh hmi` work over the management network. Use it to
+look at a host's state, the firewall rules, the logs — everything the console does not
+show. Here too every command is recorded.
 
-## 6. Arbitro (control dashboard)
+## 6. Referee (control dashboard)
 
-`make dashboard`, in sola lettura: non può agire sul laboratorio. Vede tutto ciò
-che le due console tengono separato, su un'unica linea del tempo:
+`make dashboard`, read-only: it cannot act on the lab. It sees everything the two
+consoles keep apart, on a single timeline:
 
-- le fasi del run e lo stato dell'impianto;
-- la scheda **Attacker · Defender**: per ciascuna squadra cosa sta facendo e
-  cosa vede, una linea del tempo a corsie (attaccante, difensore, impianto) e,
-  per ogni passo dell'attacco, quando l'attaccante l'ha fatto e quando il
-  difensore l'ha visto; la barra del tempo sotto i riquadri la riporta a
-  qualunque istante della partita;
-- i **suggerimenti** del SOC con il loro esito (approvato, rifiutato, scaduto),
-  come storico;
-- una scheda **Teams** con, in ordine di tempo, i passi del red team, le azioni
-  del blue team e **ogni comando digitato da entrambi**, con l'host e la squadra.
+- the run's phases and the plant's state;
+- the **Attacker · Defender** card: for each team what it is doing and what it sees, a
+  lane timeline (attacker, defender, plant) and, for every attack step, when the
+  attacker did it and when the defender saw it; the time bar beneath the panels takes
+  it to any moment of the game;
+- the SOC's **suggestions** with their outcome (approved, rejected, expired), as a
+  history;
+- a **Teams** card with, in time order, the red team's steps, the blue team's actions
+  and **every command typed by either**, with the host and the team.
 
-Su un host della difesa la squadra di un comando si legge da come la shell è
-arrivata lì:
+On a defence host, a command's team is read from how the shell arrived there:
 
-- **blue** — via SSH dal SOC;
-- **red** — una shell ottenuta attraverso l'applicazione vulnerabile dell'HMI (o
-  lasciata in esecuzione da un servizio), oppure SSH da un host che non è il
-  SOC: è il segno che l'attaccante ha preso quell'host;
-- **control** — tutto il resto, cioè la shell dell'arbitro
-  (`kathara connect`). Compare nella scheda Teams ma non nel `ground_truth`:
-  l'arbitro può guardare dentro un nodo senza che conti come attacco.
+- **blue** — over SSH from the SOC;
+- **red** — a shell obtained through the HMI's vulnerable application (or left running
+  by a service), or SSH from a host that is not the SOC: the sign that the attacker has
+  taken that host;
+- **control** — everything else, i.e. the referee's shell (`kathara connect`). It
+  appears in the Teams card but not in the `ground_truth`: the referee can look inside
+  a node without it counting as an attack.
 
-## 7. Cosa separa le due squadre
+## 7. What keeps the two teams apart
 
-- Ogni console e ogni terminale richiede il **token** della propria squadra. I
-  token sono diversi, generati a ogni partita, e non finiscono mai sul registro
-  che l'arbitro legge.
-- Sulle reti del laboratorio le porte delle console sono chiuse: dall'HMI non si
-  raggiunge la console del blue team, né viceversa.
-- Resta una via tecnica: un nodo con una porta pubblicata può raggiungere
-  l'host e da lì la porta dell'altra squadra. A fermarlo c'è solo il token —
-  quindi **non condividete i link fuori dalla vostra squadra**.
+- Every console and every terminal requires its own team's **token**. The tokens
+  differ, are generated per game, and never land on the record the referee reads.
+- On the lab networks the consoles' ports are closed: from the HMI you cannot reach the
+  blue team's console, nor the other way round.
+- One technical path remains: a node with a published port can reach the host and from
+  there the other team's port. The only thing stopping it is the token — so **do not
+  share your links outside your team**.
 
-## 8. Cosa resta dopo la partita
+## 8. What is left after the game
 
-Nella cartella del run (`output/cps-advisor/run-1/`):
+In the run directory (`output/cps-advisor/run-1/`):
 
-- `ground_truth.jsonl` — cosa è successo davvero (passi del red team, scritture
-  Modbus, comandi);
-- `progress.jsonl` — la linea del tempo che l'arbitro ha visto;
-- `response.jsonl` — suggerimenti, verdetti e azioni del SOC;
-- `<host>.commands.jsonl` e `<host>.terminal.typescript` — i comandi e la
-  trascrizione di ogni terminale;
-- `teams.json` — i link consegnati alle squadre.
+- `ground_truth.jsonl` — what really happened (red team steps, Modbus writes,
+  commands);
+- `progress.jsonl` — the timeline the referee saw;
+- `response.jsonl` — the SOC's suggestions, verdicts and actions;
+- `<host>.commands.jsonl` and `<host>.terminal.typescript` — the commands and the
+  transcript of each terminal;
+- `teams.json` — the links handed to the teams.
 
-Il punteggio si calcola come per lo scenario `cps`:
-`make cps-metrics CPS_OUT=output/cps-advisor/run-1`. Tenete presente che qui i
-tempi includono quello degli operatori, e che un effetto ottenuto con una
-scrittura a mano dalla shell (invece che da un passo) si vede nell'impianto ma
-non tra gli effetti valutati.
+The score is computed as for the `cps` scenario:
+`make cps-metrics CPS_OUT=output/cps-advisor/run-1`. Keep in mind that here the timings
+include the operators', and that an effect obtained with a hand-written shell write
+(instead of a step) shows in the plant but not among the scored effects.

@@ -34,3 +34,8 @@ pytest==9.2.0
 # Formatter and linter (make fmt / make lint, tests/core/test_formatting.py).
 # Dev-only, like pytest: never imported by the platform or the guest agents.
 ruff==0.17.4
+
+# Documentation site (make docs-serve / make docs-build). Dev-only, like pytest:
+# never imported by the platform or the guest agents, and never in a node image.
+mkdocs==1.6.1
+mkdocs-material==9.8.1

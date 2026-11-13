@@ -12,13 +12,13 @@ on the host. No guest agent imports it, so it may use networkx.
 
 | File | What it holds |
 |---|---|
-| [nodes/soc/soar_kg.py](../nodes/soc/soar_kg.py) | the knowledge graph: construction from the SOC's inventory, queries, JSON |
-| [cyberrange/scenarios/cps/inventory.py](../cyberrange/scenarios/cps/inventory.py) | the CPS binding: the lab as the SOC's inventory (topology, services, roles, rules) |
-| [nodes/soc/soar_trees.py](../nodes/soc/soar_trees.py) | the tree model and its operations, the CPS attack tree, the countermeasures |
-| [nodes/soc/soar_mapping.py](../nodes/soc/soar_mapping.py) | findings → evidence on tree nodes → belief (`CampaignState`) |
-| [nodes/soc/soar_policy.py](../nodes/soc/soar_policy.py) | belief → decisions: the rules playbook and the solver |
-| [nodes/soc/soc_analytics.py](../nodes/soc/soc_analytics.py) | the SOC node's runtime loop (decision + requests); its engine, offline, is the replay |
-| [nodes/redteam/](../nodes/redteam/) | the attacker (`red_agent.py` + planner) that walks the same tree in the lab, read from `tree.json` |
+| `nodes/soc/soar_kg.py` | the knowledge graph: construction from the SOC's inventory, queries, JSON |
+| `cyberrange/scenarios/cps/inventory.py` | the CPS binding: the lab as the SOC's inventory (topology, services, roles, rules) |
+| `nodes/soc/soar_trees.py` | the tree model and its operations, the CPS attack tree, the countermeasures |
+| `nodes/soc/soar_mapping.py` | findings → evidence on tree nodes → belief (`CampaignState`) |
+| `nodes/soc/soar_policy.py` | belief → decisions: the rules playbook and the solver |
+| `nodes/soc/soc_analytics.py` | the SOC node's runtime loop (decision + requests); its engine, offline, is the replay |
+| `nodes/redteam/` | the attacker (`red_agent.py` + planner) that walks the same tree in the lab, read from `tree.json` |
 
 ## 1. The pipeline
 
@@ -55,7 +55,7 @@ lab being deployed, and stay fixed until the run ends (§4).
 `build_kg(inventory)` is generic: it turns any described lab into a graph and
 knows nothing about the CPS scenario. The scenario supplies the inventory, one
 JSON-serialisable document, in
-[scenarios/cps/inventory.py](../cyberrange/scenarios/cps/inventory.py):
+`scenarios/cps/inventory.py`:
 
 | Inventory key | Source | Becomes |
 |---|---|---|
@@ -65,7 +65,7 @@ JSON-serialisable document, in
 | `plant_service` | `("engine", "modbus")` | which service exposes the registers |
 
 The registers and the access policy are not inputs: they come from the plant
-contract [planes/defense/ot_registers.py](../cyberrange/planes/defense/ot_registers.py)
+contract `planes/defense/ot_registers.py`
 (`ACTUATOR_REGISTERS`, `SENSOR_REGISTERS`, `SENSITIVE_ACTUATORS`,
 `ROLE_POLICY`), which the PLC, the engine and the DPI sensor share. The graph
 therefore describes the same contract that the sensor enforces.
@@ -171,10 +171,10 @@ What `reachable` does not model:
 
 ### 2.5 Layering
 
-The graph is node software now ([nodes/soc/soar_kg.py](../nodes/soc/soar_kg.py)),
-and node software imports no scenario (rule 8 of [CLAUDE.md](../CLAUDE.md)). So it
+The graph is node software now (`nodes/soc/soar_kg.py`),
+and node software imports no scenario (rule 8 of `CLAUDE.md`). So it
 builds the graph from an **inventory** the scenario provides
-([cps.inventory](../cyberrange/scenarios/cps/inventory.py), derived from the
+(`cps.inventory`, derived from the
 topology): the SOC analytics does this on its node, and the host does it offline
 through `soc_tool` (a subprocess, no import). `PlannedAttacker` does not build a
 graph at all — it reads the recorded `tree.json`, where each node already says
@@ -566,15 +566,15 @@ same belief, so the solver offers its next-best set; one left unanswered for
 
 ## 7. The attacker walks the same tree
 
-`AttackPlanner` ([nodes/redteam/planner.py](../nodes/redteam/planner.py)), run in
-the lab by [red_agent.py](../nodes/redteam/red_agent.py), uses the tree as a plan:
+`AttackPlanner` (`nodes/redteam/planner.py`), run in
+the lab by `red_agent.py`, uses the tree as a plan:
 
 1. **Candidate goals.** The impact leaves that are `feasible` on the graph,
    ordered by profile:
    - *opportunistic*: the biggest `impact` first;
    - *targeted*: only `--attack-goal`;
    - *stealthy*: the lowest `DETECTABILITY` first
-     ([steps.py](../nodes/redteam/steps.py)).
+     (`steps.py`).
 2. **Steps.** For a goal: its `prerequisites` in stage order
    (`it_access → it_exec → pivot`), then the leaf. Each step is one
    `exploit_client.py --step …` run on the attacker container.
@@ -664,8 +664,8 @@ changing a constant. To see the effect on real data, replay recorded runs with
 ## 10. Limits of the current version
 
 - **The tree is hand-written.** It is grounded on the graph but not generated
-  from it. Automatic generation is WP2 T2.2
-  ([piano-wp2-wp3.md](piano-wp2-wp3.md)).
+  from it. Automatic generation is WP2 T2.2 (see the internal plan
+  `docs/internal/piano-wp2-wp3.md`).
 - **The CPS tree lives in the defence plane.**
   - `cps_attack_tree`, `cps_context` and `cps_countermeasures` are in
     `nodes/soc/soar_trees.py`, next to the generic tree model.

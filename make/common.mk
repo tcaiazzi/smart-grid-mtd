@@ -67,6 +67,12 @@ lab-conf:                  ## export SCENARIO's topology as a Kathará lab dir (
 platform-loc:              ## lines of code: platform core vs per-plane components vs each scenario
 	$(PYTHON) -m $(M_CORE) loc --markdown $(OUTPUT_ROOT)/platform-loc.md
 
+docs-serve:                ## serve the documentation site with live reload (http://127.0.0.1:8000)
+	$(PYTHON) -m mkdocs serve
+
+docs-build:                ## build the documentation site -> $(OUTPUT_ROOT)/site/
+	$(PYTHON) -m mkdocs build
+
 clean:
 	rm -rf $(OUTPUT_ROOT)
 

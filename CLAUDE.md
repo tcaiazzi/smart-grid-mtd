@@ -99,3 +99,7 @@ repo drifts. Run `make fmt` before committing. What the formatter cannot decide:
 contract) · `docs/components.md` (every component) · `docs/playground-red-vs-blue.md`
 (the red-vs-blue playground, for the people playing it) · the `cyberrange-*` skills
 for step-by-step work.
+
+Everything under `docs/` is published as the documentation site (`mkdocs.yml`,
+`make docs-serve`) and is written in English; add a new page to the `nav` there.
+Shared plans and dated audits go in `docs/internal/`, which the site excludes.

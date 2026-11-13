@@ -466,8 +466,8 @@ off.
 
 The scenario covers phases 1–4 of the prototype: foundations, OT emulation, the
 IT/OT boundary, and detection. The response loop above sits on top of them as a
-deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see
-[piano-wp2-wp3.md](piano-wp2-wp3.md)). Still to do:
+deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see the
+internal plan `docs/internal/piano-wp2-wp3.md`). Still to do:
 
 - automatic generation of the attack trees;
 - the stochastic game model;
