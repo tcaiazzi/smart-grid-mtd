@@ -175,16 +175,49 @@ class TheDesk(unittest.TestCase):
         self.tick()
         self.assertEqual([v["verdict"] for v in self.desk.take()], ["approve"])
 
-    def test_the_case_summary_says_what_the_soc_believes(self):
+    def test_the_case_summary_is_the_attack_tree_with_the_socs_belief(self):
         self.desk.open("r1", SUGGESTION)
+        leaf = {"gate": "LEAF", "children": []}
         view = {
+            "structure": {
+                "id": "impact", "label": "Impact", "gate": "OR", "attck": None,
+                "children": [
+                    {"id": "via_hmi", "label": "Through the HMI", "gate": "AND", "attck": None,
+                     "children": [
+                         {"id": "it_access", "label": "Web access", "attck": "T1190", **leaf},
+                         {"id": "pivot", "label": "Pivot", "attck": None, **leaf},
+                     ]},
+                ],
+            },
             "tree": [{"node": "pivot", "label": "Pivot", "state": "suspected", "belief": 0.5}],
+            "countermeasures": [
+                {"id": "block_flow", "prevents": ["pivot"], "restores": [], "in_effect_since": 9.0},
+                {"id": "isolate_hmi", "prevents": ["it_access"], "in_effect_since": None},
+            ],
             "actions": [{"id": "block_flow", "machine": "firewall", "ok": True}],
-        }
+        }  # fmt: skip
         self.tick(D.SUMMARY_S)
         self.desk.publish(view)
-        self.assertIn("**Pivot**: suspected (0.50)", self.iris.summary)
-        self.assertIn("block_flow on firewall", self.iris.summary)
+        lines = self.iris.summary.splitlines()
+        tree = [ln for ln in lines if ln.lstrip().startswith("- ") and "**" in ln]
+        # The nesting is the tree's: IRIS's Markdown nests a list at four spaces.
+        self.assertEqual(
+            [len(ln) - len(ln.lstrip()) for ln in tree],
+            [0, 4, 8, 8],
+            "the tree reads as a flat list: a step no longer shows what it is a step of",
+        )
+        self.assertIn("**Impact** (OR)", tree[0])
+        self.assertIn("**Through the HMI** (AND)", tree[1])
+        self.assertTrue(
+            tree[2].endswith("**Web access** [T1190]"), "an unseen step claims a belief"
+        )
+        # As code: IRIS's Markdown reads the underscores of a bare id as emphasis.
+        self.assertIn("**Pivot**: suspected (0.50) — countered by `block_flow`", tree[3])
+        self.assertNotIn("isolate_hmi", self.iris.summary, "a countermeasure not in effect")
+        self.assertIn("`block_flow` on firewall", self.iris.summary)
+
+    def test_a_summary_before_any_view_of_the_tree_says_so(self):
+        self.assertIn("- nothing yet", D.summary({}))
 
     def file_order(self, tags):
         """What IRIS's SOC response module does when the analyst picks an entry."""

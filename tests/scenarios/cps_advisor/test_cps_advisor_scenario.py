@@ -321,6 +321,15 @@ class Mirror(unittest.TestCase):
     def test_a_soc_that_decides_alone_serves_no_console(self):
         self.assertNotIn("--operator", SocAnalytics("soc", {}, policy="rules").command)
 
+    def test_a_soc_feeds_its_belief_only_where_it_is_told_to(self):
+        plain = SocAnalytics("soc", {}, policy="rules")
+        self.assertNotIn("--belief-feed", plain.command, "a SOC with no SIEM imports the feed")
+        fed = SocAnalytics("soc", {}, policy="rules", belief_feed="/soc_belief.jsonl")
+        self.assertIn("--belief-feed /soc_belief.jsonl", fed.command)
+        kept = {a.guest_path: a.local_name for a in fed.artifacts()}
+        self.assertEqual(kept.get("/soc_belief.jsonl"), "soc.belief.jsonl")
+        self.assertNotIn("/soc_belief.jsonl", {a.guest_path for a in plain.artifacts()})
+
 
 if __name__ == "__main__":
     unittest.main()

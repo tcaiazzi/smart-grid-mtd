@@ -2,9 +2,9 @@
 
 The lab is the cps scenario's, the team access the cps-advisor one's, and so
 are their manifests. Listed here is only what the SOC's own tools add: the
-alert shipper and the IRIS desk on the SOC, and the configuration and start
-script of each new node's service. The services themselves come with their
-images (docker/wazuh-*, docker/iris-*).
+alert shipper, the IRIS desk and the feed of the attack tree's belief on the SOC,
+and the configuration and start script of each new node's service. The services
+themselves come with their images (docker/wazuh-*, docker/iris-*).
 """
 
 # SOC node (kathara/soc-siem): the analytics' IRIS desk, and the shipper that
@@ -18,6 +18,10 @@ SOC_SIEM_FILES = [
     # The manager's integration that turns the alerts worth triage into IRIS alerts.
     ("nodes/wazuh/manager/iris_forward.py", "/iris_forward.py"),
     ("nodes/wazuh/manager/wazuh-iris-integration.sh", "/wazuh-iris-integration.sh"),
+    # The belief on the attack tree, for the SIEM: the analytics' feed of it to
+    # the manager, and the rules that make alerts of it.
+    ("nodes/soc/belief_feed.py", "/belief_feed.py"),
+    ("nodes/wazuh/manager/soc_belief_rules.xml", "/soc_belief_rules.xml"),
 ]
 
 # Wazuh indexer (kathara/wazuh-indexer).
@@ -31,6 +35,9 @@ DASHBOARD_FILES = [
     ("nodes/wazuh/dashboard/opensearch_dashboards.yml", "/opensearch_dashboards.yml"),
     ("nodes/wazuh/dashboard/wazuh.yml", "/wazuh.yml"),
     ("nodes/wazuh/dashboard/wazuh-dashboard-start.sh", "/wazuh-dashboard-start.sh"),
+    # The lab's own view, the attack tree, and what creates it in the dashboard.
+    ("nodes/wazuh/dashboard/attack-tree.vega.json", "/attack-tree.vega.json"),
+    ("nodes/wazuh/dashboard/dashboard_objects.py", "/dashboard_objects.py"),
 ]
 
 # Every DFIR-IRIS node: the one script that starts its service.

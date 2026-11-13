@@ -238,6 +238,8 @@
    "/wazuh-shipper-start.sh",
    "/iris_forward.py",
    "/wazuh-iris-integration.sh",
+   "/belief_feed.py",
+   "/soc_belief_rules.xml",
    "/team-access.sh",
    "/command_audit.sh"
   ],
@@ -256,7 +258,9 @@
   "guest_files": [
    "/opensearch_dashboards.yml",
    "/wazuh.yml",
-   "/wazuh-dashboard-start.sh"
+   "/wazuh-dashboard-start.sh",
+   "/attack-tree.vega.json",
+   "/dashboard_objects.py"
   ],
   "settings": {
    "0": "MGMT",

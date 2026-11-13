@@ -6,8 +6,9 @@
 # Each agent is registered with the key its own wazuh-agent-setup.sh is given,
 # so no agent has to enrol before it can report.
 #
-# Copied flat onto the SOC node with cps_rules.xml; needs the wazuh-manager
-# package of the kathara/soc image.
+# Copied flat onto the SOC node with the rules a lab stages for it (cps_rules.xml,
+# and any other /*_rules.xml); needs the wazuh-manager package of the kathara/soc
+# image.
 set -eu
 
 O=/var/ossec
@@ -20,7 +21,11 @@ done
 chown wazuh:wazuh $O/etc/client.keys
 chmod 640 $O/etc/client.keys
 
-install -o wazuh -g wazuh -m 660 /cps_rules.xml $O/etc/rules/cps_rules.xml
+# Every rules file staged on the node: a lab whose SOC raises events of its own
+# stages their rules beside cps_rules.xml, and the manager loads them at start.
+for rules in /*_rules.xml; do
+    install -o wazuh -g wazuh -m 660 "$rules" "$O/etc/rules/$(basename "$rules")"
+done
 
 # The lab has no route to the internet: the periodic update check hangs on it
 # and stalls the API for seconds at a time, which delays an active response.

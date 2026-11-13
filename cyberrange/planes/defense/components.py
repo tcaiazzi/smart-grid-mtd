@@ -207,7 +207,11 @@ class SocAnalytics(GuestAgent):
     ``operator_terminal``, the operator's shell on the node. With ``iris`` the
     suggestions wait in a DFIR-IRIS case instead (nodes/soc/iris_desk.py), as
     tasks an analyst closes or cancels. The platform only mirrors what happens
-    there to the ledger; it never answers for the person."""
+    there to the ledger; it never answers for the person.
+
+    ``belief_feed`` is a guest path: given one, the analytics also hands its
+    belief on the attack tree to the manager as events (nodes/soc/
+    belief_feed.py), which a SIEM indexes; the file keeps what was delivered."""
 
     RESPONSE = "/response.jsonl"
     KG, TREE = "/kg.json", "/tree.json"
@@ -226,6 +230,7 @@ class SocAnalytics(GuestAgent):
         operator_token=None,
         operator_terminal=None,
         iris=None,
+        belief_feed=None,
     ):
         inv = base64.b64encode(json.dumps(inventory).encode()).decode()
         operator = ""
@@ -239,18 +244,26 @@ class SocAnalytics(GuestAgent):
             operator = f" --operator-port {operator_port} --operator-token {operator_token}"
             if operator_terminal:
                 operator += f" --operator-terminal {operator_terminal}"
+        artifacts = [
+            Artifact(node, self.RESPONSE, "response.jsonl"),
+            Artifact(node, self.KG, f"{node}.kg.json"),
+            Artifact(node, self.TREE, f"{node}.tree.json"),
+        ]
+        feed = ""
+        if belief_feed:
+            feed = f" --belief-feed {belief_feed}"
+            artifacts.append(Artifact(node, belief_feed, f"{node}.belief.jsonl"))
         super().__init__(
             node,
             f"python3 soc_analytics.py --inventory-b64 {inv} --policy {policy} "
-            f"--approval {approval} --interval {interval}" + (" --it" if it else "") + operator,
+            f"--approval {approval} --interval {interval}"
+            + (" --it" if it else "")
+            + operator
+            + feed,
             "soc_analytics.log",
             plane=PLANE,
             name="soc_analytics",
-            artifacts=[
-                Artifact(node, self.RESPONSE, "response.jsonl"),
-                Artifact(node, self.KG, f"{node}.kg.json"),
-                Artifact(node, self.TREE, f"{node}.tree.json"),
-            ],
+            artifacts=artifacts,
         )
 
     def telemetry(self):

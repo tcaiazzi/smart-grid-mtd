@@ -222,6 +222,61 @@ task sono stati annullati con la nota "Expired".
 Non provato dal vivo: la partita a squadre (`make cps-soc-teams`), che resta su
 fino a Ctrl-C.
 
+## L'albero d'attacco nelle due dashboard
+
+Con la console di `cps-advisor` il blue team aveva perso l'albero d'attacco
+colorato dalla credenza del SOC. Ora lo ritrova in entrambi gli strumenti, solo
+dal punto di vista del difensore.
+
+```
+soc_analytics (view) ─► belief_feed.py ─► coda d'analisi del manager ─► regole 100130/100131
+        │                                        └─► alerts.json ─► Filebeat ─► wazuh-alerts-*
+        └─► iris_desk.summary ─► riepilogo del caso            dashboard "Attack tree" (Vega) ◄─┘
+```
+
+- **Il dato.** `nodes/soc/belief_feed.py` consegna al manager un evento per nodo
+  dell'albero (`kind: soc_belief`), tutti all'avvio e poi solo quelli che
+  cambiano. L'evento è piatto e porta anche la posizione del nodo (`parent`,
+  `order`), il gate, la tecnica ATT&CK, la credenza e le contromisure in vigore
+  che lo coprono (`defended_by`): l'ultimo evento di ogni nodo è l'albero intero.
+  Passa dalla coda d'analisi del manager, come le integrazioni di Wazuh, e non
+  da un file seguito dal logcollector: il feed sa se l'evento è stato preso e lo
+  rimanda, perché il manager parte dopo le analitiche. Ciò che è stato
+  consegnato resta in `soc.belief.jsonl` tra gli artefatti del run.
+- **Wazuh.** Due regole (`soc_belief_rules.xml`): 100130, livello 3, per ogni
+  cambio; 100131, livello 8, quando un passo è confermato. Nessuno agisce su
+  questi alert: le analitiche leggono solo 100100/100120 e l'integrazione con
+  IRIS solo 100100/100101. `wazuh-manager-setup.sh` installa ora ogni
+  `/*_rules.xml` che il lab gli mette accanto.
+- **La vista.** `attack-tree.vega.json` è una visualizzazione Vega: prende
+  l'ultimo alert di ogni nodo fino alla fine dell'intervallo di tempo, quindi
+  spostando indietro il selettore si rivede l'albero com'era. Stato per colore
+  **e** forma, bordo tratteggiato per i passi dedotti, spunta verde sui passi
+  coperti da una contromisura, dettagli al passaggio del mouse.
+  `dashboard_objects.py` la installa all'avvio della dashboard come oggetti
+  salvati con id fissi, insieme all'index pattern degli alert; il link è tra
+  quelli del blue team (`attack tree` in `teams.json`).
+- **IRIS.** Il riepilogo del caso non è più un elenco piatto ma l'albero
+  annidato: gate, tecnica, stato e credenza, contromisure che coprono il passo.
+  IRIS filtra SVG e HTML ovunque (riepilogo, attributi, datastore), quindi lì
+  l'albero è testo; il riepilogo rimanda alla vista di Wazuh.
+
+Verificato dal vivo (`output/cps-soc/tree-2`, attaccante `planner`, telemetria
+IT): 12 alert 100130 all'avvio, uno per nodo; durante l'attacco l'albero si
+colora (accesso iniziale confermato, esecuzione e pivot dedotti, apertura
+dell'interruttore confermata); approvati tre suggerimenti in IRIS, i passi
+coperti prendono la spunta in Wazuh e "countered by" in IRIS; a fine partita 24
+alert 100130 e 7 100131 nell'indexer, nessuno inoltrato a IRIS.
+
+Trovato strada facendo:
+
+- la pagina delle dashboard di OpenSearch si rompe su un pannello senza
+  `version`, e senza un index pattern mostra solo l'invito a crearne uno;
+- il decoder JSON del manager rende i numeri come stringhe (`score`, `order`):
+  la vista li riconverte;
+- nel Markdown di IRIS gli underscore di un id (`kill_proc_tree`) diventano
+  corsivo: nel riepilogo gli id sono ora in formato codice.
+
 ## Limiti noti della prova
 
 - Le porte pubblicate (8770, 8771) sono protette solo dalle credenziali del run,
@@ -234,17 +289,19 @@ fino a Ctrl-C.
 | dove | cosa |
 |---|---|
 | `cyberrange/core/topology.py` | `Node.entrypoint`, opzionale |
-| `cyberrange/planes/defense/components.py` | `WazuhIndexer`, `WazuhDashboard`, `AlertShipper`, `IrisService`; `SocAnalytics(iris=…)` |
+| `cyberrange/planes/defense/components.py` | `WazuhIndexer`, `WazuhDashboard`, `AlertShipper`, `IrisService`; `SocAnalytics(iris=…, belief_feed=…)` |
 | `cyberrange/scenarios/cps_soc/` | lo scenario (eredita da `cps-advisor`), manifest, CLI, pannello |
 | `nodes/soc/iris_desk.py`, `nodes/soc/soc_analytics.py` | il banco su IRIS (suggerimenti, catalogo, ordini) e l'opzione `--desk iris` |
 | `nodes/soar/iris_soc_response/` | il modulo IRIS con le voci di menu del SOC |
 | `nodes/wazuh/manager/iris_forward.py`, `wazuh-iris-integration.sh` | l'integrazione Wazuh → alert IRIS e la sua installazione |
 | `nodes/wazuh/{indexer,dashboard,manager}/`, `nodes/soar/iris-start.sh` | configurazioni e script d'avvio |
+| `nodes/soc/belief_feed.py`, `nodes/wazuh/manager/soc_belief_rules.xml` | la credenza sull'albero come alert del SIEM |
+| `nodes/wazuh/dashboard/attack-tree.vega.json`, `dashboard_objects.py` | la vista dell'albero in Wazuh e la sua installazione |
 | `docker/{wazuh-pki,soc-siem,wazuh-indexer,wazuh-dashboard,iris-app,iris-web}/` | le immagini; `make cps-soc-image` |
 | `make/cps-soc.mk` | `cps-soc-image`, `cps-soc`, `cps-soc-lab`, `cps-soc-teams`, `cps-soc-dashboard` |
-| `tests/` | `test_iris_desk.py` (13), `test_iris_module.py` (5), `test_iris_forward.py` (14), `tests/scenarios/cps_soc/` (11), entrypoint nel core, versioni Wazuh allineate anche per indexer e dashboard, `lab-cps-soc.json` |
+| `tests/` | `test_iris_desk.py` (14), `test_iris_module.py` (5), `test_iris_forward.py` (14), `test_belief_feed.py` (9), `test_wazuh_dashboard_config.py` (10), `tests/scenarios/cps_soc/` (12), entrypoint nel core, versioni Wazuh allineate anche per indexer e dashboard, `lab-cps-soc.json` |
 
-Suite: 514 test verdi; snapshot degli altri lab invariati.
+Suite: 536 test verdi; snapshot degli altri lab invariati.
 
 Verifica dopo le correzioni sugli utenti (`output/cps-soc/spike-4`): tre
 suggerimenti approvati in IRIS, tre contromisure eseguite (`block_flow`,

@@ -1,0 +1,280 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v5.json",
+  "description": "The lab's attack tree, each step coloured by what the SOC believes of it. Read from the alerts of rule group soc_belief (nodes/wazuh/manager/soc_belief_rules.xml): the latest alert of every tree node, up to the end of the time range, so moving the time picker back shows the tree as it was. Installed by dashboard_objects.py.",
+  "padding": 8,
+  "signals": [
+    {"name": "boxh", "value": 58},
+    {"name": "top", "value": 30},
+    {
+      "name": "levels",
+      "update": "depths && isValid(depths[1]) ? depths[1] + 1 : 1"
+    },
+    {
+      "name": "boxw",
+      "update": "clamp((width - 4) / levels - 64, 110, 340)"
+    }
+  ],
+  "data": [
+    {
+      "name": "tree",
+      "url": {
+        "index": "wazuh-alerts-*",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {"term": {"rule.groups": "soc_belief"}},
+                {"range": {"timestamp": {"lte": {"%timefilter%": "max"}}}}
+              ]
+            }
+          },
+          "aggs": {
+            "nodes": {
+              "terms": {"field": "data.node", "size": 500},
+              "aggs": {
+                "last": {
+                  "top_hits": {
+                    "size": 1,
+                    "sort": [{"timestamp": {"order": "desc"}}],
+                    "_source": ["data"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {"property": "aggregations.nodes.buckets"},
+      "transform": [
+        {"type": "formula", "as": "d", "expr": "datum.last.hits.hits[0]._source.data"},
+        {"type": "formula", "as": "id", "expr": "datum.d.node"},
+        {"type": "formula", "as": "parent", "expr": "datum.d.parent"},
+        {"type": "formula", "as": "order", "expr": "toNumber(datum.d.order)"},
+        {"type": "formula", "as": "label", "expr": "datum.d.label"},
+        {"type": "formula", "as": "gate", "expr": "datum.d.gate"},
+        {"type": "formula", "as": "attck", "expr": "datum.d.attck"},
+        {"type": "formula", "as": "belief", "expr": "datum.d.belief"},
+        {"type": "formula", "as": "score", "expr": "toNumber(datum.d.score)"},
+        {"type": "formula", "as": "defended_by", "expr": "datum.d.defended_by"},
+        {"type": "collect", "sort": {"field": "order"}},
+        {"type": "stratify", "key": "id", "parentKey": "parent"},
+        {
+          "type": "tree",
+          "method": "tidy",
+          "separation": false,
+          "size": [{"signal": "max(height - top - boxh - 22, 60)"}, 1]
+        },
+        {"type": "extent", "field": "depth", "signal": "depths"}
+      ]
+    },
+    {
+      "name": "nodes",
+      "source": "tree",
+      "transform": [
+        {"type": "formula", "as": "sx", "expr": "2 + datum.y * (width - boxw - 4)"},
+        {"type": "formula", "as": "sy", "expr": "top + boxh / 2 + datum.x"},
+        {
+          "type": "formula",
+          "as": "cut",
+          "expr": "length(datum.label) > floor((boxw - 36) / 6.3) ? lastindexof(slice(datum.label, 0, floor((boxw - 36) / 6.3) + 1), ' ') : -1"
+        },
+        {
+          "type": "formula",
+          "as": "lines",
+          "expr": "datum.cut > 0 ? [slice(datum.label, 0, datum.cut), slice(datum.label, datum.cut + 1)] : [datum.label]"
+        },
+        {"type": "formula", "as": "first", "expr": "datum.sy - (datum.cut > 0 ? 17 : 9)"},
+        {
+          "type": "formula",
+          "as": "detail",
+          "expr": "(datum.gate && datum.gate != 'LEAF' ? datum.gate + '  ·  ' : '') + (datum.attck ? datum.attck + '  ·  ' : '') + datum.belief + (datum.belief != 'unknown' ? ' ' + format(datum.score, '.2f') : '') + (datum.defended_by ? '  ·  ✓ countered' : '')"
+        }
+      ]
+    },
+    {
+      "name": "links",
+      "source": "tree",
+      "transform": [
+        {"type": "treelinks"},
+        {"type": "formula", "as": "x0", "expr": "2 + datum.source.y * (width - boxw - 4) + boxw"},
+        {"type": "formula", "as": "y0", "expr": "top + boxh / 2 + datum.source.x"},
+        {"type": "formula", "as": "x1", "expr": "2 + datum.target.y * (width - boxw - 4)"},
+        {"type": "formula", "as": "y1", "expr": "top + boxh / 2 + datum.target.x"},
+        {
+          "type": "linkpath",
+          "orient": "horizontal",
+          "shape": "diagonal",
+          "sourceX": "x0",
+          "sourceY": "y0",
+          "targetX": "x1",
+          "targetY": "y1"
+        }
+      ]
+    },
+    {"name": "notes", "values": [{}]}
+  ],
+  "scales": [
+    {
+      "name": "state",
+      "type": "ordinal",
+      "domain": ["confirmed", "inferred", "suspected", "unknown"],
+      "range": ["#d03b3b", "#ec835a", "#fab219", "#c3c2b7"]
+    },
+    {
+      "name": "glyph",
+      "type": "ordinal",
+      "domain": ["confirmed", "inferred", "suspected", "unknown"],
+      "range": ["diamond", "triangle-up", "square", "circle"]
+    }
+  ],
+  "legends": [
+    {
+      "fill": "state",
+      "shape": "glyph",
+      "orient": "none",
+      "legendX": 2,
+      "legendY": 0,
+      "direction": "horizontal",
+      "title": "What the SOC believes of each step",
+      "titleOrient": "left",
+      "titleFontWeight": "normal",
+      "titleColor": "#52514e",
+      "labelColor": "#52514e",
+      "symbolSize": 90,
+      "columnPadding": 14
+    }
+  ],
+  "marks": [
+    {
+      "type": "path",
+      "from": {"data": "links"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "path": {"field": "path"},
+          "stroke": {"value": "#c3c2b7"},
+          "strokeWidth": {"value": 1.5}
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "from": {"data": "nodes"},
+      "encode": {
+        "update": {
+          "x": {"field": "sx"},
+          "y": {"signal": "datum.sy - boxh / 2"},
+          "width": {"signal": "boxw"},
+          "height": {"signal": "boxh"},
+          "cornerRadius": {"value": 4},
+          "fill": {"value": "#fcfcfb"},
+          "stroke": {"scale": "state", "field": "belief"},
+          "strokeWidth": {"signal": "datum.belief == 'unknown' ? 1 : 2.5"},
+          "strokeDash": {"signal": "datum.belief == 'inferred' ? [5, 3] : []"},
+          "tooltip": {
+            "signal": "{'Step': datum.label, 'Belief': datum.belief, 'Score': format(datum.score, '.2f'), 'Gate': datum.gate == 'LEAF' ? 'leaf' : datum.gate + ' of its children', 'ATT&CK': datum.attck || '—', 'Countered by': datum.defended_by || '—'}"
+          }
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": {"data": "nodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.sx + 14"},
+          "y": {"field": "first"},
+          "size": {"value": 90},
+          "shape": {"scale": "glyph", "field": "belief"},
+          "fill": {"scale": "state", "field": "belief"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "nodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.sx + 26"},
+          "y": {"field": "first"},
+          "baseline": {"value": "middle"},
+          "text": {"field": "lines"},
+          "lineHeight": {"value": 15},
+          "limit": {"signal": "boxw - 34"},
+          "fontSize": {"value": 12},
+          "fontWeight": {"value": 600},
+          "fill": {"value": "#0b0b0b"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "nodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.sx + 26"},
+          "y": {"signal": "datum.sy + (datum.cut > 0 ? 17 : 10)"},
+          "baseline": {"value": "middle"},
+          "text": {"field": "detail"},
+          "limit": {"signal": "boxw - 34"},
+          "fontSize": {"value": 11},
+          "fill": {"value": "#52514e"}
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": {"data": "nodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.sx + boxw - 3"},
+          "y": {"signal": "datum.sy - boxh / 2 + 3"},
+          "size": {"value": 230},
+          "shape": {"value": "circle"},
+          "fill": {"value": "#0ca30c"},
+          "stroke": {"value": "#fcfcfb"},
+          "strokeWidth": {"value": 2},
+          "opacity": {"signal": "datum.defended_by ? 1 : 0"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "nodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.sx + boxw - 3"},
+          "y": {"signal": "datum.sy - boxh / 2 + 3.5"},
+          "align": {"value": "center"},
+          "baseline": {"value": "middle"},
+          "text": {"signal": "datum.defended_by ? '✓' : ''"},
+          "fontSize": {"value": 11},
+          "fontWeight": {"value": 700},
+          "fill": {"value": "#ffffff"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "notes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"value": 2},
+          "y": {"signal": "height - 4"},
+          "text": {
+            "signal": "length(data('nodes')) ? '✓ countered: a countermeasure in effect prevents or undoes the step (hover the step for which). The tree is as of the end of the time range.' : 'The SOC has published no belief on the attack tree yet.'"
+          },
+          "fontSize": {"value": 11},
+          "fill": {"value": "#52514e"}
+        }
+      }
+    }
+  ]
+}

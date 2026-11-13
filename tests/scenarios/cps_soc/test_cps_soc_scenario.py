@@ -14,6 +14,7 @@ import unittest
 from cyberrange.core import registry
 from cyberrange.core.cli import default_args
 from cyberrange.core.topology import build_lab
+from cyberrange.scenarios.cps import guest_files as cps_files
 from cyberrange.scenarios.cps import inventory as cps_inv
 from cyberrange.scenarios.cps import scenario as cps_scenario
 from cyberrange.scenarios.cps_soc import cli as soc_cli
@@ -73,6 +74,11 @@ class Options(unittest.TestCase):
         blue = self.s.links(args)["blue"]
         self.assertNotIn("console", blue, "a console link to a console nobody serves")
         self.assertIn("https://127.0.0.1:8770/", blue["siem"])
+        self.assertTrue(
+            blue["attack tree"].startswith("https://127.0.0.1:8770/app/dashboards#/view/"),
+            "the attack tree's link is not on the SIEM's published port",
+        )
+        self.assertNotIn(args.soc_secrets["blue"], blue["attack tree"])
         self.assertIn(f"blue / {args.soc_secrets['blue']}", blue["cases"])
 
 
@@ -117,6 +123,16 @@ class Lab(unittest.TestCase):
         soc = [g for _h, g in self.nodes["soc"].files]
         self.assertIn("/iris_orders.py", soc, "the desk could not read the module's orders")
 
+    def test_the_siem_is_given_the_attack_tree(self):
+        soc = [g for _h, g in self.nodes["soc"].files]
+        for path in ("/belief_feed.py", "/soc_belief_rules.xml"):
+            self.assertIn(path, soc, "the SOC's belief never becomes an alert")
+        ui = [g for _h, g in self.nodes["wazuhui"].files]
+        for path in ("/attack-tree.vega.json", "/dashboard_objects.py"):
+            self.assertIn(path, ui, "the dashboard has no view to draw the tree with")
+        # The cps and cps-advisor SOCs have no SIEM to feed.
+        self.assertNotIn("/belief_feed.py", [g for _h, g in cps_files.SOC_FILES])
+
     def test_the_teams_reach_the_tools_on_published_ports(self):
         self.assertEqual(self.nodes["wazuhui"].mgmt_port, "8770:5601/tcp")
         self.assertEqual(self.nodes["irisweb"].mgmt_port, "8771:443/tcp")
@@ -154,6 +170,7 @@ class Episode(unittest.TestCase):
         self.assertIn(f"--iris-key {secrets['iris_key']}", soc)
         self.assertIn(f"--iris-case {os.path.basename(self.out)}", soc)
         self.assertNotIn("--operator-port", soc, "a console nobody can reach")
+        self.assertIn("--belief-feed /soc_belief.jsonl", soc, "the SIEM is told no belief")
         shipper = self.started(mgr, "soc", "wazuh-shipper")
         self.assertIn(f"INDEXER_PASSWORD={secrets['indexer_shipper']}", shipper)
         self.assertNotIn(secrets["indexer_admin"], shipper, "the shipper writes as the admin")

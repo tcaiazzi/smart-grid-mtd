@@ -25,7 +25,8 @@ who edited a task, but not who changed its status from the task list. An order
 names the analyst who chose it.
 
 Copied flat onto the SOC node with iris_orders.py (the order format, shared with
-the IRIS module), imported by soc_analytics.py. Stdlib only.
+the IRIS module) and belief_feed.py (the attack tree's rows, shared with the
+SIEM's feed), imported by soc_analytics.py. Stdlib only.
 """
 
 import json
@@ -35,6 +36,7 @@ import time
 import urllib.error
 import urllib.request
 
+import belief_feed
 import iris_orders
 
 # IRIS's task states (manage/task-status/list).
@@ -405,18 +407,47 @@ class IrisDesk:
         return next((t for t in self.api.tasks(self._cid) if t["task_id"] == tid), None)
 
 
+# How a tree node's state reads in the summary: IRIS's Markdown keeps text and
+# lists and drops colour, so the mark is a character and the state is spelled out.
+STATE_MARKS = {"confirmed": "\U0001f534", "inferred": "\U0001f7e0", "suspected": "\U0001f7e1"}
+NO_MARK = "\u26aa"
+# Sub-lists nest at four spaces in IRIS's Markdown (showdown's default).
+INDENT = "    "
+
+
+def code(ident):
+    """An identifier as Markdown code: bare, the underscores of kill_proc_tree
+    are read as emphasis and the name is shown without them."""
+    return f"`{ident}`"
+
+
+def tree_lines(view):
+    """The attack tree as a nested Markdown list: every step with its gate, its
+    ATT&CK technique, what the SOC believes of it and the countermeasures in
+    effect that prevent or undo it. The same rows the SIEM is fed."""
+    lines, depth = [], {}
+    for row in belief_feed.rows(view):
+        d = depth[row["node"]] = depth.get(row.get("parent"), -1) + 1
+        line = f"{INDENT * d}- {STATE_MARKS.get(row['belief'], NO_MARK)} **{row['label']}**"
+        if row["gate"] in ("AND", "OR"):
+            line += f" ({row['gate']})"
+        if row.get("attck"):
+            line += f" [{row['attck']}]"
+        if row["belief"] != belief_feed.UNKNOWN:
+            line += f": {row['belief']} ({row['score']:.2f})"
+        if row.get("defended_by"):
+            line += " — countered by " + ", ".join(map(code, row["defended_by"].split(", ")))
+        lines.append(line)
+    return lines
+
+
 def summary(view):
     """The SOC's view as the case's summary (Markdown): what it believes of the
-    attack, what it has done."""
+    attack, on the attack tree, and what it has done."""
     lines = ["### What the SOC believes", ""]
-    tree = [n for n in view.get("tree") or [] if n.get("state") not in (None, "unknown")]
-    if tree:
-        for n in sorted(tree, key=lambda n: -(n.get("belief") or 0)):
-            name = n.get("label") or n.get("node")
-            lines.append(f"- **{name}**: {n['state']} ({n.get('belief') or 0:.2f})")
-    else:
-        lines.append("- nothing yet")
+    lines += tree_lines(view) or ["- nothing yet"]
+    lines += ["", "The same tree, drawn and kept over time: the SIEM's *Attack tree* dashboard."]
     done = [a for a in view.get("actions") or [] if a.get("ok")]
     lines += ["", "### Countermeasures run", ""]
-    lines += [f"- {a.get('id')} on {a.get('machine') or '-'}" for a in done] or ["- none yet"]
+    lines += [f"- {code(a.get('id'))} on {a.get('machine') or '-'}" for a in done] or ["- none yet"]
     return "\n".join(lines)

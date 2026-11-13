@@ -68,6 +68,11 @@ IMAGES = {
 # its component starts the service.
 IDLE = "/bin/sh"
 DASHBOARD_PORT, IRIS_PORT = 5601, 443
+# The attack tree in the SIEM: the SOC's analytics feeds its belief to the
+# manager and keeps what it delivered in this file; the dashboard with this id
+# (nodes/wazuh/dashboard/dashboard_objects.py) draws the tree from the alerts.
+BELIEF_FEED = "/soc_belief.jsonl"
+ATTACK_TREE_VIEW = "app/dashboards#/view/cps-attack-tree"
 TEAM_LOGIN = BLUE  # the blue team's account on the indexer and on IRIS
 
 
@@ -214,6 +219,7 @@ class CpsSocScenario(CpsAdvisorScenario):
         blue["siem"] = (
             f"https://127.0.0.1:{args.siem_port}/  (login {TEAM_LOGIN} / {s.get('blue')})"
         )
+        blue["attack tree"] = f"https://127.0.0.1:{args.siem_port}/{ATTACK_TREE_VIEW}"
         blue["cases"] = (
             f"https://127.0.0.1:{args.cases_port}/  (login {TEAM_LOGIN} / {s.get('blue')})"
         )
@@ -221,7 +227,8 @@ class CpsSocScenario(CpsAdvisorScenario):
         return out
 
     def operator_api(self, args):
-        """The SOC files its suggestions in IRIS, as the team's account."""
+        """The SOC files its suggestions in IRIS, as the team's account, and
+        feeds its belief on the attack tree to the SIEM."""
         s = args.soc_secrets
         return dict(
             iris=dict(
@@ -231,7 +238,8 @@ class CpsSocScenario(CpsAdvisorScenario):
                 case=self.run_id(args),
                 analyst=TEAM_LOGIN,
                 analyst_password=s["blue"],
-            )
+            ),
+            belief_feed=BELIEF_FEED,
         )
 
     # ── the episode: the advisor's, with the SOC's tools started first ──────

@@ -47,7 +47,10 @@ from cyberrange.scenarios.cps_advisor.guest_files import (  # noqa: E402
     TEAM_FILES,
 )
 from cyberrange.scenarios.cps_recon.guest_files import RECON_FILES  # noqa: E402
-from cyberrange.scenarios.cps_soc.guest_files import SOC_SIEM_FILES  # noqa: E402
+from cyberrange.scenarios.cps_soc.guest_files import (  # noqa: E402
+    DASHBOARD_FILES,
+    SOC_SIEM_FILES,
+)
 from cyberrange.scenarios.mqtt_mtd.guest_files import (  # noqa: E402
     ROUTER_FILES,
     SCMC_FILES,
@@ -72,9 +75,12 @@ MACHINES = {
     "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
     # cps-recon: the attacker on its own red-team image, with the recon agents.
     "attacker_recon": ATTACKER_CPS_FILES + RECON_FILES,
-    # cps-soc: the SOC on its own image, with the IRIS desk and the alert shipper.
-    # The other cps-soc nodes run their projects' images and receive no Python.
+    # cps-soc: the SOC on its own image, with the IRIS desk and the alert shipper,
+    # and the Wazuh dashboard, which is given the script that creates the lab's
+    # views in it. The other cps-soc nodes run their projects' images and
+    # receive no Python.
     "soc_siem": SOC_FILES + SOC_SIEM_FILES + TEAM_FILES,
+    "wazuh_dashboard": DASHBOARD_FILES,
 }
 
 
@@ -83,6 +89,7 @@ MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
 SOC_IMAGE = "docker/soc/Dockerfile"
 REDTEAM_IMAGE = "docker/redteam/Dockerfile"
 SOC_SIEM_IMAGE = "docker/soc-siem/Dockerfile"
+WAZUH_DASHBOARD_IMAGE = "docker/wazuh-dashboard/Dockerfile"
 IMAGE_OF = {
     "semp": MQTT_IMAGE,
     "scmc": MQTT_IMAGE,
@@ -96,6 +103,7 @@ IMAGE_OF = {
     "attacker_cps": CPS_IMAGE,
     "attacker_recon": REDTEAM_IMAGE,
     "soc_siem": SOC_SIEM_IMAGE,
+    "wazuh_dashboard": WAZUH_DASHBOARD_IMAGE,
 }
 # Distributions whose import name is not their own.
 IMPORT_NAME = {"paho-mqtt": "paho"}

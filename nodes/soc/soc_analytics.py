@@ -17,6 +17,8 @@ Three ways to run it, one engine:
         the service. Writes, in --out-dir (default "/"):
           kg.json, tree.json   the structure it reasons on
           response.jsonl       response_up, tree_state, decision, approval, action
+        With --belief-feed FILE the belief on the tree also goes to the manager
+        as events, for the SIEM to index and draw (belief_feed.py).
         With --policy off it keeps the campaign state and requests nothing.
         With --approval operator:<s> it advises: every countermeasure waits
         for a person at the operator console (soc_operator.py, --operator-port,
@@ -377,8 +379,10 @@ class Service:
         clock=time.time,
         outcome_timeout=OUTCOME_TIMEOUT_S,
         desk=None,
+        feed=None,
     ):
         self.engine, self.follower, self.api, self.record = engine, follower, api, record
+        self.feed = feed  # where the belief on the tree is published, if anywhere
         # The seconds are a delay before granting, or an operator's time to answer.
         self.approval, self.approval_s = parse_approval(approval)
         self.clock, self.outcome_timeout = clock, float(outcome_timeout)
@@ -411,7 +415,10 @@ class Service:
         self._orders()
         self._lapse()
         self._expire()
-        self.desk.publish(self.view())
+        view = self.view()
+        self.desk.publish(view)
+        if self.feed is not None:
+            self.feed.publish(view)
 
     def on_finding(self, ev, alert_t=None):
         entities = ev.get("entities") or {}
@@ -564,6 +571,8 @@ class Service:
                     "op_cost": c.op_cost,
                     "commands": list(c.apply),
                     "revert": list(c.revert),
+                    "prevents": list(c.prevents),
+                    "restores": list(c.restores),
                     "in_effect_since": self._in_effect.get(c.id),
                 }
                 for c in sorted(self.engine.cms.values(), key=lambda c: (c.order, c.id))
@@ -772,6 +781,14 @@ def iris_desk_of(args):
     return iris_desk.IrisDesk(api, case, analyst=analyst)
 
 
+def belief_feed_of(args):
+    """The feed of the tree's belief to the SIEM (belief_feed.py). Imported
+    here for the reason iris_desk is: only the cps-soc lab's SOC is given it."""
+    import belief_feed
+
+    return belief_feed.BeliefFeed(args.belief_feed)
+
+
 def serve(args, g):
     os.makedirs(args.out_dir, exist_ok=True)
     write_structure(args.out_dir, g, it=args.it)
@@ -785,8 +802,15 @@ def serve(args, g):
     )
     engine = ResponseEngine(args.policy, g, args.approval, record=record, it=args.it)
     desk = iris_desk_of(args) if args.desk == "iris" else soc_operator.ApprovalDesk()
+    feed = belief_feed_of(args) if args.belief_feed else None
     service = Service(
-        engine, AlertFollower(args.alerts), ManagerApi(), record, args.approval, desk=desk
+        engine,
+        AlertFollower(args.alerts),
+        ManagerApi(),
+        record,
+        args.approval,
+        desk=desk,
+        feed=feed,
     )
     # The console is how an operator answers an advising SOC, so advising
     # without one is refused; with a token it is served in any mode. An IRIS
@@ -810,6 +834,8 @@ def serve(args, g):
             print(f"analytics step failed: {e}", flush=True)
         halt.wait(args.interval)
     record.close()
+    if feed is not None:
+        feed.close()
 
 
 def main():
@@ -839,6 +865,12 @@ def main():
     ap.add_argument("--iris-case", default=None, help="the run's case id (case_soc_id)")
     ap.add_argument("--iris-analyst", default=None, help="the team's IRIS login, created if new")
     ap.add_argument("--iris-analyst-password", default=None, help="its password")
+    ap.add_argument(
+        "--belief-feed",
+        default=None,
+        metavar="FILE",
+        help="send the belief on the attack tree to the manager as events, recorded in FILE",
+    )
     ap.add_argument("--it", action="store_true", help="IT findings and countermeasures too")
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between alert polls")
     ap.add_argument("--alerts", default=ALERTS, help="the manager's alerts.json")

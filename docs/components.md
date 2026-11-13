@@ -340,7 +340,7 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 | **Artifacts** | `<node>.it_sensor.log`, `<node>.it_telemetry.jsonl` |
 | **Needs** | `VulnApp(access_log=…)` on the same node. Give `HmiClient` a `diag_url` too, so normal use is learned. |
 
-### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False, operator_port=None, operator_token=None, operator_terminal=None)`
+### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False, operator_port=None, operator_token=None, operator_terminal=None, iris=None, belief_feed=None)`
 
 The SOC's decision, as a guest agent on the manager's node
 (`nodes/soc/soc_analytics.py`). It reads the manager's alerts, folds each
@@ -355,10 +355,12 @@ every episode; `policy="off"` watches and requests nothing.
 | **`policy`** | `off` (watch only), `rules` (a playbook per impact) or `solver` (the minimal-cost set that covers the active tree, with causal pairing) |
 | **`approval`** | `auto`, `deny`, or `delay:<s>` (operator approval for high-impact countermeasures, simulated); `operator:<s>` makes the SOC an advisor: every countermeasure waits up to `<s>` for a person's verdict, then expires unapplied |
 | **`operator_*`** | The SOC's operator console (`nodes/soc/soc_operator.py` + `soc_console.html`): its port and bearer token, and the URL of the operator's web terminal it links. Given a token it is served in any approval mode; from it the operator answers suggestions, applies or reverts a countermeasure by hand and switches the SOC between advising and acting. The scenario publishes the port and closes it on MGMT. |
+| **`iris`** | Where the suggestions wait when the blue team works in DFIR-IRIS instead of the console (`cps-soc`): `{url, key, ca, case, analyst, analyst_password}`. Each suggestion is a task of the run's case (`nodes/soc/iris_desk.py`); the case's summary is the attack tree with the SOC's belief, as a nested list. |
+| **`belief_feed`** | A guest path. Given one, the analytics also hands its belief on the attack tree to the manager as events, one per tree node, each time it changes (`nodes/soc/belief_feed.py`). The manager's rules 100130/100131 (`nodes/wazuh/manager/soc_belief_rules.xml`) make alerts of them, and the Wazuh dashboard's *Attack tree* view draws the tree from those alerts. The file keeps what was delivered. Set by `cps-soc`. |
 | **`it`** | Also allow the IT countermeasures. Set it when `ItSensor` runs. |
 | **Countermeasures** | `notify`, `block_flow` (firewall drops HMI→plant Modbus), `isolate_hmi`, `force_auto` (the firewall writes AUTO + nominal setpoint to the plant), `restore_breaker`; with `it`: `kill_proc_tree`, `block_web_src` |
 | **Telemetry** | `soc:/response.jsonl`, name `soar`: `response_up`, `tree_state`, `decision`, `approval`, `action` (with per-leg times `alert_t`/`issued_t`/`node_started_t`/`node_done_t`), `mode` |
-| **Artifacts** | `response.jsonl`; `<node>.kg.json` and `<node>.tree.json`, the structure the node built for itself; `<node>.soc_analytics.log` |
+| **Artifacts** | `response.jsonl`; `<node>.kg.json` and `<node>.tree.json`, the structure the node built for itself; `<node>.soc_analytics.log`; with `belief_feed`, `<node>.belief.jsonl` |
 | **Ledger** | `tree_state`, `decision` (with justification), `action` (with `op` and who asked, `by`), `approval` (a suggestion with its explanation, then `granted` / `rejected` / `expired`), `soc_mode` |
 
 Offline, the same tool runs on the host through `soc_tool` (a subprocess, no
