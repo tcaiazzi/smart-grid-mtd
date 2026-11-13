@@ -1,0 +1,13 @@
+# wazuh.yml — where the dashboard's Wazuh app finds the manager's API: the SOC
+# node, with the API user the lab's SOC analytics also uses.
+#
+# The host id is the one the image's entrypoint (/wazuh_app_config.sh) looks for:
+# under any other id it appends its own hosts: block at every start, and the app
+# rejects the file (3019, duplicated mapping key).
+hosts:
+  - 1513629884013:
+      url: "https://10.30.0.20"
+      port: 55000
+      username: wazuh
+      password: wazuh
+      run_as: false

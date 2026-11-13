@@ -193,6 +193,22 @@ class Topo(unittest.TestCase):
         self.assertIn('h1[image]="img/a"', conf)
         self.assertNotIn("tap[image]", conf)
 
+    def test_a_service_node_idles_on_its_entrypoint(self):
+        """A service image's own entrypoint would start the service before the
+        lab configured it: the node's entrypoint replaces it, in the deployed
+        machine, the lab.conf and the recorded topology alike."""
+        topo = self.topo()
+        topo.nodes[0].entrypoint = "/bin/sh"
+        _lab, machines, _st = build_lab(topo)
+        self.assertEqual(machines["h1"].meta.get("entrypoint"), "/bin/sh")
+        self.assertNotIn("entrypoint", machines["tap"].meta, "the image's own was replaced")
+        out = tempfile.mkdtemp(prefix="core-labconf-")
+        conf = Path(export_lab_conf(topo, out)).read_text()
+        self.assertIn('h1[entrypoint]="/bin/sh"', conf)
+        self.assertNotIn("tap[entrypoint]", conf)
+        nodes = to_dict(topo)["nodes"]
+        self.assertEqual((nodes[0].get("entrypoint"), "entrypoint" in nodes[1]), ("/bin/sh", False))
+
 
 class Misc(unittest.TestCase):
     def test_cursor_keeps_partial_lines(self):
@@ -209,7 +225,9 @@ class Misc(unittest.TestCase):
         self.assertEqual(cur.lines, 3)
 
     def test_registry(self):
-        self.assertEqual(registry.names(), ["cps", "cps-advisor", "cps-recon", "mqtt-mtd"])
+        self.assertEqual(
+            registry.names(), ["cps", "cps-advisor", "cps-recon", "cps-soc", "mqtt-mtd"]
+        )
         self.assertEqual(registry.get("cps").lab_name, "cps")
         self.assertEqual(registry.get("cps-advisor").lab_name, "cps-advisor")
         self.assertEqual(registry.get("cps-recon").lab_name, "cps-recon")

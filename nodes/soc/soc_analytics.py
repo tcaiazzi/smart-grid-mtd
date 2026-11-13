@@ -757,6 +757,21 @@ def load_inventory(args):
     raise SystemExit("an inventory is required: --inventory FILE or --inventory-b64 B64")
 
 
+def iris_desk_of(args):
+    """The approval desk on DFIR-IRIS (iris_desk.py). Imported here: the module
+    is staged only on a SOC that has IRIS (the cps-soc lab), and this file runs
+    on every SOC."""
+    import iris_desk
+
+    for flag in ("iris_url", "iris_key", "iris_case"):
+        if not getattr(args, flag):
+            raise SystemExit(f"--desk iris needs --{flag.replace('_', '-')}")
+    api = iris_desk.IrisApi(args.iris_url, args.iris_key, cafile=args.iris_ca)
+    analyst = (args.iris_analyst, args.iris_analyst_password) if args.iris_analyst else None
+    case = (args.iris_case, f"SOC suggestions — {args.iris_case}")
+    return iris_desk.IrisDesk(api, case, analyst=analyst)
+
+
 def serve(args, g):
     os.makedirs(args.out_dir, exist_ok=True)
     write_structure(args.out_dir, g, it=args.it)
@@ -769,13 +784,16 @@ def serve(args, g):
         it=args.it,
     )
     engine = ResponseEngine(args.policy, g, args.approval, record=record, it=args.it)
-    desk = soc_operator.ApprovalDesk()
+    desk = iris_desk_of(args) if args.desk == "iris" else soc_operator.ApprovalDesk()
     service = Service(
         engine, AlertFollower(args.alerts), ManagerApi(), record, args.approval, desk=desk
     )
     # The console is how an operator answers an advising SOC, so advising
-    # without one is refused; with a token it is served in any mode.
-    if args.operator_token or parse_approval(args.approval)[0] == "operator":
+    # without one is refused; with a token it is served in any mode. An IRIS
+    # desk is answered in IRIS instead.
+    if args.desk == "iris":
+        print(f"suggestions filed in IRIS at {args.iris_url}", flush=True)
+    elif args.operator_token or parse_approval(args.approval)[0] == "operator":
         try:
             api = soc_operator.OperatorApi(
                 desk, args.operator_token, args.operator_port, terminal=args.operator_terminal
@@ -809,6 +827,18 @@ def main():
         default=None,
         help="URL of the operator's web terminal on this node, linked from the console",
     )
+    ap.add_argument(
+        "--desk",
+        default="console",
+        choices=("console", "iris"),
+        help="where suggestions wait for a verdict: this node's console, or a DFIR-IRIS case",
+    )
+    ap.add_argument("--iris-url", default=None, help="IRIS's base URL (--desk iris)")
+    ap.add_argument("--iris-key", default=None, help="an IRIS administrator's API key")
+    ap.add_argument("--iris-ca", default=None, help="the authority IRIS's certificate is from")
+    ap.add_argument("--iris-case", default=None, help="the run's case id (case_soc_id)")
+    ap.add_argument("--iris-analyst", default=None, help="the team's IRIS login, created if new")
+    ap.add_argument("--iris-analyst-password", default=None, help="its password")
     ap.add_argument("--it", action="store_true", help="IT findings and countermeasures too")
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between alert polls")
     ap.add_argument("--alerts", default=ALERTS, help="the manager's alerts.json")

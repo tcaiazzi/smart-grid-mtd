@@ -47,6 +47,7 @@ from cyberrange.scenarios.cps_advisor.guest_files import (  # noqa: E402
     TEAM_FILES,
 )
 from cyberrange.scenarios.cps_recon.guest_files import RECON_FILES  # noqa: E402
+from cyberrange.scenarios.cps_soc.guest_files import SOC_SIEM_FILES  # noqa: E402
 from cyberrange.scenarios.mqtt_mtd.guest_files import (  # noqa: E402
     ROUTER_FILES,
     SCMC_FILES,
@@ -71,6 +72,9 @@ MACHINES = {
     "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
     # cps-recon: the attacker on its own red-team image, with the recon agents.
     "attacker_recon": ATTACKER_CPS_FILES + RECON_FILES,
+    # cps-soc: the SOC on its own image, with the IRIS desk and the alert shipper.
+    # The other cps-soc nodes run their projects' images and receive no Python.
+    "soc_siem": SOC_FILES + SOC_SIEM_FILES + TEAM_FILES,
 }
 
 
@@ -78,6 +82,7 @@ MACHINES = {
 MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
 SOC_IMAGE = "docker/soc/Dockerfile"
 REDTEAM_IMAGE = "docker/redteam/Dockerfile"
+SOC_SIEM_IMAGE = "docker/soc-siem/Dockerfile"
 IMAGE_OF = {
     "semp": MQTT_IMAGE,
     "scmc": MQTT_IMAGE,
@@ -90,6 +95,7 @@ IMAGE_OF = {
     "hmi": CPS_IMAGE,
     "attacker_cps": CPS_IMAGE,
     "attacker_recon": REDTEAM_IMAGE,
+    "soc_siem": SOC_SIEM_IMAGE,
 }
 # Distributions whose import name is not their own.
 IMPORT_NAME = {"paho-mqtt": "paho"}
@@ -99,9 +105,15 @@ PINNED_APART = {"scapy"}
 
 
 def pip_installs(dockerfile: str) -> dict:
-    """{distribution: pinned version or None} for every `pip3 install` of a Dockerfile."""
+    """{distribution: pinned version or None} for every `pip3 install` of a
+    Dockerfile, and of the repo image it is built on (FROM kathara/<name>, from
+    docker/<name>/Dockerfile): what the base installs is in the image too."""
     out, inside = {}, False
-    for line in (REPO_ROOT / dockerfile).read_text().splitlines():
+    text = (REPO_ROOT / dockerfile).read_text()
+    base = re.search(r"^FROM\s+kathara/([\w.-]+)", text, re.MULTILINE)
+    if base and (REPO_ROOT / "docker" / base.group(1) / "Dockerfile").exists():
+        out.update(pip_installs(f"docker/{base.group(1)}/Dockerfile"))
+    for line in text.splitlines():
         inside = inside or "pip3 install" in line
         if not inside:
             continue
@@ -355,6 +367,31 @@ class NodeToolsArePinned(unittest.TestCase):
             1,
             f"agent and manager versions differ, the manager refuses a newer agent: {found}",
         )
+
+    FROM_WAZUH = re.compile(r"^FROM\s+wazuh/(wazuh-(?:indexer|dashboard)):([\w.]+)", re.MULTILINE)
+
+    def test_the_siem_runs_the_managers_version(self):
+        """The indexer and the dashboard come from Wazuh's images, not from apt:
+        a dashboard of another version than the manager it reads cannot use its
+        API, and an indexer of another version rejects the shipper's template."""
+        manager = {v for _f, name, v in self.installs() if name == "wazuh-manager"}
+        found = [
+            (str(d.relative_to(REPO_ROOT)), name, version.split("-")[0])
+            for d in sorted((REPO_ROOT / "docker").glob("*/Dockerfile"))
+            for name, version in self.FROM_WAZUH.findall(d.read_text())
+        ]
+        self.assertEqual(
+            {name for _f, name, _v in found},
+            {"wazuh-indexer", "wazuh-dashboard"},
+            "the parser no longer finds the SIEM's images: the version check asserts nothing",
+        )
+        for dockerfile, name, version in found:
+            with self.subTest(dockerfile=dockerfile, image=name):
+                self.assertEqual(
+                    {m.split("-")[0] for m in manager},
+                    {version},
+                    f"{name} {version} in {dockerfile} is not the manager's version",
+                )
 
 
 if __name__ == "__main__":

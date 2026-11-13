@@ -77,6 +77,11 @@ class Node:
     files: List[Tuple[str, str]] = field(default_factory=list)  # (host path, guest path)
     # "HOST:GUEST/tcp", or several of them: bridged NIC + port forwards.
     mgmt_port: Union[str, Sequence[str], None] = None
+    # The container's entrypoint, replacing the image's. A service image's own
+    # entrypoint starts the service as soon as the container exists, before the
+    # lab has addressed and configured it; such a node idles on a shell instead
+    # and a component starts the service. None keeps the image's.
+    entrypoint: Optional[str] = None
 
     def published_ports(self) -> List[str]:
         if not self.mgmt_port:
@@ -143,6 +148,8 @@ def build_lab(topo: Topology):
             m.add_meta("bridged", True)
             for port in n.published_ports():
                 m.add_meta("port", port)
+        if n.entrypoint:
+            m.add_meta("entrypoint", n.entrypoint)
         for host_path, guest_path in n.files:
             # Manifest host paths are repo-relative; resolve them against the
             # repo rather than the process CWD, so a run started from anywhere
@@ -177,6 +184,7 @@ def to_dict(topo: Topology) -> dict:
                 "routes": [r.command() for r in n.routes],
                 "files": [g for _h, g in n.files],
                 "mgmt_port": n.mgmt_port,
+                **({"entrypoint": n.entrypoint} if n.entrypoint else {}),
             }
             for n in topo.nodes
         ],
@@ -206,6 +214,8 @@ def export_lab_conf(topo: Topology, out_dir: str, copy_files: bool = False) -> s
         if n.published_ports():
             lines.append(f'{n.name}[bridged]="true"')
             lines += [f'{n.name}[port]="{port}"' for port in n.published_ports()]
+        if n.entrypoint:
+            lines.append(f'{n.name}[entrypoint]="{n.entrypoint}"')
         for host_path, guest_path in n.files:
             if copy_files:
                 dst = os.path.join(out_dir, n.name, guest_path.lstrip("/"))

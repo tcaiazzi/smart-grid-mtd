@@ -1,0 +1,274 @@
+{
+ "attacker": {
+  "guest_files": [
+   "/exploit_client.py",
+   "/ot_registers.py",
+   "/red_agent.py",
+   "/planner.py",
+   "/steps.py",
+   "/tree_doc.py"
+  ],
+  "settings": {
+   "0": "IT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.10/24 dev eth0",
+   "ip route add default via 10.10.0.1 dev eth0"
+  ]
+ },
+ "engine": {
+  "guest_files": [
+   "/modbus_engine.py",
+   "/grid_sim.py",
+   "/ot_registers.py"
+  ],
+  "settings": {
+   "0": "OT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.20.0.20/24 dev eth0",
+   "ip route add default via 10.20.0.1 dev eth0"
+  ]
+ },
+ "firewall": {
+  "guest_files": [
+   "/ot_write.py",
+   "/ot_registers.py",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
+  ],
+  "settings": {
+   "0": "IT",
+   "1": "OT",
+   "2": "MGMT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.1/24 dev eth0",
+   "ip address add 10.20.0.1/24 dev eth1",
+   "ip address add 10.30.0.1/24 dev eth2",
+   "sysctl -w net.ipv4.ip_forward=1",
+   "iptables -P FORWARD DROP",
+   "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
+   "iptables -A FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j ACCEPT"
+  ]
+ },
+ "hmi": {
+  "guest_files": [
+   "/hmi_client.py",
+   "/vuln_app.py",
+   "/ot_write.py",
+   "/ot_registers.py",
+   "/it_sensor.py",
+   "/mtd_telemetry.py",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
+  ],
+  "settings": {
+   "0": "IT",
+   "1": "MGMT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.20/24 dev eth0",
+   "ip address add 10.30.0.30/24 dev eth1",
+   "ip route add default via 10.10.0.1 dev eth0"
+  ]
+ },
+ "indexer": {
+  "guest_files": [
+   "/opensearch.yml",
+   "/wazuh-indexer-start.sh"
+  ],
+  "settings": {
+   "0": "MGMT",
+   "entrypoint": "/bin/sh",
+   "image": "kathara/wazuh-indexer"
+  },
+  "startup": [
+   "ip address add 10.30.0.21/24 dev eth0",
+   "iptables -A INPUT -i eth0 -m state --state ESTABLISHED,RELATED -j ACCEPT",
+   "iptables -A INPUT -i eth0 -s 10.30.0.20 -j ACCEPT",
+   "iptables -A INPUT -i eth0 -s 10.30.0.22 -j ACCEPT",
+   "iptables -A INPUT -i eth0 -j DROP"
+  ]
+ },
+ "irisapp": {
+  "guest_files": [
+   "/iris-start.sh",
+   "/iris_modules/iris_soc_response/__init__.py",
+   "/iris_modules/iris_soc_response/IrisSocResponse.py",
+   "/iris_modules/iris_soc_response/IrisSocResponseConfig.py",
+   "/iris_modules/iris_soc_response/orders.py"
+  ],
+  "settings": {
+   "0": "SOAR",
+   "entrypoint": "/bin/sh",
+   "image": "kathara/iris-app"
+  },
+  "startup": [
+   "ip address add 10.40.0.10/24 dev eth0"
+  ]
+ },
+ "irisdb": {
+  "guest_files": [
+   "/iris-start.sh"
+  ],
+  "settings": {
+   "0": "SOAR",
+   "entrypoint": "/bin/sh",
+   "image": "ghcr.io/dfir-iris/iriswebapp_db:v2.4.29"
+  },
+  "startup": [
+   "ip address add 10.40.0.20/24 dev eth0"
+  ]
+ },
+ "irismq": {
+  "guest_files": [
+   "/iris-start.sh"
+  ],
+  "settings": {
+   "0": "SOAR",
+   "entrypoint": "/bin/sh",
+   "image": "rabbitmq:3.13.7-management-alpine"
+  },
+  "startup": [
+   "ip address add 10.40.0.30/24 dev eth0"
+  ]
+ },
+ "irisweb": {
+  "guest_files": [
+   "/iris-start.sh"
+  ],
+  "settings": {
+   "0": "SOAR",
+   "1": "MGMT",
+   "bridged": "true",
+   "entrypoint": "/bin/sh",
+   "image": "kathara/iris-web",
+   "port": "8771:443/tcp"
+  },
+  "startup": [
+   "ip address add 10.40.0.1/24 dev eth0",
+   "ip address add 10.30.0.40/24 dev eth1",
+   "iptables -A INPUT -i eth1 -m state --state ESTABLISHED,RELATED -j ACCEPT",
+   "iptables -A INPUT -i eth1 -s 10.30.0.20 -j ACCEPT",
+   "iptables -A INPUT -i eth1 -j DROP"
+  ]
+ },
+ "irisworker": {
+  "guest_files": [
+   "/iris-start.sh",
+   "/iris_modules/iris_soc_response/__init__.py",
+   "/iris_modules/iris_soc_response/IrisSocResponse.py",
+   "/iris_modules/iris_soc_response/IrisSocResponseConfig.py",
+   "/iris_modules/iris_soc_response/orders.py"
+  ],
+  "settings": {
+   "0": "SOAR",
+   "entrypoint": "/bin/sh",
+   "image": "kathara/iris-app"
+  },
+  "startup": [
+   "ip address add 10.40.0.11/24 dev eth0"
+  ]
+ },
+ "plc": {
+  "guest_files": [
+   "/plc_controller.py",
+   "/ot_registers.py"
+  ],
+  "settings": {
+   "0": "OT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.20.0.10/24 dev eth0",
+   "ip route add default via 10.20.0.1 dev eth0"
+  ]
+ },
+ "sensor": {
+  "guest_files": [
+   "/ot_sensor.py",
+   "/ot_model.py",
+   "/ot_registers.py",
+   "/mtd_telemetry.py",
+   "/mtd_dashboard.py",
+   "/mtd_dashboard.html",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py",
+   "/team-access.sh",
+   "/command_audit.sh"
+  ],
+  "settings": {
+   "0": "OT",
+   "1": "MGMT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip link set eth0 promisc on",
+   "ip link set eth0 up",
+   "ip address add 10.30.0.10/24 dev eth1",
+   "iptables -A INPUT -i eth1 -p tcp --dport 8080 -j DROP"
+  ]
+ },
+ "soc": {
+  "guest_files": [
+   "/wazuh-manager-setup.sh",
+   "/cps_rules.xml",
+   "/soc_analytics.py",
+   "/soc_operator.py",
+   "/soar_kg.py",
+   "/soar_trees.py",
+   "/soar_mapping.py",
+   "/soar_policy.py",
+   "/ot_registers.py",
+   "/iris_desk.py",
+   "/iris_orders.py",
+   "/filebeat.yml",
+   "/wazuh-shipper-start.sh",
+   "/iris_forward.py",
+   "/wazuh-iris-integration.sh",
+   "/team-access.sh",
+   "/command_audit.sh"
+  ],
+  "settings": {
+   "0": "MGMT",
+   "bridged": "true",
+   "image": "kathara/soc-siem",
+   "port": "8767:8091/tcp"
+  },
+  "startup": [
+   "ip address add 10.30.0.20/24 dev eth0",
+   "iptables -A INPUT -i eth0 -p tcp --dport 8091 -j DROP"
+  ]
+ },
+ "wazuhui": {
+  "guest_files": [
+   "/opensearch_dashboards.yml",
+   "/wazuh.yml",
+   "/wazuh-dashboard-start.sh"
+  ],
+  "settings": {
+   "0": "MGMT",
+   "bridged": "true",
+   "entrypoint": "/bin/sh",
+   "image": "kathara/wazuh-dashboard",
+   "port": "8770:5601/tcp"
+  },
+  "startup": [
+   "ip address add 10.30.0.22/24 dev eth0",
+   "iptables -A INPUT -i eth0 -m state --state ESTABLISHED,RELATED -j ACCEPT",
+   "iptables -A INPUT -i eth0 -j DROP"
+  ]
+ }
+}

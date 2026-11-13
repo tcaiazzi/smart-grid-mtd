@@ -1,0 +1,16 @@
+# opensearch_dashboards.yml — the Wazuh dashboard of the cps-soc lab, the blue
+# team's SIEM. It reads the lab's indexer over TLS, trusting the lab's own
+# authority, and serves HTTPS to the team on the node's published port.
+# Installed by wazuh-dashboard-start.sh; based on Wazuh's single-node deployment.
+server.host: 0.0.0.0
+server.port: 5601
+opensearch.hosts: https://10.30.0.21:9200
+opensearch.ssl.verificationMode: certificate
+opensearch.ssl.certificateAuthorities: ["/usr/share/wazuh-dashboard/certs/root-ca.pem"]
+opensearch.requestHeadersWhitelist: ["securitytenant", "Authorization"]
+opensearch_security.multitenancy.enabled: false
+opensearch_security.readonly_mode.roles: ["kibana_read_only"]
+server.ssl.enabled: true
+server.ssl.key: "/usr/share/wazuh-dashboard/certs/dashboard-key.pem"
+server.ssl.certificate: "/usr/share/wazuh-dashboard/certs/dashboard.pem"
+uiSettings.overrides.defaultRoute: /app/wz-home

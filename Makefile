@@ -36,8 +36,9 @@ include make/mqtt.mk
 include make/cps.mk
 include make/cps-advisor.mk
 include make/cps-recon.mk
+include make/cps-soc.mk
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams cps-recon-image cps-recon-lab cps-recon cps-recon-dashboard dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams cps-recon-image cps-recon-lab cps-recon cps-recon-dashboard cps-soc-image cps-soc-lab cps-soc cps-soc-teams cps-soc-dashboard dashboard fmt lint selftest selftest-fast lab-conf platform-loc clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -107,6 +108,13 @@ help:
 	@echo "  cps-recon           Attack the lab with the recon-driven attacker (it derives its own tree)"
 	@echo "  cps-recon-lab       Deploy the recon lab, normal operation only"
 	@echo "  cps-recon-dashboard Dashboard restricted to the recon runs (what the attacker knows)"
+	@echo ""
+	@echo "Cyber-physical scenario with a real SOC's tools (Wazuh SIEM + DFIR-IRIS cases):"
+	@echo "  cps-soc-image       Build the SOC tools' images (after cps-image)"
+	@echo "  cps-soc             Attack the lab: the SOC's suggestions wait as tasks in IRIS"
+	@echo "  cps-soc-teams       Red team vs blue team on Wazuh and IRIS; up until Ctrl-C"
+	@echo "  cps-soc-lab         Deploy the cps-soc lab, normal operation only"
+	@echo "  cps-soc-dashboard   Dashboard restricted to the cps-soc runs"
 	@echo ""
 	@echo "Platform:"
 	@echo "  dashboard           Live progress of every scenario's runs/campaigns (http://127.0.0.1:$(CPS_DASH_PORT))"

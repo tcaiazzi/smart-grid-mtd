@@ -204,8 +204,10 @@ class SocAnalytics(GuestAgent):
     With ``approval`` "operator:<s>" the SOC advises: its countermeasures wait
     at its own operator console (soc_operator.py) for a person's verdict. The
     console is served on ``operator_port`` behind ``operator_token`` and links
-    ``operator_terminal``, the operator's shell on the node. The platform only
-    mirrors what happens there to the ledger; it never answers for the person."""
+    ``operator_terminal``, the operator's shell on the node. With ``iris`` the
+    suggestions wait in a DFIR-IRIS case instead (nodes/soc/iris_desk.py), as
+    tasks an analyst closes or cancels. The platform only mirrors what happens
+    there to the ledger; it never answers for the person."""
 
     RESPONSE = "/response.jsonl"
     KG, TREE = "/kg.json", "/tree.json"
@@ -223,10 +225,17 @@ class SocAnalytics(GuestAgent):
         operator_port=None,
         operator_token=None,
         operator_terminal=None,
+        iris=None,
     ):
         inv = base64.b64encode(json.dumps(inventory).encode()).decode()
         operator = ""
-        if operator_port:
+        if iris:
+            # Suggestions go to a DFIR-IRIS case: {url, key, ca, case, analyst,
+            # analyst_password}, the analytics' --iris-* options.
+            operator = " --desk iris" + "".join(
+                f" --iris-{k.replace('_', '-')} {v}" for k, v in iris.items() if v
+            )
+        elif operator_port:
             operator = f" --operator-port {operator_port} --operator-token {operator_token}"
             if operator_terminal:
                 operator += f" --operator-terminal {operator_terminal}"
@@ -285,6 +294,117 @@ class SocAnalytics(GuestAgent):
             fields = {k: ev[k] for k in self.APPROVAL_FIELDS if ev.get(k) is not None}
             return "approval", fields | {"guest_t": ev.get("t")}
         return None
+
+
+# ── the SOC's own tools: SIEM and case management (cps-soc) ──────────────────
+# Wazuh's indexer and dashboard, the manager's alert shipper, and DFIR-IRIS's
+# services, each on its own node as in their official deployments. The tools and
+# their configuration are node software (nodes/wazuh/, nodes/soar/); these
+# components start them with this run's secrets and name what they leave behind.
+def _with_env(env, cmd):
+    """``cmd`` run with ``env``. The values are the platform's own (addresses,
+    and secrets drawn with secrets.token_*), so none needs shell quoting."""
+    pairs = " ".join(f"{k}={v}" for k, v in sorted(env.items()))
+    return f"env {pairs} {cmd}" if pairs else cmd
+
+
+class WazuhIndexer(GuestAgent):
+    """The SIEM's store (OpenSearch): the alerts the manager ships, for the
+    dashboard. ``passwords`` is {"admin", "shipper", "kibanaserver", "blue"}: the
+    administrator's (handed to no one), the alert shipper's (it may only write
+    alerts), the dashboard's own connection's, and the blue team's login."""
+
+    LOG = "/var/log/wazuh-indexer/wazuh-cluster.log"
+
+    def __init__(self, node, passwords):
+        env = {
+            "ADMIN_PASSWORD": passwords["admin"],
+            "SHIPPER_PASSWORD": passwords["shipper"],
+            "KIBANASERVER_PASSWORD": passwords["kibanaserver"],
+            "BLUE_PASSWORD": passwords["blue"],
+        }
+        super().__init__(
+            node,
+            _with_env(env, "bash /wazuh-indexer-start.sh"),
+            "wazuh_indexer.log",
+            plane=PLANE,
+            name="wazuh_indexer",
+            artifacts=[Artifact(node, self.LOG, f"{node}.wazuh-cluster.log")],
+        )
+
+
+class WazuhDashboard(GuestAgent):
+    """The SIEM's interface, the blue team's: Wazuh's dashboard over the indexer
+    and the manager's API, served on the node's published port."""
+
+    def __init__(self, node, kibanaserver_password):
+        super().__init__(
+            node,
+            _with_env(
+                {"KIBANASERVER_PASSWORD": kibanaserver_password}, "bash /wazuh-dashboard-start.sh"
+            ),
+            "wazuh_dashboard.log",
+            plane=PLANE,
+            name="wazuh_dashboard",
+        )
+
+
+class AlertShipper(GuestAgent):
+    """Filebeat on the manager's node: every alert into the indexer, as the
+    Wazuh server does in a full deployment, as the indexer's ``filebeat`` user.
+    The SOC analytics keeps reading alerts.json; this only makes the same alerts
+    searchable."""
+
+    def __init__(self, node, indexer_password):
+        super().__init__(
+            node,
+            _with_env({"INDEXER_PASSWORD": indexer_password}, "bash /wazuh-shipper-start.sh"),
+            "alert_shipper.log",
+            plane=PLANE,
+            name="alert_shipper",
+        )
+
+
+class IrisAlertForwarder(GuestAgent):
+    """The manager's integration with DFIR-IRIS (nodes/wazuh/manager/
+    iris_forward.py): the sensor alerts worth a person's look become IRIS
+    alerts, which the blue team triages. Wazuh's integrator runs it, as it runs
+    Wazuh's own integrations; this only connects it, once the manager is up."""
+
+    def __init__(self, node, iris_url, iris_key):
+        super().__init__(
+            node,
+            _with_env(
+                {"IRIS_URL": iris_url, "IRIS_KEY": iris_key}, "bash /wazuh-iris-integration.sh"
+            ),
+            "iris_integration.log",
+            plane=PLANE,
+            name="iris_alert_forwarder",
+            artifacts=[
+                Artifact(node, "/var/ossec/logs/integrations.log", f"{node}.integrations.log")
+            ],
+        )
+
+
+class IrisService(GuestAgent):
+    """One of DFIR-IRIS's services (db, mq, app, worker, web) on its node, with
+    IRIS's own environment (``env``, the variables of its compose file). Each
+    waits for the services it needs (nodes/soar/iris-start.sh), so they can be
+    started in any order."""
+
+    ROLES = ("db", "mq", "app", "worker", "web")
+
+    def __init__(self, node, role, env):
+        if role not in self.ROLES:
+            raise ValueError(f"unknown IRIS service {role!r}; one of {self.ROLES}")
+        super().__init__(
+            node,
+            _with_env(env, f"bash /iris-start.sh {role}"),
+            f"iris_{role}.log",
+            plane=PLANE,
+            name=f"iris_{role}",
+        )
+        self.role = role
 
 
 class JumpHost(Component):

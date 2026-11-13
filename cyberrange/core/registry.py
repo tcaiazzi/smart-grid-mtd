@@ -11,6 +11,7 @@ SCENARIOS = {
     "cps": "cyberrange.scenarios.cps.scenario:CpsScenario",
     "cps-advisor": "cyberrange.scenarios.cps_advisor.scenario:CpsAdvisorScenario",
     "cps-recon": "cyberrange.scenarios.cps_recon.scenario:CpsReconScenario",
+    "cps-soc": "cyberrange.scenarios.cps_soc.scenario:CpsSocScenario",
 }
 
 

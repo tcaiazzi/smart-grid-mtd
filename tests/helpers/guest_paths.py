@@ -28,12 +28,16 @@ TRAFFIC_AGENTS = TRAFFIC / "agents"
 #: Node tooling: software of the lab's nodes, outside the platform package.
 NODES = REPO_ROOT / "nodes"
 WAZUH_AGENT = NODES / "wazuh" / "agent"
+#: The manager's own integrations (cps-soc: the one with DFIR-IRIS).
+WAZUH_MANAGER = NODES / "wazuh" / "manager"
 #: SOC node: the analytics (soc_analytics) and the SOAR modules it imports.
 #: ot_registers rides along in DEFENSE (a flat dual-use module).
 SOC = NODES / "soc"
 #: Attacker node: the autonomous attacker (red_agent, with its planner) and the
 #: red team's console.
 REDTEAM = NODES / "redteam"
+#: IRIS's nodes (cps-soc): the SOC response module, a package IRIS imports by name.
+SOAR = NODES / "soar"
 
 
 def add(*directories):
@@ -55,3 +59,16 @@ def pythonpath(*directories, base=None):
     if base:
         parts.append(base)
     return os.pathsep.join(p for p in parts if p)
+
+
+def alias(host_path, guest_name):
+    """Import the file at ``host_path`` as ``guest_name``, the name a manifest
+    copies it under: the guest modules that import it use that name."""
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(guest_name, host_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[guest_name] = module
+    spec.loader.exec_module(module)
+    return module
