@@ -10,6 +10,12 @@ analyst approves by closing the task (Done) and rejects by cancelling it
 (Canceled); the analytics reads the verdict at its next step. A suggestion left
 unanswered expires: the task is cancelled with a note saying so.
 
+The case also holds what the SOC knows and believes, as IRIS's own objects: the
+hosts of its knowledge graph are the case's assets, marked compromised when the
+SOC holds them implicated, and each step of the attack tree it takes to have
+happened is a timeline event linking the hosts it involves, from which IRIS
+draws the case's graph. The summary is the whole tree with the belief on it.
+
 The analytics never waits on IRIS: a suggestion IRIS cannot take yet stays
 queued here and is filed at a later step, and an unreachable IRIS is logged,
 not raised. IRIS takes a few seconds to come up after the SOC does.
@@ -29,6 +35,7 @@ the IRIS module) and belief_feed.py (the attack tree's rows, shared with the
 SIEM's feed), imported by soc_analytics.py. Stdlib only.
 """
 
+import datetime
 import json
 import ssl
 import threading
@@ -47,6 +54,27 @@ MODULE = "iris_soc_response"
 ADMINISTRATORS = 1
 CUSTOMER = 1  # the customer IRIS creates at its first start
 POLL_S = 1.0  # how often the tasks are read for verdicts
+LAB_RETRY_S = 10.0  # how long the lab's filing waits after IRIS failed a call
+# IRIS's asset types for the lab's hosts (manage/asset-type/list), its analysis
+# and compromise statuses (manage/analysis-status/list, compromise-status/list).
+HOST_ASSET, BOUNDARY_ASSET = "Linux - Server", "Firewall"
+UNSPECIFIED = 1
+TO_BE_DETERMINED, COMPROMISED = 0, 1
+# What an asset's update must carry of the asset as it is.
+ASSET_FIELDS = (
+    "asset_name",
+    "asset_type_id",
+    "asset_description",
+    "asset_ip",
+    "asset_domain",
+    "asset_tags",
+    "analysis_status_id",
+)
+# IRIS's event categories are ATT&CK's tactics (manage/event-categories/list):
+# the tactic of each technique the lab's tree names, and the one for the rest.
+TACTICS = {"T1190": "Initial Access", "T1059": "Execution", "T0855": "Impact", "T0831": "Impact"}
+NO_TACTIC = "Unspecified"
+STEP_TAG = "step"  # a timeline event filed for a step of the attack tree
 SUMMARY_S = 10.0  # how often the case's summary is rewritten with the SOC's view
 
 
@@ -140,6 +168,28 @@ class IrisApi:
             if "already exists" not in str(e):
                 raise
 
+    def ids(self, path, name="name", ident="id"):
+        """{name: id} of one of IRIS's lists (asset types, event categories…)."""
+        return {row[name]: row[ident] for row in self.call("GET", path)}
+
+    def assets(self, cid):
+        return self.call("GET", f"/case/assets/list?cid={cid}")["assets"]
+
+    def add_asset(self, cid, body):
+        return self.call("POST", f"/case/assets/add?cid={cid}", body)["asset_id"]
+
+    def edit_asset(self, cid, asset_id, body):
+        return self.call("POST", f"/case/assets/update/{asset_id}?cid={cid}", body)
+
+    def events(self, cid):
+        return self.call("GET", f"/case/timeline/events/list?cid={cid}")["timeline"]
+
+    def add_event(self, cid, body):
+        return self.call("POST", f"/case/timeline/events/add?cid={cid}", body)["event_id"]
+
+    def edit_event(self, cid, event_id, body):
+        return self.call("POST", f"/case/timeline/events/update/{event_id}?cid={cid}", body)
+
     def set_summary(self, cid, text):
         return self.call("POST", f"/case/summary/update?cid={cid}", {"case_description": text})
 
@@ -203,11 +253,17 @@ class IrisDesk:
     """The desk soc_analytics.Service talks to (open, close, take, take_orders,
     publish), filed in IRIS. ``case`` is (soc id, name) of the run's case;
     ``analyst`` (login, password) the account the team works under, created at
-    the first step IRIS answers."""
+    the first step IRIS answers. With ``kg`` (soar_kg.to_json) the lab's hosts
+    are filed as the case's assets and the attack's steps as its timeline."""
 
-    def __init__(self, api, case, analyst=None, clock=time.time, log=print):
+    def __init__(self, api, case, analyst=None, clock=time.time, log=print, kg=None):
         self.api, self.case, self.analyst = api, case, analyst
         self.clock, self.log = clock, log
+        self.graph = belief_feed.Graph(kg) if kg else None
+        self._assets = None  # host -> its asset's id, once the lab is filed
+        self._compromised = set()  # hosts this desk has marked, once each
+        self._events = {}  # tree step -> (its timeline event's id, the state filed)
+        self._lab_after = 0.0  # no filing of the lab before this, after IRIS failed one
         self._lock = threading.Lock()
         self._cid = None
         self._ready = False
@@ -263,6 +319,16 @@ class IrisDesk:
             except IrisError as e:
                 self.log(f"iris: could not file the countermeasures: {e}")
         now = self.clock()
+        if self._cid is not None and self.graph is not None and now >= self._lab_after:
+            try:
+                self._file_assets()
+                self._mark_compromised(view)
+                self._file_steps(view, now)
+            except IrisError as e:
+                # Tried again later, not at the next step: every failed call
+                # holds the analytics for as long as IRIS takes to time out.
+                self._lab_after = now + LAB_RETRY_S
+                self.log(f"iris: could not file the lab or the attack's steps: {e}")
         if self._cid is None or now - self._last_summary < SUMMARY_S:
             return
         self._last_summary = now
@@ -376,6 +442,132 @@ class IrisDesk:
             }
             filed[cm["id"]] = self.api.call("POST", f"/case/tasks/add?cid={self._cid}", body)["id"]
         self._catalogue = filed
+
+    # ── the lab and the attack, as IRIS's own objects ────────────────────────
+    def _asset(self, host, types):
+        """A host of the knowledge graph as a case asset."""
+        hid = f"host:{host}"
+        role = self.graph.nodes[hid].get("role") or "host"
+        addresses = sorted(self.graph.out(hid, "has_ip"), key=lambda i: i["iface"])
+        services = self.graph.out(hid, "runs")
+        zones = sorted({z["name"] for z in self.graph.out(hid, "in_zone")})
+        lines = [f"Role: {role}", "Zones: " + (", ".join(zones) or "-")]
+        if addresses:
+            lines.append(
+                "Addresses: " + ", ".join(f"{i['addr']} ({i['iface']})" for i in addresses)
+            )
+        if services:
+            lines.append(
+                "Services: " + ", ".join(f"{s['name']} {s['proto']}/{s['port']}" for s in services)
+            )
+        kind = BOUNDARY_ASSET if role == "boundary" else HOST_ASSET
+        return {
+            "asset_name": host,
+            "asset_type_id": types.get(kind) or min(types.values()),
+            "asset_description": "\n".join(lines),
+            "asset_ip": addresses[0]["addr"] if addresses else "",
+            "asset_tags": f"{iris_orders.TAG},{role}",
+            "analysis_status_id": UNSPECIFIED,
+            "asset_compromise_status_id": TO_BE_DETERMINED,
+            "custom_attributes": {},
+        }
+
+    def _file_assets(self):
+        """One asset per host of the lab, once. An asset already in the case
+        under a host's name is adopted: a request that timed out may have
+        created it, and an analyst may have added it first."""
+        if self._assets is not None:
+            return
+        filed = {a["asset_name"]: a["asset_id"] for a in self.api.assets(self._cid)}
+        types = self.api.ids("/manage/asset-type/list", "asset_name", "asset_id")
+        for host in self.graph.hosts():
+            if host not in filed:
+                filed[host] = self.api.add_asset(self._cid, self._asset(host, types))
+        self._assets = {h: filed[h] for h in self.graph.hosts()}
+
+    def _mark_compromised(self, view):
+        """An implicated host is marked compromised, once: after that its
+        status is the analyst's, who may know better and is not overruled."""
+        new = [
+            h
+            for h in view.get("hosts_implicated") or []
+            if h in self._assets and h not in self._compromised
+        ]
+        if not new:
+            return
+        now = {a["asset_id"]: a for a in self.api.assets(self._cid)}
+        for host in new:
+            asset = now.get(self._assets[host])
+            if asset is not None:
+                # The asset as it is now, with the one field changed: what the
+                # analyst wrote on it since it was filed stays.
+                body = {k: asset.get(k) for k in ASSET_FIELDS} | {"custom_attributes": {}}
+                body["asset_compromise_status_id"] = COMPROMISED
+                self.api.edit_asset(self._cid, asset["asset_id"], body)
+            self._compromised.add(host)
+
+    def _file_steps(self, view, now):
+        """A timeline event for each step of the tree the SOC takes to have
+        happened, linking the hosts it involves: IRIS draws the case's graph
+        from those links. Filed once per step, and rewritten when a step first
+        inferred is then confirmed."""
+        tree = belief_feed.steps(view)
+        due = [
+            n
+            for n in view.get("tree") or []
+            if n.get("state") in belief_feed.HAPPENED
+            and not (tree.get(n["node"]) or {}).get("children")
+            and n["node"] in tree
+            and self._events.get(n["node"], (None, None))[1] != n["state"]
+        ]
+        if not due:
+            return
+        categories = self.api.ids("/manage/event-categories/list")
+        filed = None
+        for n in due:
+            step = tree[n["node"]]
+            hosts = belief_feed.step_hosts(self.graph, view, n["node"])
+            technique = step.get("attck")
+            when = datetime.datetime.fromtimestamp(
+                n.get("first_seen") or now, datetime.timezone.utc
+            )
+            body = {
+                "event_title": step["label"] + (f" [{technique}]" if technique else ""),
+                "event_content": (
+                    f"The SOC's analytics holds this step {n['state']} "
+                    f"(belief {n.get('belief') or 0:.2f}).\n"
+                    f"Hosts: {', '.join(hosts) or '-'}"
+                ),
+                "event_raw": "",
+                "event_source": "SOC analytics",
+                "event_assets": [self._assets[h] for h in hosts if h in self._assets],
+                "event_iocs": [],
+                "event_category_id": categories.get(TACTICS.get(technique))
+                or categories.get(NO_TACTIC)
+                or min(categories.values()),
+                "event_in_summary": False,
+                "event_in_graph": True,
+                "event_color": "",
+                "event_date": when.strftime("%Y-%m-%dT%H:%M:%S.%f"),
+                "event_tz": "+00:00",
+                "event_tags": ",".join([iris_orders.TAG, STEP_TAG, n["node"]]),
+                "custom_attributes": {},
+            }
+            event_id = self._events.get(n["node"], (None, None))[0]
+            if event_id is None:
+                # A request that timed out may still have created the event.
+                if filed is None:
+                    filed = {}
+                    for e in self.api.events(self._cid):
+                        tags = iris_orders.tags_of(e.get("event_tags"))
+                        if STEP_TAG in tags:
+                            filed[tags[-1]] = e["event_id"]
+                event_id = filed.get(n["node"])
+            if event_id is None:
+                event_id = self.api.add_event(self._cid, body)
+            else:
+                self.api.edit_event(self._cid, event_id, body)
+            self._events[n["node"]] = (event_id, n["state"])
 
     def _take_orders(self, tasks, now):
         """Hand the order tasks the analyst filed over to the analytics, once

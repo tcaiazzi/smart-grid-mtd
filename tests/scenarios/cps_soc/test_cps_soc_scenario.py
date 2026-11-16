@@ -128,8 +128,12 @@ class Lab(unittest.TestCase):
         for path in ("/belief_feed.py", "/soc_belief_rules.xml"):
             self.assertIn(path, soc, "the SOC's belief never becomes an alert")
         ui = [g for _h, g in self.nodes["wazuhui"].files]
-        for path in ("/attack-tree.vega.json", "/dashboard_objects.py"):
-            self.assertIn(path, ui, "the dashboard has no view to draw the tree with")
+        for path in (
+            "/attack-tree.vega.json",
+            "/knowledge-graph.vega.json",
+            "/dashboard_objects.py",
+        ):
+            self.assertIn(path, ui, "the dashboard has no view to draw the tree or the graph with")
         # The cps and cps-advisor SOCs have no SIEM to feed.
         self.assertNotIn("/belief_feed.py", [g for _h, g in cps_files.SOC_FILES])
 

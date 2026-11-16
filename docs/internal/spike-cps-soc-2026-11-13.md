@@ -277,6 +277,55 @@ Trovato strada facendo:
 - nel Markdown di IRIS gli underscore di un id (`kill_proc_tree`) diventano
   corsivo: nel riepilogo gli id sono ora in formato codice.
 
+## Il knowledge graph nelle due dashboard
+
+Accanto all'albero il blue team vede ora il grafo su cui il SOC ragiona (zone,
+host, indirizzi, servizi, regola del firewall, registri: 32 nodi, 48 archi) e
+dove l'attacco vi atterra. Il grafo è statico: feed e desk lo ricevono una volta
+all'avvio e da `view()` leggono solo ciò che cambia (`hosts_implicated`, i
+`targets` dei passi, `first_seen`).
+
+- **Lo stato di un nodo** è calcolato sul nodo SOC (`belief_feed.kg_state`), con
+  la logica del pannello dell'arbitro ma senza id cablati: *involved* gli host
+  coinvolti e i bersagli dei passi avvenuti o degli impatti attivi; *blocked* le
+  regole di flusso sul percorso dei passi prevenuti da una contromisura di tipo
+  D3FEND "Traffic Filtering" in vigore; *isolated* l'host di una "Network
+  Isolation"; in più, per host, le contromisure in vigore che vi girano.
+- **Wazuh.** Un evento per nodo e per arco (`kind: soc_kg`, regola 100132,
+  livello 3: sotto, il manager non scrive l'alert). Ogni nodo porta colonna e
+  riga, quindi il layout è in Python e lo spec Vega
+  (`knowledge-graph.vega.json`) fa solo scale. Secondo pannello della stessa
+  dashboard, sotto l'albero: bordo rosso su ciò che l'attacco tocca, tratteggio
+  scuro su regola bloccata e host isolato, spunta verde dove agisce una
+  contromisura, punto giallo sui registri sensibili; al passaggio del mouse i
+  dettagli del nodo e i suoi archi in evidenza. Segue anch'esso il selettore
+  del tempo.
+- **IRIS, oggetti nativi.** Gli host sono gli *Asset* del caso (tipo, IP, ruolo,
+  zone, servizi). Un host coinvolto viene segnato "compromised" **una volta
+  sola**, rileggendo l'asset com'è e cambiando solo quel campo: note e
+  valutazione dell'analista non vengono sovrascritte. Ogni foglia dell'albero
+  confermata o dedotta è un evento della *Timeline* (titolo con la tecnica,
+  categoria = tattica ATT&CK, data = prima osservazione) legato agli host che
+  il passo collega: quelli a cui mira e quello da cui proviene. Da quei legami
+  la scheda *Graph* di IRIS disegna il grafo del caso.
+
+Verificato dal vivo (`output/cps-soc/kg-2`): 80 alert 100132 all'avvio; durante
+l'attacco si accendono `attacker`, `hmi`, i due servizi e i registri scritti;
+ordinate `block_flow` e `isolate_hmi` dal caso, la regola risulta bloccata con i
+suoi tre archi e `hmi` isolato. In IRIS 7 asset, `attacker` e `hmi` compromessi,
+4 eventi (Initial Access, Execution, Impact, e il pivot senza tecnica come
+Unspecified), grafo `attacker – hmi – engine`. `attacker` rimesso a mano su "not
+compromised" non è stato riscritto. Nessun alert del grafo inoltrato a IRIS.
+
+Da sapere:
+
+- ogni avvio mette 92 alert di livello 3 (12 dell'albero, 80 del grafo) tra gli
+  eventi di Wazuh; si filtrano con `rule.groups`;
+- un passo dedotto e mai osservato è datato all'istante della deduzione, quindi
+  in Timeline può comparire un secondo dopo il passo che lo implica;
+- "compromised" segue `hosts_implicated`: le sorgenti viste e l'HMI. L'impianto
+  è toccato (registri *involved*), non compromesso.
+
 ## Limiti noti della prova
 
 - Le porte pubblicate (8770, 8771) sono protette solo dalle credenziali del run,
@@ -295,13 +344,13 @@ Trovato strada facendo:
 | `nodes/soar/iris_soc_response/` | il modulo IRIS con le voci di menu del SOC |
 | `nodes/wazuh/manager/iris_forward.py`, `wazuh-iris-integration.sh` | l'integrazione Wazuh → alert IRIS e la sua installazione |
 | `nodes/wazuh/{indexer,dashboard,manager}/`, `nodes/soar/iris-start.sh` | configurazioni e script d'avvio |
-| `nodes/soc/belief_feed.py`, `nodes/wazuh/manager/soc_belief_rules.xml` | la credenza sull'albero come alert del SIEM |
-| `nodes/wazuh/dashboard/attack-tree.vega.json`, `dashboard_objects.py` | la vista dell'albero in Wazuh e la sua installazione |
+| `nodes/soc/belief_feed.py`, `nodes/wazuh/manager/soc_belief_rules.xml` | la credenza sull'albero e il knowledge graph come alert del SIEM |
+| `nodes/wazuh/dashboard/attack-tree.vega.json`, `knowledge-graph.vega.json`, `dashboard_objects.py` | le viste dell'albero e del grafo in Wazuh e la loro installazione |
 | `docker/{wazuh-pki,soc-siem,wazuh-indexer,wazuh-dashboard,iris-app,iris-web}/` | le immagini; `make cps-soc-image` |
 | `make/cps-soc.mk` | `cps-soc-image`, `cps-soc`, `cps-soc-lab`, `cps-soc-teams`, `cps-soc-dashboard` |
-| `tests/` | `test_iris_desk.py` (14), `test_iris_module.py` (5), `test_iris_forward.py` (14), `test_belief_feed.py` (9), `test_wazuh_dashboard_config.py` (10), `tests/scenarios/cps_soc/` (12), entrypoint nel core, versioni Wazuh allineate anche per indexer e dashboard, `lab-cps-soc.json` |
+| `tests/` | `test_iris_desk.py` (23), `test_iris_module.py` (5), `test_iris_forward.py` (14), `test_belief_feed.py` (19), `test_wazuh_dashboard_config.py` (14), `tests/scenarios/cps_soc/` (12), entrypoint nel core, versioni Wazuh allineate anche per indexer e dashboard, `lab-cps-soc.json` |
 
-Suite: 536 test verdi; snapshot degli altri lab invariati.
+Suite: 560 test verdi; snapshot degli altri lab invariati.
 
 Verifica dopo le correzioni sugli utenti (`output/cps-soc/spike-4`): tre
 suggerimenti approvati in IRIS, tre contromisure eseguite (`block_flow`,

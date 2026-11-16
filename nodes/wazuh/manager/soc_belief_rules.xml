@@ -1,11 +1,13 @@
 <!--
-  soc_belief_rules.xml — the SOC's belief on the attack tree, as alerts.
+  soc_belief_rules.xml — what the SOC knows and believes, as alerts.
 
   The SOC's analytics hands the manager one JSON event for each step of the
-  attack tree whose belief changed (kind soc_belief, from belief_feed.py). The
-  rules turn each into an alert, so the indexer holds the belief beside the
-  findings it comes from and the dashboard draws the tree from it. A step the
-  SOC holds confirmed is raised to a level an analyst is shown by default.
+  attack tree whose belief changed (kind soc_belief, from belief_feed.py), and
+  one for each node and edge of its knowledge graph when what the attack or the
+  response makes of it changes (kind soc_kg). The rules turn each into an alert,
+  so the indexer holds them beside the findings they come from and the dashboard
+  draws the tree and the graph from them. A step the SOC holds confirmed is
+  raised to a level an analyst is shown by default.
 
   Nothing acts on these alerts: the analytics and the IRIS integration read
   the sensor's rules only (cps_rules.xml).
@@ -23,5 +25,14 @@
     <if_sid>100130</if_sid>
     <field name="belief">^confirmed$</field>
     <description>SOC confirms an attack step: $(label)</description>
+  </rule>
+</group>
+
+<group name="cps,soc_kg,">
+  <!-- Level 3: the manager writes no alert, and so indexes nothing, below it. -->
+  <rule id="100132" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="kind">^soc_kg$</field>
+    <description>SOC knowledge graph: $(element) $(kg_id), $(status)</description>
   </rule>
 </group>

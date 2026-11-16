@@ -108,6 +108,113 @@ class Rows(unittest.TestCase):
         )
 
 
+class KnowledgeGraph(unittest.TestCase):
+    """The lab's own graph and tree, with the SOC's view set by hand."""
+
+    def setUp(self):
+        g = soc_analytics.kgmod.build_kg(cps_inv.inventory())
+        engine = soc_analytics.ResponseEngine("rules", g, it=True)
+        self.service = soc_analytics.Service(engine, None, None, lambda *a, **k: None)
+        self.g, self.kg = g, soc_analytics.kgmod.to_json(g)
+        self.graph = B.Graph(self.kg)
+
+    def view(self, states=(), implicated=(), applied=(), active=()):
+        for cm in applied:
+            self.service._in_effect[cm] = 1.0
+        view = self.service.view()
+        view["tree"] = [{"node": n, "state": s, "belief": 0.9} for n, s in states]
+        view["hosts_implicated"], view["active_impacts"] = list(implicated), list(active)
+        return view
+
+    def status(self, view):
+        return {r["kg_id"]: r["status"] for r in B.kg_rows(self.graph, view)}
+
+    def test_every_node_and_edge_is_an_event_and_flat(self):
+        rows = B.kg_rows(self.graph, self.view())
+        nodes = [r for r in rows if r["element"] == "node"]
+        edges = [r for r in rows if r["element"] == "edge"]
+        self.assertEqual(len(nodes), self.g.number_of_nodes())
+        self.assertEqual(len(edges), self.g.number_of_edges())
+        self.assertEqual(len({r["kg_id"] for r in rows}), len(rows), "two elements, one event")
+        for row in rows:
+            self.assertEqual(row["kind"], B.KG_KIND)
+            for field, value in row.items():
+                self.assertIsInstance(value, (str, int, float), f"{row['kg_id']}.{field}")
+
+    def test_no_two_nodes_are_drawn_in_one_place(self):
+        nodes = [r for r in B.kg_rows(self.graph, self.view()) if r["element"] == "node"]
+        places = [(r["layer"], r["row"]) for r in nodes]
+        self.assertEqual(len(set(places)), len(places), "a node is drawn over another")
+        for r in nodes:
+            self.assertEqual(B.LAYERS[r["layer"]], r["kg_type"], "a node in another type's column")
+
+    def test_an_edge_joins_two_nodes_that_are_sent(self):
+        rows = B.kg_rows(self.graph, self.view())
+        sent = {r["kg_id"] for r in rows if r["element"] == "node"}
+        for r in rows:
+            if r["element"] == "edge":
+                self.assertLessEqual({r["kg_src"], r["kg_dst"]}, sent, "an edge to nowhere")
+
+    def test_a_quiet_lab_has_nothing_marked(self):
+        self.assertEqual(set(self.status(self.view()).values()), {B.QUIET})
+
+    def test_what_the_attack_touches_is_involved(self):
+        marked = self.status(self.view(states=[("breaker_open", "confirmed")], implicated=["hmi"]))
+        switch = next(i for i, n in self.graph.nodes.items() if n.get("name") == "switch_cmd")
+        self.assertEqual(marked["host:hmi"], B.INVOLVED)
+        self.assertEqual(marked[switch], B.INVOLVED, "the register the step writes")
+        self.assertEqual(marked["host:plc"], B.QUIET)
+        # A step only suspected has not happened; an impact held active has.
+        self.assertEqual(
+            self.status(self.view(states=[("breaker_open", "suspected")]))[switch], B.QUIET
+        )
+        active = self.view(states=[("breaker_open", "suspected")], active=["breaker_open"])
+        self.assertEqual(self.status(active)[switch], B.INVOLVED)
+
+    def test_filtering_the_flow_blocks_its_rule_and_isolating_cuts_the_host(self):
+        marked = self.status(self.view(applied=["block_flow"]))
+        (rule,) = [i for i, n in self.graph.nodes.items() if n["type"] == "flow_rule"]
+        self.assertEqual(marked[rule], B.BLOCKED)
+        cut = [i for i, s in marked.items() if s == B.BLOCKED and ">" in i]
+        self.assertEqual(len(cut), 3, "the rule's edges (enforces, src, dst) are not shown cut")
+        rows = {r["kg_id"]: r for r in B.kg_rows(self.graph, self.view())}
+        self.assertEqual(rows["host:firewall"]["defended_by"], "block_flow")
+        self.assertEqual(self.status(self.view(applied=["isolate_hmi"]))["host:hmi"], B.ISOLATED)
+
+    def test_a_countermeasure_that_filters_nothing_blocks_no_rule(self):
+        # kill_proc_tree prevents the pivot too, whose path the rule is on.
+        marked = self.status(self.view(applied=["kill_proc_tree", "force_auto"]))
+        self.assertNotIn(B.BLOCKED, marked.values())
+        self.assertNotIn(B.ISOLATED, marked.values())
+
+    def test_a_graph_element_is_on_the_host_an_attack_lands_on(self):
+        (rule,) = [i for i, n in self.graph.nodes.items() if n["type"] == "flow_rule"]
+        self.assertEqual(self.graph.host_of("svc:hmi/diag-http"), "hmi")
+        self.assertEqual(self.graph.host_of("reg:hr:0"), "engine", "the plant exposes it")
+        self.assertEqual(self.graph.host_of("host:plc"), "plc")
+        self.assertIsNone(self.graph.host_of(rule), "a rule is enforced, not attacked")
+
+    def test_a_step_links_where_it_lands_and_where_it_comes_from(self):
+        view = self.view(implicated=["attacker"])
+        hosts = lambda step: B.step_hosts(self.graph, view, step)  # noqa: E731
+        self.assertEqual(hosts("it_access"), ["attacker", "hmi"], "the source the SOC saw")
+        self.assertEqual(hosts("pivot"), ["engine", "hmi"])
+        self.assertEqual(hosts("breaker_open"), ["engine", "hmi"], "not straight from the source")
+
+    def test_the_feed_sends_the_graph_once_then_only_what_changes(self):
+        sent = []
+        feed = B.BeliefFeed(None, send=lambda line: sent.append(json.loads(line)), kg=self.kg)
+        feed.publish(self.view())
+        graph = [r for r in sent if r["kind"] == B.KG_KIND]
+        self.assertEqual(len(graph), self.g.number_of_nodes() + self.g.number_of_edges())
+        self.assertEqual(len(sent) - len(graph), len(list(self.service.engine.tree.walk())))
+        before = len(sent)
+        feed.publish(self.view())
+        self.assertEqual(len(sent), before, "an unchanged graph is sent again at every step")
+        feed.publish(self.view(implicated=["hmi"]))
+        self.assertEqual([r["kg_id"] for r in sent[before:]], ["host:hmi"])
+
+
 class Feed(unittest.TestCase):
     def setUp(self):
         self.sent, self.logged, self.up = [], [], True

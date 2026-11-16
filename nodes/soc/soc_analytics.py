@@ -17,8 +17,9 @@ Three ways to run it, one engine:
         the service. Writes, in --out-dir (default "/"):
           kg.json, tree.json   the structure it reasons on
           response.jsonl       response_up, tree_state, decision, approval, action
-        With --belief-feed FILE the belief on the tree also goes to the manager
-        as events, for the SIEM to index and draw (belief_feed.py).
+        With --belief-feed FILE the belief on the tree, and the knowledge
+        graph with what the attack touches of it, also go to the manager as
+        events, for the SIEM to index and draw (belief_feed.py).
         With --policy off it keeps the campaign state and requests nothing.
         With --approval operator:<s> it advises: every countermeasure waits
         for a person at the operator console (soc_operator.py, --operator-port,
@@ -540,6 +541,7 @@ class Service:
                 "label": n.label,
                 "gate": n.gate,
                 "attck": n.attck,
+                "targets": list(n.targets),
                 "children": [shape(c) for c in n.children],
             }
 
@@ -558,10 +560,12 @@ class Service:
                     "attck": getattr(labels.get(n), "attck", None),
                     "state": v.get("state"),
                     "belief": v.get("score"),
+                    "first_seen": v.get("first_seen"),
                 }
                 for n, v in (snap.get("nodes") or {}).items()
             ],
             "active_impacts": list(snap.get("active_impacts") or []),
+            "hosts_implicated": list(snap.get("hosts_implicated") or []),
             "countermeasures": [
                 {
                     "id": c.id,
@@ -766,10 +770,11 @@ def load_inventory(args):
     raise SystemExit("an inventory is required: --inventory FILE or --inventory-b64 B64")
 
 
-def iris_desk_of(args):
+def iris_desk_of(args, g):
     """The approval desk on DFIR-IRIS (iris_desk.py). Imported here: the module
     is staged only on a SOC that has IRIS (the cps-soc lab), and this file runs
-    on every SOC."""
+    on every SOC. It is given the knowledge graph, whose hosts it files as the
+    case's assets."""
     import iris_desk
 
     for flag in ("iris_url", "iris_key", "iris_case"):
@@ -778,15 +783,16 @@ def iris_desk_of(args):
     api = iris_desk.IrisApi(args.iris_url, args.iris_key, cafile=args.iris_ca)
     analyst = (args.iris_analyst, args.iris_analyst_password) if args.iris_analyst else None
     case = (args.iris_case, f"SOC suggestions — {args.iris_case}")
-    return iris_desk.IrisDesk(api, case, analyst=analyst)
+    return iris_desk.IrisDesk(api, case, analyst=analyst, kg=kgmod.to_json(g))
 
 
-def belief_feed_of(args):
-    """The feed of the tree's belief to the SIEM (belief_feed.py). Imported
-    here for the reason iris_desk is: only the cps-soc lab's SOC is given it."""
+def belief_feed_of(args, g):
+    """The feed of the tree's belief, and of the knowledge graph it lands on,
+    to the SIEM (belief_feed.py). Imported here for the reason iris_desk is:
+    only the cps-soc lab's SOC is given it."""
     import belief_feed
 
-    return belief_feed.BeliefFeed(args.belief_feed)
+    return belief_feed.BeliefFeed(args.belief_feed, kg=kgmod.to_json(g))
 
 
 def serve(args, g):
@@ -801,8 +807,8 @@ def serve(args, g):
         it=args.it,
     )
     engine = ResponseEngine(args.policy, g, args.approval, record=record, it=args.it)
-    desk = iris_desk_of(args) if args.desk == "iris" else soc_operator.ApprovalDesk()
-    feed = belief_feed_of(args) if args.belief_feed else None
+    desk = iris_desk_of(args, g) if args.desk == "iris" else soc_operator.ApprovalDesk()
+    feed = belief_feed_of(args, g) if args.belief_feed else None
     service = Service(
         engine,
         AlertFollower(args.alerts),

@@ -7,7 +7,7 @@
 # certificates (/pki, from the image), then runs the official entrypoint as the
 # dashboard's own user: the node runs as root, which Kathará needs to address
 # it, and OpenSearch Dashboards refuses to run as root. Beside it, the lab's own
-# views (the attack tree) are created as soon as the dashboard answers.
+# views (the attack tree, the knowledge graph) are created as soon as it answers.
 #
 # Copied flat onto the dashboard node; needs the kathara/wazuh-dashboard image.
 set -eu
@@ -27,7 +27,7 @@ chmod 600 $HOME_DIR/certs/*
 ADDRESS=$(ip -4 -o addr show dev eth0 | awk '{print $4}' | cut -d/ -f1)
 OSD_PASSWORD="$KIBANASERVER_PASSWORD" python3 /dashboard_objects.py \
     --url "https://$ADDRESS:5601" --user kibanaserver \
-    --ca /pki/root-ca.pem --spec /attack-tree.vega.json > /dashboard_objects.log 2>&1 &
+    --ca /pki/root-ca.pem --specs / > /dashboard_objects.log 2>&1 &
 
 exec chroot --userspec=1000:1000 / env HOME=$HOME_DIR \
     DASHBOARD_USERNAME=kibanaserver DASHBOARD_PASSWORD="$KIBANASERVER_PASSWORD" /entrypoint.sh

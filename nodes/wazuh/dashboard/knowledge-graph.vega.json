@@ -1,0 +1,385 @@
+{
+  "$schema": "https://vega.github.io/schema/vega/v5.json",
+  "description": "The lab as the SOC knows it (its knowledge graph: zones, hosts, addresses, services, the boundary's flow rules, the plant's registers), with what the attack touches and what the response cut. Read from the alerts of rule group soc_kg (nodes/wazuh/manager/soc_belief_rules.xml): the latest alert of every node and edge, up to the end of the time range. A node says its own column and row (belief_feed.py), so nothing is laid out here. Installed by dashboard_objects.py.",
+  "padding": 8,
+  "signals": [
+    {"name": "top", "value": 56},
+    {"name": "foot", "value": 22},
+    {
+      "name": "tallest",
+      "update": "counts && isValid(counts[1]) ? counts[1] : 1"
+    },
+    {
+      "name": "step",
+      "update": "clamp((height - top - foot) / tallest, 22, 40)"
+    },
+    {"name": "boxh", "update": "step - 8"},
+    {
+      "name": "boxw",
+      "update": "clamp((width - 4) / 6 - 44, 96, 200)"
+    },
+    {"name": "colw", "update": "(width - 4 - boxw) / 5"},
+    {
+      "name": "hover",
+      "value": null,
+      "on": [
+        {"events": "@kgnode:mouseover", "update": "datum.id"},
+        {"events": "@kgnode:mouseout", "update": "null"}
+      ]
+    }
+  ],
+  "data": [
+    {
+      "name": "kgnodes",
+      "url": {
+        "index": "wazuh-alerts-*",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {"term": {"rule.groups": "soc_kg"}},
+                {"range": {"timestamp": {"lte": {"%timefilter%": "max"}}}},
+                {"term": {"data.element": "node"}}
+              ]
+            }
+          },
+          "aggs": {
+            "elements": {
+              "terms": {"field": "data.kg_id", "size": 1000},
+              "aggs": {
+                "last": {
+                  "top_hits": {
+                    "size": 1,
+                    "sort": [{"timestamp": {"order": "desc"}}],
+                    "_source": ["data"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {"property": "aggregations.elements.buckets"},
+      "transform": [
+        {"type": "formula", "as": "d", "expr": "datum.last.hits.hits[0]._source.data"},
+        {"type": "formula", "as": "id", "expr": "datum.d.kg_id"},
+        {"type": "formula", "as": "type", "expr": "datum.d.kg_type"},
+        {"type": "formula", "as": "layer", "expr": "toNumber(datum.d.layer)"},
+        {"type": "formula", "as": "row", "expr": "toNumber(datum.d.row)"},
+        {"type": "formula", "as": "label", "expr": "datum.d.label"},
+        {"type": "formula", "as": "detail", "expr": "datum.d.detail"},
+        {"type": "formula", "as": "status", "expr": "datum.d.status"},
+        {"type": "formula", "as": "sensitive", "expr": "datum.d.sensitive == 'yes'"},
+        {"type": "formula", "as": "defended_by", "expr": "datum.d.defended_by"},
+        {"type": "joinaggregate", "groupby": ["layer"], "ops": ["count"], "as": ["n"]},
+        {"type": "extent", "field": "n", "signal": "counts"},
+        {"type": "formula", "as": "x", "expr": "2 + datum.layer * colw"},
+        {
+          "type": "formula",
+          "as": "y",
+          "expr": "top + (tallest - datum.n) * step / 2 + datum.row * step"
+        },
+        {"type": "formula", "as": "cy", "expr": "datum.y + boxh / 2"},
+        {"type": "formula", "as": "marked", "expr": "datum.status != 'none'"}
+      ]
+    },
+    {
+      "name": "kgedges",
+      "url": {
+        "index": "wazuh-alerts-*",
+        "body": {
+          "size": 0,
+          "query": {
+            "bool": {
+              "filter": [
+                {"term": {"rule.groups": "soc_kg"}},
+                {"range": {"timestamp": {"lte": {"%timefilter%": "max"}}}},
+                {"term": {"data.element": "edge"}}
+              ]
+            }
+          },
+          "aggs": {
+            "elements": {
+              "terms": {"field": "data.kg_id", "size": 1000},
+              "aggs": {
+                "last": {
+                  "top_hits": {
+                    "size": 1,
+                    "sort": [{"timestamp": {"order": "desc"}}],
+                    "_source": ["data"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "format": {"property": "aggregations.elements.buckets"},
+      "transform": [
+        {"type": "formula", "as": "d", "expr": "datum.last.hits.hits[0]._source.data"},
+        {"type": "formula", "as": "s_id", "expr": "datum.d.kg_src"},
+        {"type": "formula", "as": "t_id", "expr": "datum.d.kg_dst"},
+        {"type": "formula", "as": "rel", "expr": "datum.d.rel"},
+        {"type": "formula", "as": "status", "expr": "datum.d.status"},
+        {
+          "type": "lookup",
+          "from": "kgnodes",
+          "key": "id",
+          "fields": ["s_id", "t_id"],
+          "as": ["s", "t"]
+        },
+        {"type": "filter", "expr": "datum.s && datum.t"},
+        {"type": "formula", "as": "fwd", "expr": "datum.s.layer <= datum.t.layer"},
+        {
+          "type": "formula",
+          "as": "x0",
+          "expr": "2 + datum.s.layer * colw + (datum.fwd ? boxw : 0)"
+        },
+        {
+          "type": "formula",
+          "as": "y0",
+          "expr": "top + (tallest - datum.s.n) * step / 2 + datum.s.row * step + boxh / 2"
+        },
+        {
+          "type": "formula",
+          "as": "x1",
+          "expr": "2 + datum.t.layer * colw + (datum.fwd ? 0 : boxw)"
+        },
+        {
+          "type": "formula",
+          "as": "y1",
+          "expr": "top + (tallest - datum.t.n) * step / 2 + datum.t.row * step + boxh / 2"
+        },
+        {
+          "type": "linkpath",
+          "orient": "horizontal",
+          "shape": "diagonal",
+          "sourceX": "x0",
+          "sourceY": "y0",
+          "targetX": "x1",
+          "targetY": "y1"
+        }
+      ]
+    },
+    {
+      "name": "columns",
+      "values": [
+        {"layer": 0, "name": "zone"},
+        {"layer": 1, "name": "host"},
+        {"layer": 2, "name": "address"},
+        {"layer": 3, "name": "service"},
+        {"layer": 4, "name": "flow rule"},
+        {"layer": 5, "name": "register"}
+      ]
+    },
+    {"name": "notes", "values": [{}]}
+  ],
+  "scales": [
+    {
+      "name": "border",
+      "type": "ordinal",
+      "domain": ["involved", "blocked", "isolated", "none"],
+      "range": ["#d03b3b", "#0b0b0b", "#0b0b0b", "#c3c2b7"]
+    },
+    {
+      "name": "mark",
+      "type": "ordinal",
+      "domain": ["involved", "blocked", "isolated"],
+      "range": ["#d03b3b", "#0b0b0b", "#0b0b0b"]
+    },
+    {
+      "name": "glyph",
+      "type": "ordinal",
+      "domain": ["involved", "blocked", "isolated"],
+      "range": ["diamond", "cross", "square"]
+    }
+  ],
+  "legends": [
+    {
+      "fill": "mark",
+      "shape": "glyph",
+      "orient": "none",
+      "legendX": 2,
+      "legendY": 0,
+      "direction": "horizontal",
+      "title": "What the attack and the response make of the lab",
+      "titleOrient": "left",
+      "titleLimit": 420,
+      "titleFontWeight": "normal",
+      "titleColor": "#52514e",
+      "labelColor": "#52514e",
+      "symbolSize": 90,
+      "columnPadding": 14,
+      "encode": {
+        "labels": {
+          "update": {
+            "text": {
+              "signal": "datum.value == 'involved' ? 'touched by the attack' : datum.value + ' by a countermeasure'"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "marks": [
+    {
+      "type": "text",
+      "from": {"data": "columns"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "2 + datum.layer * colw"},
+          "y": {"signal": "top - 12"},
+          "text": {"field": "name"},
+          "fontSize": {"value": 11},
+          "fill": {"value": "#52514e"},
+          "opacity": {"signal": "length(data('kgnodes')) ? 1 : 0"}
+        }
+      }
+    },
+    {
+      "type": "path",
+      "name": "kgedge",
+      "from": {"data": "kgedges"},
+      "encode": {
+        "update": {
+          "path": {"field": "path"},
+          "stroke": {
+            "signal": "datum.status == 'blocked' ? '#0b0b0b' : hover && (datum.s_id == hover || datum.t_id == hover) ? '#52514e' : '#c3c2b7'"
+          },
+          "strokeWidth": {
+            "signal": "hover && (datum.s_id == hover || datum.t_id == hover) ? 2 : 1.3"
+          },
+          "strokeDash": {"signal": "datum.status == 'blocked' ? [5, 3] : []"},
+          "opacity": {
+            "signal": "!hover ? 0.7 : datum.s_id == hover || datum.t_id == hover ? 1 : 0.08"
+          },
+          "tooltip": {
+            "signal": "{'From': datum.s.label, 'Relation': datum.rel, 'To': datum.t.label, 'Status': datum.status == 'blocked' ? 'cut by a countermeasure' : '—'}"
+          }
+        }
+      }
+    },
+    {
+      "type": "rect",
+      "name": "kgnode",
+      "from": {"data": "kgnodes"},
+      "encode": {
+        "update": {
+          "x": {"field": "x"},
+          "y": {"field": "y"},
+          "width": {"signal": "boxw"},
+          "height": {"signal": "boxh"},
+          "cornerRadius": {"value": 4},
+          "fill": {"value": "#fcfcfb"},
+          "stroke": {"scale": "border", "field": "status"},
+          "strokeWidth": {"signal": "datum.marked ? 2.5 : 1"},
+          "strokeDash": {
+            "signal": "datum.status == 'blocked' || datum.status == 'isolated' ? [5, 3] : []"
+          },
+          "tooltip": {
+            "signal": "{'Node': datum.id, 'What': datum.detail, 'Status': datum.status == 'involved' ? 'touched by the attack' : datum.marked ? datum.status + ' by a countermeasure' : '—', 'Countermeasures here': datum.defended_by || '—', 'Sensitive': datum.sensitive ? 'yes' : '—'}"
+          }
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": {"data": "kgnodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.x + 12"},
+          "y": {"field": "cy"},
+          "size": {"value": 70},
+          "shape": {"scale": "glyph", "field": "status"},
+          "fill": {"scale": "mark", "field": "status"},
+          "opacity": {"signal": "datum.marked ? 1 : 0"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "kgnodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.x + (datum.marked ? 23 : 9)"},
+          "y": {"field": "cy"},
+          "baseline": {"value": "middle"},
+          "text": {"field": "label"},
+          "limit": {"signal": "boxw - (datum.marked ? 30 : 16) - (datum.sensitive ? 14 : 0)"},
+          "fontSize": {"value": 11},
+          "fontWeight": {"signal": "datum.type == 'host' ? 600 : 400"},
+          "fill": {"value": "#0b0b0b"}
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": {"data": "kgnodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.x + boxw - 10"},
+          "y": {"field": "cy"},
+          "size": {"value": 45},
+          "shape": {"value": "circle"},
+          "fill": {"value": "#fab219"},
+          "opacity": {"signal": "datum.sensitive ? 1 : 0"}
+        }
+      }
+    },
+    {
+      "type": "symbol",
+      "from": {"data": "kgnodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.x + boxw - 3"},
+          "y": {"signal": "datum.y + 3"},
+          "size": {"value": 230},
+          "shape": {"value": "circle"},
+          "fill": {"value": "#0ca30c"},
+          "stroke": {"value": "#fcfcfb"},
+          "strokeWidth": {"value": 2},
+          "opacity": {"signal": "datum.defended_by ? 1 : 0"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "kgnodes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"signal": "datum.x + boxw - 3"},
+          "y": {"signal": "datum.y + 3.5"},
+          "align": {"value": "center"},
+          "baseline": {"value": "middle"},
+          "text": {"signal": "datum.defended_by ? '✓' : ''"},
+          "fontSize": {"value": 11},
+          "fontWeight": {"value": 700},
+          "fill": {"value": "#ffffff"}
+        }
+      }
+    },
+    {
+      "type": "text",
+      "from": {"data": "notes"},
+      "interactive": false,
+      "encode": {
+        "update": {
+          "x": {"value": 2},
+          "y": {"signal": "height - 4"},
+          "text": {
+            "signal": "length(data('kgnodes')) ? '✓ a countermeasure in effect runs on the host   ● sensitive register   Hover a node for what it is and its links. The graph is as of the end of the time range.' : 'The SOC has published no knowledge graph yet.'"
+          },
+          "fontSize": {"value": 11},
+          "fill": {"value": "#52514e"}
+        }
+      }
+    }
+  ]
+}

@@ -260,6 +260,7 @@
    "/wazuh.yml",
    "/wazuh-dashboard-start.sh",
    "/attack-tree.vega.json",
+   "/knowledge-graph.vega.json",
    "/dashboard_objects.py"
   ],
   "settings": {

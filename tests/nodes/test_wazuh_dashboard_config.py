@@ -5,12 +5,12 @@ against the image's entrypoint, which rewrites it at every start.
 file already names its host id; the app then refuses the file with two hosts:
 keys (error 3019) and the blue team's SIEM shows no Wazuh data at all.
 
-Also the lab's own view in the dashboard, the attack tree: a Vega specification
-over the alerts the SOC's belief feed raises (nodes/soc/belief_feed.py through
-nodes/wazuh/manager/soc_belief_rules.xml), installed as saved objects by
-dashboard_objects.py. Nothing fails loudly when the three drift apart — the
-panel is drawn empty — so the fields each one names are checked against the
-others here.
+Also the lab's own views in the dashboard, the attack tree and the knowledge
+graph: Vega specifications over the alerts the SOC's belief feed raises
+(nodes/soc/belief_feed.py through nodes/wazuh/manager/soc_belief_rules.xml),
+installed as saved objects by dashboard_objects.py. Nothing fails loudly when
+the three drift apart — the panel is drawn empty — so the fields each one names
+are checked against the others here.
 
 Run: `.venv/bin/python -m pytest tests/nodes/test_wazuh_dashboard_config.py`
 """
@@ -23,17 +23,20 @@ from pathlib import Path
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.SOC, guest_paths.NODES / "wazuh" / "dashboard")
+guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE, guest_paths.NODES / "wazuh" / "dashboard")
 
 import belief_feed  # noqa: E402  (flat guest import, needs the path set above)
 import dashboard_objects  # noqa: E402  (flat guest import)
+import soc_analytics  # noqa: E402  (flat guest import)
 
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402  (after the guest path)
 from cyberrange.scenarios.cps_soc import scenario as soc_scenario  # noqa: E402  (after the guest path)
 from cyberrange.scenarios.cps_soc.guest_files import DASHBOARD_FILES  # noqa: E402  (after the guest path)
 
 NODES = Path(__file__).resolve().parents[2] / "nodes"
 CONFIG = NODES / "wazuh/dashboard/wazuh.yml"
 SPEC = NODES / "wazuh/dashboard/attack-tree.vega.json"
+KG_SPEC = NODES / "wazuh/dashboard/knowledge-graph.vega.json"
 RULES = NODES / "wazuh/manager/soc_belief_rules.xml"
 START = NODES / "wazuh/dashboard/wazuh-dashboard-start.sh"
 ENTRYPOINT_HOST_ID = "1513629884013"  # what /wazuh_app_config.sh greps for
@@ -121,18 +124,31 @@ class TestAttackTreeView(unittest.TestCase):
             named = set(re.findall(r"\$\((\w+)\)", rule.find("description").text))
             self.assertFalse(named - fed_fields(), rule.get("id"))
 
-    def test_the_objects_are_a_dashboard_holding_the_view(self):
-        kinds = {kind: (ident, body) for kind, ident, body in dashboard_objects.objects(self.text)}
-        vis_id, vis = kinds["visualization"]
-        state = json.loads(vis["attributes"]["visState"])
-        self.assertEqual(state["type"], "vega")
-        self.assertEqual(json.loads(state["params"]["spec"]), self.spec)
-        dash_id, dash = kinds["dashboard"]
-        self.assertEqual(dash["references"][0]["id"], vis_id, "a dashboard of a missing panel")
-        (panel,) = json.loads(dash["attributes"]["panelsJSON"])
-        self.assertIn("version", panel, "the dashboards page fails on a panel with no version")
-        self.assertEqual(panel["panelRefName"], dash["references"][0]["name"])
-        self.assertFalse(dash["attributes"]["refreshInterval"]["pause"], "the tree stands still")
+    def test_the_objects_are_a_dashboard_holding_the_views(self):
+        specs = dashboard_objects.read_specs(SPEC.parent)
+        made = dashboard_objects.objects(specs)
+        views = {ident: body for kind, ident, body in made if kind == "visualization"}
+        self.assertEqual(len(views), len(dashboard_objects.VIEWS))
+        for ident, _title, _description, name, _height in dashboard_objects.VIEWS:
+            state = json.loads(views[ident]["attributes"]["visState"])
+            self.assertEqual(state["type"], "vega")
+            self.assertEqual(
+                json.loads(state["params"]["spec"]), json.loads((SPEC.parent / name).read_text())
+            )
+        (dash,) = [body for kind, _ident, body in made if kind == "dashboard"]
+        panels = json.loads(dash["attributes"]["panelsJSON"])
+        named = {r["name"]: r["id"] for r in dash["references"]}
+        self.assertEqual(
+            [named[p["panelRefName"]] for p in panels],
+            [view[0] for view in dashboard_objects.VIEWS],
+            "a panel of a view that is not installed, or a view on no panel",
+        )
+        top = 0
+        for panel in panels:
+            self.assertIn("version", panel, "the dashboards page fails on a panel with no version")
+            self.assertEqual(panel["gridData"]["y"], top, "two panels drawn over each other")
+            top += panel["gridData"]["h"]
+        self.assertFalse(dash["attributes"]["refreshInterval"]["pause"], "the views stand still")
 
     def test_the_teams_link_is_the_dashboard_the_objects_create(self):
         self.assertTrue(
@@ -143,9 +159,74 @@ class TestAttackTreeView(unittest.TestCase):
     def test_the_start_script_installs_the_staged_objects(self):
         staged = {guest for _host, guest in DASHBOARD_FILES}
         start = START.read_text()
-        for path in ("/dashboard_objects.py", "/attack-tree.vega.json"):
-            self.assertIn(path, staged)
-            self.assertIn(path, start, f"{path} is staged and never used")
+        self.assertIn("/dashboard_objects.py", staged)
+        self.assertIn("python3 /dashboard_objects.py", start, "staged and never run")
+        self.assertIn("--specs /", start, "the views are looked for where none is staged")
+        for _ident, _title, _description, name, _height in dashboard_objects.VIEWS:
+            self.assertIn(f"/{name}", staged, "a view the dashboard node is not given")
+
+
+class TestKnowledgeGraphView(unittest.TestCase):
+    def setUp(self):
+        self.text = KG_SPEC.read_text()
+        self.spec = json.loads(self.text)
+        self.rules = ET.fromstring(f"<rules>{RULES.read_text()}</rules>")
+        g = soc_analytics.kgmod.build_kg(cps_inv.inventory())
+        engine = soc_analytics.ResponseEngine("rules", g, it=True)
+        service = soc_analytics.Service(engine, None, None, lambda *a, **k: None)
+        service._in_effect["block_flow"] = 1.0
+        graph = belief_feed.Graph(soc_analytics.kgmod.to_json(g))
+        self.rows = belief_feed.kg_rows(graph, service.view())
+
+    def fed(self, element):
+        return set().union(*(r for r in self.rows if r["element"] == element))
+
+    def test_each_dataset_reads_only_what_the_feed_sends_of_its_element(self):
+        for data, element, needed in (
+            (self.spec["data"][0], "node", {"kg_id", "layer", "row", "label", "status"}),
+            (self.spec["data"][1], "edge", {"kg_src", "kg_dst", "status"}),
+        ):
+            read = set(re.findall(r"datum\.d\.(\w+)", json.dumps(data["transform"])))
+            self.assertLessEqual(needed, read, f"the {element}s cannot be drawn")
+            self.assertFalse(read - self.fed(element), f"read of an {element}, never sent")
+            filters = data["url"]["body"]["query"]["bool"]["filter"]
+            self.assertEqual(filters[2], {"term": {"data.element": element}})
+            self.assertEqual(
+                filters[1]["range"]["timestamp"],
+                {"lte": {"%timefilter%": "max"}},
+                "with a lower bound, what did not change within the range vanishes",
+            )
+            self.assertEqual(data["url"]["index"], dashboard_objects.ALERTS)
+            self.assertEqual(
+                data["url"]["body"]["aggs"]["elements"]["terms"]["field"], "data.kg_id"
+            )
+
+    def test_the_view_asks_for_the_alerts_its_rule_raises(self):
+        (group,) = [g for g in self.rules.findall("group") if "soc_kg" in g.get("name")]
+        (rule,) = group.findall("rule")
+        self.assertRegex(belief_feed.KG_KIND, rule.find("field[@name='kind']").text)
+        # Below level 3 the manager writes no alert: nothing would be indexed.
+        self.assertGreaterEqual(int(rule.get("level")), 3)
+        named = set(re.findall(r"\$\((\w+)\)", rule.find("description").text))
+        self.assertFalse(named - (self.fed("node") & self.fed("edge")), "blank in an alert")
+        for data in self.spec["data"][:2]:
+            term = data["url"]["body"]["query"]["bool"]["filter"][0]["term"]
+            self.assertIn(term["rule.groups"], group.get("name").rstrip(",").split(","))
+
+    def test_a_column_is_named_for_each_layer_the_feed_draws(self):
+        (columns,) = [d for d in self.spec["data"] if d["name"] == "columns"]
+        self.assertEqual(
+            [c["layer"] for c in columns["values"]], list(range(len(belief_feed.LAYERS)))
+        )
+
+    def test_every_status_has_a_border_and_every_mark_a_shape(self):
+        scales = {s["name"]: s for s in self.spec["scales"]}
+        marked = [belief_feed.INVOLVED, belief_feed.BLOCKED, belief_feed.ISOLATED]
+        self.assertEqual(scales["border"]["domain"], marked + [belief_feed.QUIET])
+        self.assertEqual(scales["glyph"]["domain"], marked)
+        self.assertEqual(
+            len(set(scales["glyph"]["range"])), len(marked), "told apart by colour only"
+        )
 
 
 if __name__ == "__main__":

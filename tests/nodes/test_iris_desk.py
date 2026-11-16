@@ -20,6 +20,9 @@ guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
 guest_paths.alias(guest_paths.SOAR / "iris_soc_response" / "orders.py", "iris_orders")
 
 import iris_desk as D  # noqa: E402  (flat guest import, needs the path set above)
+import soc_analytics as A  # noqa: E402  (flat guest import)
+
+from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402  (after the guest path)
 
 
 class FakeIris:
@@ -30,6 +33,7 @@ class FakeIris:
         self.down = False
         self.cases, self.tasks, self.users, self.calls = {}, {}, [], []
         self.modules = []
+        self.assets, self.events = {}, {}
         self.summary = None
 
     def __call__(self, method, url, headers, body):
@@ -68,12 +72,42 @@ class FakeIris:
         if u.path == "/manage/modules/add":
             self.modules.append(doc["module_name"])
             return ok({"id": len(self.modules)})
+        if u.path == "/manage/asset-type/list":
+            return ok([{"asset_id": i, "asset_name": n} for n, i in ASSET_TYPES.items()])
+        if u.path == "/manage/event-categories/list":
+            return ok([{"id": i, "name": n} for n, i in CATEGORIES.items()])
+        if u.path == "/case/assets/list":
+            return ok({"assets": [dict(a) for a in self.assets.values() if a["case"] == cid]})
+        if u.path == "/case/assets/add":
+            assert doc["asset_type_id"] in ASSET_TYPES.values(), "IRIS refuses an unknown type"
+            aid = len(self.assets) + 1
+            self.assets[aid] = {"asset_id": aid, "case": cid, **doc}
+            return ok({"asset_id": aid})
+        if u.path.startswith("/case/assets/update/"):
+            assert doc.get("asset_name") and doc.get("asset_type_id"), "IRIS needs both back"
+            self.assets[int(u.path.rsplit("/", 1)[1])].update(doc)
+            return ok({})
+        if u.path == "/case/timeline/events/list":
+            return ok({"timeline": [dict(e) for e in self.events.values() if e["case"] == cid]})
+        if u.path == "/case/timeline/events/add":
+            for field in ("event_title", "event_assets", "event_iocs", "event_date", "event_tz"):
+                assert field in doc, f"IRIS refuses an event with no {field}"
+            eid = len(self.events) + 1
+            self.events[eid] = {"event_id": eid, "case": cid, **doc}
+            return ok({"event_id": eid})
+        if u.path.startswith("/case/timeline/events/update/"):
+            self.events[int(u.path.rsplit("/", 1)[1])].update(doc)
+            return ok({})
         return 404, json.dumps({"status": "error", "message": "Resource not found"}).encode()
 
     def set_status(self, tid, status):
         """What the analyst does in IRIS's task list."""
         self.tasks[tid]["task_status_id"] = status
 
+
+# IRIS's own lists, as far as the desk reads them (IRIS v2.4.29).
+ASSET_TYPES = {"Account": 1, "Firewall": 2, "Linux - Server": 3}
+CATEGORIES = {"Unspecified": 1, "Initial Access": 4, "Execution": 5, "Impact": 15}
 
 SUGGESTION = {
     "action": "block_flow",
@@ -382,6 +416,136 @@ class _Manager:
 
     def active_response(self, agent_id, arguments):
         self.requests.append((agent_id, arguments[1]))
+
+
+class TheLabInTheCase(unittest.TestCase):
+    """The knowledge graph's hosts as the case's assets, the attack's steps as
+    its timeline: IRIS's own objects, which an analyst also edits."""
+
+    def setUp(self):
+        self.iris = FakeIris()
+        self.now = [100.0]
+        self.logged = []
+        g = A.kgmod.build_kg(cps_inv.inventory())
+        engine = A.ResponseEngine("rules", g, it=True)
+        self.service = A.Service(engine, None, None, lambda *a, **k: None)
+        self.desk = D.IrisDesk(
+            D.IrisApi("https://iris.lab", "key", http=self.iris),
+            ("run-1", "SOC suggestions — run-1"),
+            clock=lambda: self.now[0],
+            log=self.logged.append,
+            kg=A.kgmod.to_json(g),
+        )
+        self.desk.take()  # IRIS answers: the run's case is opened
+
+    def view(self, states=(), implicated=()):
+        view = self.service.view()
+        view["tree"] = [
+            {"node": n, "state": s, "belief": 0.9, "first_seen": t} for n, s, t in states
+        ]
+        view["hosts_implicated"] = list(implicated)
+        return view
+
+    def asset(self, host):
+        return next(a for a in self.iris.assets.values() if a["asset_name"] == host)
+
+    def test_every_host_of_the_lab_is_an_asset_filed_once(self):
+        self.desk.publish(self.view())
+        self.desk.publish(self.view())
+        names = sorted(a["asset_name"] for a in self.iris.assets.values())
+        self.assertEqual(names, ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"])
+        self.assertEqual(self.asset("firewall")["asset_type_id"], ASSET_TYPES["Firewall"])
+        hmi = self.asset("hmi")
+        self.assertEqual(hmi["asset_type_id"], ASSET_TYPES["Linux - Server"])
+        self.assertEqual(hmi["asset_ip"], "10.10.0.20")
+        self.assertIn("Services: diag-http tcp/8080", hmi["asset_description"])
+        self.assertEqual(hmi["asset_compromise_status_id"], D.TO_BE_DETERMINED)
+
+    def test_an_asset_already_in_the_case_is_adopted(self):
+        (cid,) = self.iris.cases
+        self.iris.assets[1] = {"asset_id": 1, "case": cid, "asset_name": "hmi", "asset_type_id": 3}
+        self.desk.publish(self.view())
+        self.assertEqual(
+            sum(a["asset_name"] == "hmi" for a in self.iris.assets.values()), 1, "hmi twice"
+        )
+
+    def test_an_implicated_host_is_marked_compromised_once(self):
+        self.desk.publish(self.view())
+        self.asset("hmi")["asset_description"] = "the analyst's own notes"
+        self.desk.publish(self.view(implicated=["hmi"]))
+        hmi = self.asset("hmi")
+        self.assertEqual(hmi["asset_compromise_status_id"], D.COMPROMISED)
+        self.assertEqual(hmi["asset_description"], "the analyst's own notes", "notes overwritten")
+        self.assertEqual(self.asset("engine")["asset_compromise_status_id"], D.TO_BE_DETERMINED)
+        # The analyst knows better: the SOC does not overrule them at its next step.
+        hmi["asset_compromise_status_id"] = 2
+        self.desk.publish(self.view(implicated=["hmi"]))
+        self.assertEqual(self.asset("hmi")["asset_compromise_status_id"], 2)
+
+    def test_a_step_that_happened_is_a_timeline_event_linking_its_hosts(self):
+        view = self.view([("it_access", "confirmed", 1794612574.25)], implicated=["attacker"])
+        self.desk.publish(view)
+        self.desk.publish(view)
+        (event,) = self.iris.events.values()
+        self.assertEqual(
+            event["event_title"], "Initial access to the HMI's web application [T1190]"
+        )
+        self.assertEqual(event["event_category_id"], CATEGORIES["Initial Access"])
+        linked = {self.asset("attacker")["asset_id"], self.asset("hmi")["asset_id"]}
+        self.assertEqual(set(event["event_assets"]), linked, "IRIS's graph draws these links")
+        self.assertTrue(event["event_in_graph"])
+        self.assertEqual(event["event_date"], "2026-11-13T23:29:34.250000", "when it was seen")
+        self.assertEqual(event["event_tags"], "cps-soc,step,it_access")
+
+    def test_only_steps_taken_to_have_happened_and_no_gate_are_filed(self):
+        states = [("breaker_open", "suspected", 5.0), ("via_hmi", "confirmed", 5.0)]
+        self.desk.publish(self.view(states))
+        self.assertEqual(self.iris.events, {}, "a suspicion, or a gate, filed as an event")
+
+    def test_a_step_first_inferred_then_confirmed_stays_one_event(self):
+        self.desk.publish(self.view([("it_exec", "inferred", None)], implicated=["attacker"]))
+        (event,) = self.iris.events.values()
+        self.assertIn("inferred", event["event_content"])
+        self.assertTrue(event["event_date"], "a step never seen is dated when it was inferred")
+        self.desk.publish(self.view([("it_exec", "confirmed", 9.0)], implicated=["attacker"]))
+        (event,) = self.iris.events.values()
+        self.assertIn("confirmed", event["event_content"])
+        self.assertEqual(event["event_category_id"], CATEGORIES["Execution"])
+
+    def test_a_step_with_no_technique_has_the_unspecified_category(self):
+        self.desk.publish(self.view([("pivot", "inferred", 3.0)]))
+        (event,) = self.iris.events.values()
+        self.assertEqual(event["event_category_id"], CATEGORIES["Unspecified"])
+        self.assertNotIn("[", event["event_title"])
+
+    def test_an_event_iris_created_before_timing_out_is_not_filed_twice(self):
+        real, timed_out = self.iris.__call__, []
+
+        def slow(method, url, headers, body):
+            status, raw = real(method, url, headers, body)
+            if "/case/timeline/events/add" in url and not timed_out:
+                timed_out.append(url)
+                raise TimeoutError("The read operation timed out")
+            return status, raw
+
+        self.desk.api.http = slow
+        view = self.view([("it_access", "confirmed", 5.0)], implicated=["attacker"])
+        self.desk.publish(view)  # must not raise into the SOC's step
+        self.assertTrue(timed_out and self.logged)
+        self.desk.publish(view)
+        self.assertEqual(len(self.iris.events), 1, "IRIS is not asked again at once")
+        self.now[0] += D.LAB_RETRY_S
+        self.desk.publish(view)
+        self.assertEqual(len(self.iris.events), 1, "the step is twice on the timeline")
+        calls = len(self.iris.calls)
+        self.desk.publish(view)
+        self.assertEqual(len(self.iris.calls), calls, "a filed step still costs a call per step")
+
+    def test_a_desk_given_no_graph_files_neither(self):
+        desk = D.IrisDesk(D.IrisApi("https://iris.lab", "key", http=self.iris), ("run-2", "x"))
+        desk.take()
+        desk.publish(self.view([("it_access", "confirmed", 5.0)], implicated=["hmi"]))
+        self.assertEqual((self.iris.assets, self.iris.events), ({}, {}))
 
 
 if __name__ == "__main__":

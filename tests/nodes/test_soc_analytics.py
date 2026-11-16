@@ -207,6 +207,31 @@ class Loop(unittest.TestCase):
         self.assertEqual([r for r in rows(rec, "action") if r["machine"]], [])
 
 
+class View(unittest.TestCase):
+    """What the SOC's desks and feeds read of it beyond the suggestions."""
+
+    def test_the_view_places_the_attack_on_the_lab(self):
+        svc, foll, _api, _rec, _now = service()
+        foll.feed(alert("100100", finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0)))
+        svc.step()
+        view = svc.view()
+        self.assertIn("hmi", view["hosts_implicated"], "the source of the finding")
+        seen = {n["node"]: n for n in view["tree"]}
+        self.assertEqual(seen["breaker_open"]["first_seen"], 1.0, "when the step was first seen")
+
+        def targets(n):
+            yield n["id"], n["targets"]
+            for child in n["children"]:
+                yield from targets(child)
+
+        aimed = dict(targets(view["structure"]))
+        self.assertTrue(aimed["breaker_open"], "the step no longer says what it is aimed at")
+        for node, ids in aimed.items():
+            for ident in ids:
+                self.assertIn(ident, G, f"{node} is aimed at something the graph does not hold")
+        json.dumps(view)  # the console serves it as JSON
+
+
 class Approval(unittest.TestCase):
     def test_delay_holds_an_action_until_it_is_due(self):
         svc, foll, api, rec, now = service(approval="delay:5", policy="rules")

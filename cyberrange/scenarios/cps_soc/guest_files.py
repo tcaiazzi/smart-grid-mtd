@@ -35,8 +35,10 @@ DASHBOARD_FILES = [
     ("nodes/wazuh/dashboard/opensearch_dashboards.yml", "/opensearch_dashboards.yml"),
     ("nodes/wazuh/dashboard/wazuh.yml", "/wazuh.yml"),
     ("nodes/wazuh/dashboard/wazuh-dashboard-start.sh", "/wazuh-dashboard-start.sh"),
-    # The lab's own view, the attack tree, and what creates it in the dashboard.
+    # The lab's own views, the attack tree and the knowledge graph, and what
+    # creates them in the dashboard.
     ("nodes/wazuh/dashboard/attack-tree.vega.json", "/attack-tree.vega.json"),
+    ("nodes/wazuh/dashboard/knowledge-graph.vega.json", "/knowledge-graph.vega.json"),
     ("nodes/wazuh/dashboard/dashboard_objects.py", "/dashboard_objects.py"),
 ]
 
