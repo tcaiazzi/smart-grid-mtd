@@ -300,6 +300,12 @@ class WireProcess(unittest.TestCase):
         self.assertEqual(unsafe[0]["entities"]["src"], HMI_IP)
         blamed = {f["entities"]["register"] for f in unsafe}
         self.assertEqual(blamed, {reg.HR_CTRL_MODE, reg.HR_DG_SETPOINT})
+        setpoint = [f for f in unsafe if f["entities"]["register"] == reg.HR_DG_SETPOINT][0]
+        self.assertEqual(
+            (setpoint["evidence"]["prev"], setpoint["evidence"]["value"]),
+            (20.0, 60.0),
+            "without the replaced value the SOC cannot tell a jump from a ramp step",
+        )
         self.assertLessEqual(unsafe[0]["evidence"]["lag_s"], s.UNSAFE_WINDOW_S)
         self.assertGreater(unsafe[0]["evidence"]["write_t"], t_write - 0.1)
         self.assertTrue(self.findings("manual_mode_excursion"))

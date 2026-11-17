@@ -39,8 +39,19 @@ from cyberrange.core.cli import build_parser, default_args
 
 log = logging.getLogger("cps_campaign")
 
+# The default grid stays the three fixed-write attacks: a campaign's length and
+# its comparability with earlier ones depend on it. Every other attack mode is
+# valid in --modes but has to be asked for.
 DEFAULT_MODES = ("normal", "setpoint-overvoltage", "breaker-open", "manual-hijack")
-ATTACK_MODES = ("setpoint-overvoltage", "breaker-open", "manual-hijack")
+ATTACK_MODES = (
+    "setpoint-overvoltage",
+    "breaker-open",
+    "manual-hijack",
+    "slow-ramp",
+    "setpoint-oscillation",
+    "breaker-chatter",
+)
+KNOWN_MODES = ("normal",) + ATTACK_MODES
 # Set per run by the campaign, so not taken from the command line.
 PER_RUN = ("out_dir", "run_id", "seed", "attack", "attack_mode", "progress_file")
 
@@ -74,11 +85,11 @@ def parse_modes(spec):
     """Grid modes: "normal", a scripted attack mode, or "planner:<profile>"
     (the tree-guided attacker with that profile)."""
     modes = [m.strip() for m in str(spec).split(",") if m.strip()]
-    ok = set(DEFAULT_MODES) | {f"planner:{p}" for p in PROFILES}
+    ok = set(KNOWN_MODES) | {f"planner:{p}" for p in PROFILES}
     bad = [m for m in modes if m not in ok]
     if bad or not modes:
         raise ValueError(
-            f"unknown modes {bad}; choose from {', '.join(DEFAULT_MODES)} "
+            f"unknown modes {bad}; choose from {', '.join(KNOWN_MODES)} "
             f"or planner:<{'|'.join(PROFILES)}>"
         )
     return modes

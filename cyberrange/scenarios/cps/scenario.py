@@ -27,9 +27,23 @@ from cyberrange.planes.traffic import components as traffic
 
 log = logging.getLogger("scenarios.cps")
 
-ATTACK_MODES = ("setpoint-overvoltage", "breaker-open", "manual-hijack")
+ATTACK_MODES = (
+    "setpoint-overvoltage",
+    "breaker-open",
+    "manual-hijack",
+    "slow-ramp",
+    "setpoint-oscillation",
+    "breaker-chatter",
+)
 PROFILES = ("opportunistic", "targeted", "stealthy")
-GOALS = ("setpoint_oor", "breaker_open", "mode_hijack")
+GOALS = (
+    "setpoint_oor",
+    "breaker_open",
+    "mode_hijack",
+    "setpoint_ramp",
+    "setpoint_oscillation",
+    "breaker_chatter",
+)
 RESPONSE_POLICIES = ("off", "rules", "solver")
 LEARN_MARGIN_S = 5.0  # the model's calibration must end this long before the attack
 ACCESS_LOG = "/vuln_app.access.jsonl"

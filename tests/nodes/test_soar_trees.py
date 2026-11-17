@@ -81,7 +81,8 @@ class CPSTrees(unittest.TestCase):
         self.assertTrue(by["isolate_hmi"].requires_approval)
         # Every impact leaf can be undone by some countermeasure.
         restorable = {n for c in self.cms for n in c.restores}
-        self.assertTrue({"setpoint_oor", "breaker_open", "mode_hijack"} <= restorable)
+        leaves = {n.id for n in trees.index(self.tree)["ot_action"].children}
+        self.assertEqual(leaves - restorable, set(), "an impact with no way back")
 
     def test_json(self):
         data = json.loads(json.dumps(trees.to_json(self.tree, self.cms)))

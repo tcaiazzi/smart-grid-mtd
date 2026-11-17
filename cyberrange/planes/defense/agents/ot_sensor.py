@@ -308,7 +308,7 @@ class ProcessRules:
     has stepped on it)."""
 
     def __init__(self):
-        self.last_writes = []  # [(t, src, dst, unit, address, value)] state-changing writes
+        self.last_writes = []  # [(t, src, dst, unit, address, value, prev)] state-changing writes
         self.blamed = set()  # writes already reported as unsafe
         self.hr_state = {}  # address -> value in force (from writes / fc03 reads)
         self.ctrl_mode = reg.CTRL_AUTO
@@ -329,7 +329,7 @@ class ProcessRules:
             return
         if value is not None and prev is not None and abs(value - prev) < 1e-9:
             return  # no change -> not a suspect
-        self.last_writes.append((t, src, dst, unit, address, value))
+        self.last_writes.append((t, src, dst, unit, address, value, prev))
         self.last_writes = [w for w in self.last_writes if t - w[0] <= UNSAFE_WINDOW_S]
 
     @staticmethod
@@ -368,7 +368,7 @@ class ProcessRules:
             ]
             for w in recent:
                 self.blamed.add(w)
-                wt, src, dst, unit, addr, value = w
+                wt, src, dst, unit, addr, value, prev = w
                 findings.append(
                     _finding(
                         "unsafe_command",
@@ -381,6 +381,7 @@ class ProcessRules:
                         {
                             **ev,
                             "value": value,
+                            "prev": prev,  # what the write replaced: its size tells a ramp
                             "write_t": round(wt, 3),
                             "lag_s": round(t - wt, 3),
                             "ts": round(t, 3),

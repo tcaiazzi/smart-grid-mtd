@@ -12,6 +12,8 @@ CPS_STEP         ?= 1.0
 CPS_DETECTORS    ?= rules,model
 # setpoint-overvoltage (loud, PLC recovers) | breaker-open (policy violation)
 # | manual-hijack (stealthy: in-range writes from the HMI, impact persists)
+# | slow-ramp (MANUAL, setpoint walked up in small steps) | setpoint-oscillation
+# (MANUAL, setpoint swung between two levels) | breaker-chatter (open/re-close)
 CPS_ATTACK_MODE  ?= setpoint-overvoltage
 CPS_SEED_FLAG    := $(if $(SEED),--seed $(SEED))
 # Campaigns (cps-campaign): reuse the same CPS_CAMPAIGN name to resume one.

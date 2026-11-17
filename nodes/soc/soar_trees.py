@@ -243,6 +243,30 @@ def cps_attack_tree(g):
                 targets=[hr(reg.HR_CTRL_MODE), hr(reg.HR_DG_SETPOINT)],
                 impact=0.9,
             ),
+            Node(
+                "setpoint_ramp",
+                "MANUAL authority taken, DG setpoint ramped up in small steps",
+                attck="T0831",
+                attck_name="Manipulation of Control",
+                targets=[hr(reg.HR_CTRL_MODE), hr(reg.HR_DG_SETPOINT)],
+                impact=0.8,
+            ),
+            Node(
+                "setpoint_oscillation",
+                "MANUAL authority taken, DG setpoint swung between levels",
+                attck="T0831",
+                attck_name="Manipulation of Control",
+                targets=[hr(reg.HR_CTRL_MODE), hr(reg.HR_DG_SETPOINT)],
+                impact=0.7,
+            ),
+            Node(
+                "breaker_chatter",
+                "Feeder breaker opened and re-closed repeatedly",
+                attck="T0855",
+                attck_name="Unauthorized Command Message",
+                targets=[hr(reg.HR_SWITCH_CMD)],
+                impact=0.85,
+            ),
         ],
     )
 
@@ -313,7 +337,7 @@ def cps_countermeasures(g, it=False):
     c = cps_context(g)
     flow = f"-s {c['hmi_ip']} -d {c['engine_ip']} -p tcp --dport {c['modbus_port']}"
     port = c["modbus_port"]
-    ot_leaves = ["setpoint_oor", "breaker_open", "mode_hijack"]
+    ot_leaves = [n.id for n in index(cps_attack_tree(g))["ot_action"].children]
     cms = [
         Countermeasure(
             "notify",
@@ -377,7 +401,7 @@ def cps_countermeasures(g, it=False):
                 f"{reg.HR_DG_SETPOINT}={reg.encode(reg.DG_NOMINAL_KW, DG_SCALE)}"
             ],
             revert=[],
-            restores=["mode_hijack", "setpoint_oor"],
+            restores=["mode_hijack", "setpoint_oor", "setpoint_ramp", "setpoint_oscillation"],
             time_to_effect_s=1.0,
             op_cost=0.1,
             energy_cost=0.02,
@@ -390,7 +414,7 @@ def cps_countermeasures(g, it=False):
             c["firewall"],
             apply=[f"python3 ot_write.py {c['engine_ip']} {port} {reg.HR_SWITCH_CMD}=0"],
             revert=[],
-            restores=["breaker_open"],
+            restores=["breaker_open", "breaker_chatter"],
             time_to_effect_s=1.0,
             op_cost=0.1,
             energy_cost=0.02,

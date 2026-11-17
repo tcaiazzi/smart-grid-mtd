@@ -89,7 +89,7 @@ has the link gets in.
 
 ### Goal
 
-Reach a physical effect on the plant. There are three, differing in noise and in how
+Reach a physical effect on the plant. There are six, differing in noise and in how
 long they last:
 
 | Effect | How | How noticeable | What happens |
@@ -97,6 +97,9 @@ long they last:
 | Out-of-range setpoint | DG power beyond the maximum | very | the PLC rejects it and recovers: it must be repeated to have an effect |
 | Opening the breaker | `switch_cmd = 1` | very | the line is cut off until someone recloses it |
 | Taking manual control | `ctrl_mode = 1`, then a high but legal setpoint | little | every value is within the norm and comes from the HMI; the PLC does not correct it, the effect stays |
+| Ramping the setpoint | `ctrl_mode = 1`, then the setpoint raised 1 kW at a time | least | the same effect as manual control, reached with no single jump; it takes about 40 s |
+| Swinging the setpoint | `ctrl_mode = 1`, then the setpoint alternated between 55 and 5 kW | fairly | the voltage swings for as long as the writes go on |
+| Chattering the breaker | `switch_cmd` alternated between 1 and 0 | very | the line is cut off and restored over and over, and ends cut off |
 
 ### The path
 
@@ -105,7 +108,7 @@ The plant is reached only by going through the HMI, in this order:
 1. **Initial access**: exploit the HMI's diagnostics application.
 2. **Command execution** on the HMI.
 3. **Pivot**: from the HMI, reach the engine on the Modbus port.
-4. **Action on the plant**: one of the three writes above.
+4. **Action on the plant**: one of the six actions above.
 
 ### The console
 

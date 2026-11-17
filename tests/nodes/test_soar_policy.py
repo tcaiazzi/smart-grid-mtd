@@ -25,11 +25,27 @@ SCENARIOS = {
         finding("unsafe_command", 2.0, HMI, "ctrl_mode", conf=0.85, value=1.0),
         finding("manual_mode_excursion", 3.0, None, "ctrl_mode"),
     ],
+    # Each step is too small to be a jump; the excursion comes with the last ones.
+    "slow-ramp": [
+        finding("unsafe_command", 30.0, HMI, "dg_setpoint", conf=0.85, value=47.0, prev=46.0),
+        finding("unsafe_command", 30.0, HMI, "dg_setpoint", conf=0.85, value=48.0, prev=47.0),
+    ],
+    "setpoint-oscillation": [
+        finding("unsafe_command", 2.0, HMI, "dg_setpoint", conf=0.85, value=55.0, prev=20.0),
+        finding("unsafe_command", 5.0, HMI, "dg_setpoint", conf=0.85, value=5.0, prev=55.0),
+    ],
+    "breaker-chatter": [
+        finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0),
+        finding("policy_violation", 3.0, HMI, "switch_cmd", value=0.0),
+    ],
 }
 EXPECTED = {
     "setpoint-overvoltage": {"block_flow"},
     "breaker-open": {"block_flow", "restore_breaker"},
     "manual-hijack": {"block_flow", "force_auto"},
+    "slow-ramp": {"block_flow", "force_auto"},
+    "setpoint-oscillation": {"block_flow", "force_auto"},
+    "breaker-chatter": {"block_flow", "restore_breaker"},
 }
 
 

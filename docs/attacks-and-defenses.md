@@ -20,10 +20,13 @@ telemetry-shaped events that the ledger mirrors onto the dashboard.
 | **ReconAttacker** | Like `PlannedAttacker`, but **not** handed the tree: it derives one by reconnaissance (nmap on the IT side, then living off the land on the compromised HMI) and plans on that belief tree. The `cps-recon` scenario. |
 | **RedConsole** | The same steps as the planner, but run **by a person** one at a time from a console on the attacker node — the red team's seat in the playground. |
 
-The three physical effects an attack aims for differ in how noisy and how durable
+The physical effects an attack aims for differ in how noisy and how durable
 they are: pushing the DG setpoint out of range (loud, the PLC recovers), opening the
 line breaker (loud, stays open until reclosed), and taking manual control then
-writing a high-but-legal setpoint (quiet, the PLC does not correct it). The
+writing a high-but-legal setpoint (quiet, the PLC does not correct it). Three more
+vary their writes over time: ramping the setpoint up in small steps (the quietest),
+swinging it between two legal levels, and opening and re-closing the breaker over
+and over. The
 [playground guide](playground-red-vs-blue.md) lays them out for players.
 
 ### MQTT smart grid

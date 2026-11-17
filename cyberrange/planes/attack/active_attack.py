@@ -29,11 +29,21 @@ ATTACK_TARGET = {
         {"register": 2, "name": "ctrl_mode", "value": 1.0},
         {"register": 0, "name": "dg_setpoint", "value": 60.0},
     ],
+    "slow-ramp": [
+        {"register": 2, "name": "ctrl_mode", "value": 1.0},
+        {"register": 0, "name": "dg_setpoint", "value": 60.0},  # where the ramp ends
+    ],
+    "setpoint-oscillation": [
+        {"register": 2, "name": "ctrl_mode", "value": 1.0},
+        {"register": 0, "name": "dg_setpoint", "value": 55.0},
+        {"register": 0, "name": "dg_setpoint", "value": 5.0},
+    ],
+    "breaker-chatter": [{"register": 1, "name": "switch_cmd", "value": 1.0}],
 }
 REGISTER_NAMES = {t["register"]: t["name"] for ts in ATTACK_TARGET.values() for t in ts}
 # Writes that are in the legitimate envelope and come from an allowed host:
 # invisible to the source/range rules (the point of the stealthy mode).
-STEALTHY_MODES = {"manual-hijack"}
+STEALTHY_MODES = {"manual-hijack", "slow-ramp", "setpoint-oscillation"}
 
 
 def parse_exploit_events(text: str):

@@ -133,7 +133,7 @@ class Planner(unittest.TestCase):
 
     def test_stealthy_prefers_quiet_impact(self):
         s, rec = self.plan(profile="stealthy")
-        self.assertEqual(rec.calls[-1], "mode_hijack")  # lowest detectability
+        self.assertEqual(rec.calls[-1], "setpoint_ramp")  # lowest detectability
 
     def test_blocked_pivot_defends(self):
         # The responder blocked the flow: the pivot probe fails, every OT leaf
@@ -148,7 +148,7 @@ class Planner(unittest.TestCase):
     def test_blocked_impact_tries_alternative_then_stops(self):
         # The write of the first-choice leaf fails; the planner tries another
         # impact leaf (prereqs already done) and, that failing too, stops.
-        s, rec = self.plan(block={"setpoint_oor", "breaker_open", "mode_hijack"})
+        s, rec = self.plan(block=set(S.IMPACT_MODE))
         self.assertFalse(s["success"])
         self.assertEqual(s["stage_reached"], "pivot")
         self.assertGreaterEqual(len([c for c in rec.calls if c in S.IMPACT_MODE]), 2)
@@ -161,10 +161,7 @@ class Planner(unittest.TestCase):
     def test_every_choice_of_impact_is_told_with_what_was_open(self):
         plans = []
         p = AttackPlanner(self.tree, seed=1)
-        p.run(
-            Recorder(block={"setpoint_oor", "breaker_open", "mode_hijack"}),
-            on_plan=lambda **plan: plans.append(plan),
-        )
+        p.run(Recorder(block=set(S.IMPACT_MODE)), on_plan=lambda **plan: plans.append(plan))
         self.assertGreaterEqual(len(plans), 2, "a re-plan after a failed impact went untold")
         first, second = plans[0], plans[1]
         self.assertEqual((first["reason"], second["reason"]), ("initial", "replan"))

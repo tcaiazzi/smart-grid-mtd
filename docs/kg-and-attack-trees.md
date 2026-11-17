@@ -208,7 +208,7 @@ A tree is made of `trees.Node` objects:
 
 ### 3.2 The CPS tree
 
-`cps_attack_tree(g)` returns 12 nodes, 8 of them leaves:
+`cps_attack_tree(g)` returns 15 nodes, 11 of them leaves:
 
 ```
 impact  OR  Physical impact on the feeder
@@ -220,7 +220,10 @@ impact  OR  Physical impact on the feeder
 │   └── ot_action  OR  Manipulate the plant over Modbus
 │       ├── setpoint_oor   T0855  impact 0.6   → reg:hr:0   setpoint outside its envelope
 │       ├── breaker_open   T0855  impact 1.0   → reg:hr:1   feeder breaker opened
-│       └── mode_hijack    T0831  impact 0.9   → reg:hr:2, reg:hr:0   MANUAL taken, in-range unsafe dispatch
+│       ├── mode_hijack    T0831  impact 0.9   → reg:hr:2, reg:hr:0   MANUAL taken, in-range unsafe dispatch
+│       ├── setpoint_ramp  T0831  impact 0.8   → reg:hr:2, reg:hr:0   MANUAL taken, setpoint ramped up in small steps
+│       ├── setpoint_oscillation  T0831  impact 0.7   → reg:hr:2, reg:hr:0   MANUAL taken, setpoint swung between levels
+│       └── breaker_chatter  T0855  impact 0.85  → reg:hr:1   feeder breaker opened and re-closed repeatedly
 └── direct_ot  AND  From a host without a Modbus role
     ├── ot_foothold        precondition: a host outside the Modbus roles reaches engine:5020
     └── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
@@ -293,10 +296,10 @@ two lists keep them apart. The solver depends on the difference (§6.2).
 | Id | Runs on | Prevents | Restores | t (s) | op | energy | Approval | Order |
 |---|---|---|---|---|---|---|---|---|
 | `notify` | — | — | — | 0 | 0 | 0 | | 90 |
-| `block_flow` | firewall | pivot + the 3 impact leaves | — | 0.5 | 0.5 | 0.01 | | 10 |
+| `block_flow` | firewall | pivot + the 6 impact leaves | — | 0.5 | 0.5 | 0.01 | | 10 |
 | `isolate_hmi` | hmi | it_access, it_exec, pivot + leaves | — | 0.5 | 0.8 | 0.01 | **yes** | 20 |
-| `force_auto` | firewall | — | mode_hijack, setpoint_oor | 1.0 | 0.1 | 0.02 | | 30 |
-| `restore_breaker` | firewall | — | breaker_open | 1.0 | 0.1 | 0.02 | | 40 |
+| `force_auto` | firewall | — | mode_hijack, setpoint_oor, setpoint_ramp, setpoint_oscillation | 1.0 | 0.1 | 0.02 | | 30 |
+| `restore_breaker` | firewall | — | breaker_open, breaker_chatter | 1.0 | 0.1 | 0.02 | | 40 |
 | `kill_proc_tree` *(IT)* | hmi | it_exec, pivot + leaves | — | 0.3 | 0.15 | 0.01 | | 5 |
 | `block_web_src` *(IT)* | hmi | it_access, it_exec, pivot + leaves | — | 0.4 | 0.2 | 0.01 | | 6 |
 
@@ -390,10 +393,10 @@ of evidence:
 |---|---|---|
 | `web_injection_pattern` / `web_child_process` / `unexpected_modbus_client` | it | `it_access` / `it_exec` / `pivot`, command |
 | `out_of_range_command` | rules | `breaker_open` if the register is `switch_cmd`, else `setpoint_oor`; command |
-| `policy_violation` on `switch_cmd` | rules | `breaker_open`, command (other registers: `ot_action`) |
+| `policy_violation` on `switch_cmd` | rules | `breaker_open` when it opens, `breaker_chatter` when it re-closes; command (other registers: `ot_action`) |
 | `unauthorized_write*` / `unauthorized_read` | rules | `ot_write_unknown`, command (reads at half weight) |
 | `unsafe_command` from the PLC | rules | **nothing**: the regulator reacting to an excursion is a symptom, not a step |
-| `unsafe_command` on `dg_setpoint` | rules | inside the envelope → `mode_hijack`, outside → `setpoint_oor`; consequence |
+| `unsafe_command` on `dg_setpoint` | rules | outside the envelope → `setpoint_oor`; inside it, by how far the write moved the setpoint (`evidence.prev`): at most `RAMP_STEP_MAX_KW` → `setpoint_ramp`, a drop of `SWING_MIN_KW` or more → `setpoint_oscillation`, anything else → `mode_hijack`; consequence |
 | `unsafe_command` on `switch_cmd` / `ctrl_mode` | rules | `breaker_open` / `mode_hijack`; consequence |
 | `manual_mode_excursion` | rules | `mode_hijack`; consequence |
 | `behavioral_anomaly` | model | the leaves its top features hint at, at **half** weight (`MODEL_WEIGHT`) |
@@ -512,6 +515,9 @@ A fixed playbook keyed on **confirmed** nodes:
 | `setpoint_oor` | `block_flow` (the PLC rejects the value and recovers on its own) |
 | `breaker_open` | `block_flow`, `restore_breaker` |
 | `mode_hijack` | `block_flow`, `force_auto` |
+| `setpoint_ramp` | `block_flow`, `force_auto` |
+| `setpoint_oscillation` | `block_flow`, `force_auto` |
+| `breaker_chatter` | `block_flow`, `restore_breaker` |
 
 If nothing is confirmed and nothing has been applied yet, the policy notifies
 the operator once and does nothing else.
@@ -636,8 +642,15 @@ several modules. A new impact leaf touches all of these:
 | `trees.cps_countermeasures` | which actions prevent or restore it |
 | `policy.RulesPolicy.PLAYBOOK` / `TRIGGERS` | what the baseline does when it is confirmed |
 | `nodes/redteam/steps.py` `IMPACT_MODE`, `DETECTABILITY` | how the attacker realises it, and how loud it is |
+| `nodes/redteam/belief_tree.py` `IMPACT_META` | the attacker's own description of it, for the tree it derives by recon |
+| `planes/attack/agents/exploit_client.py` `ATTACKS` or `SCHEDULES`, `DEFAULT_REPEAT` | the writes of the mode that realises it |
+| `planes/attack/active_attack.py` `ATTACK_TARGET`, `STEALTHY_MODES` | the registers the ground truth names for that mode |
+| `scenarios/cps/scenario.py` `ATTACK_MODES`, `GOALS` and `campaign.py` `ATTACK_MODES` | so the mode and the goal can be chosen |
 | `scenarios/cps/metrics.py` `expected_response` | what a correct response to it is |
-| tests | `test_soar_trees`, `test_soar_mapping`, `test_soar_policy`, `test_attack_planner` |
+| tests | `test_soar_trees`, `test_soar_mapping`, `test_soar_policy`, `test_attack_planner`, `test_recon` |
+
+`tests/scenarios/cps/test_cps_impact_tables.py` fails when one of these copies
+names a different set of modes or leaves than the others.
 
 A new prerequisite step on an AND branch needs fewer changes:
 - `prerequisites` picks it up automatically;

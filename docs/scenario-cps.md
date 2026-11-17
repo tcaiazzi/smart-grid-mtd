@@ -151,6 +151,12 @@ the action on the plant (`CPS_ATTACK_MODE`):
 | `setpoint-overvoltage` | DG setpoint outside the envelope (200 kW) | Overvoltage at the DG bus and line overload. The PLC rejects the value and the plant recovers. | Low: the command is plainly out of range |
 | `breaker-open` | Opens the feeder breaker, which by policy no one may command remotely | The downstream section loses supply and the impact persists | Low: a role-policy violation |
 | `manual-hijack` | Takes MANUAL authority and dispatches 60 kW, within the DG's limits | Persistent overvoltage: the PLC has stood down, so the effect outlives the attacker | **High**: every value is legal and the source is the HMI, so source and range rules cannot see it |
+| `slow-ramp` | Takes MANUAL authority, then walks the DG setpoint from nominal to 60 kW in 1 kW steps | The same persistent overvoltage, reached gradually | **High**: as above, and no single write is a jump |
+| `setpoint-oscillation` | Takes MANUAL authority, then swings the DG setpoint between 55 and 5 kW | The feeder voltage swings with it for as long as the attacker writes | Medium: legal values from the HMI, but large repeated swings |
+| `breaker-chatter` | Opens and re-closes the feeder breaker over and over, ending open | The downstream section loses and regains supply repeatedly | Low: every write is a role-policy violation |
+
+The last three change their writes from one round to the next, on a schedule
+(`exploit_client.schedule`); the first three repeat one fixed sequence.
 
 Every attacker write is recorded with the instant it was issued (*ground
 truth*), and the detection metrics are computed against it.
@@ -242,7 +248,8 @@ make dashboard                                            # http://127.0.0.1:876
 ```
 
 `cps-campaign` (`cyberrange/scenarios/cps/campaign.py`) runs `CPS_MODES`
-(default `normal,setpoint-overvoltage,breaker-open,manual-hijack`) × `CPS_SEEDS`,
+(default `normal,setpoint-overvoltage,breaker-open,manual-hijack`; the other
+attack modes of §5 are valid but must be named) × `CPS_SEEDS`,
 seed-major, one lab at a time, under `output/campaigns/<name>/` — where every
 scenario's campaigns live. Each run in
 `runs/<mode>-s<seed>/` is scored as it finishes (`metrics.json`, `metrics.md`)
@@ -376,8 +383,9 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   `cyberrange/scenarios/cps/inventory.py` — the node software itself knows no scenario.
 - **Attack tree** (`nodes/soc/soar_trees.py`), a template of the chain grounded on the
   graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
-  the sanctioned HMI→plant flow → one of three impacts: setpoint out of range
-  (T0855), breaker open (T0855), MANUAL hijack (T0831). Preconditions are
+  the sanctioned HMI→plant flow → one of six impacts: setpoint out of range
+  (T0855), breaker open (T0855), MANUAL hijack (T0831), setpoint ramp (T0831),
+  setpoint oscillation (T0831), breaker chatter (T0855). Preconditions are
   checked on the graph, so removing the allow rule makes a branch infeasible.
   The ATT&CK mapping still has open review notes.
 - **Countermeasures**, the defence tree; each one *prevents* or *restores* tree

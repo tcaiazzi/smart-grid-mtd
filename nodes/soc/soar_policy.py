@@ -137,6 +137,9 @@ class RulesPolicy(_Base):
         "setpoint_oor": ["block_flow"],  # the PLC rejects the value and recovers
         "breaker_open": ["block_flow", "restore_breaker"],
         "mode_hijack": ["block_flow", "force_auto"],
+        "setpoint_ramp": ["block_flow", "force_auto"],
+        "setpoint_oscillation": ["block_flow", "force_auto"],
+        "breaker_chatter": ["block_flow", "restore_breaker"],
     }
     TRIGGERS = ["it_access", "it_exec"] + list(mapping.IMPACT_LEAVES)
 

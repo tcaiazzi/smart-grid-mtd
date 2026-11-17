@@ -39,6 +39,12 @@ IMPACT_META = {
                      "Unauthorized Command Message", 1.0, reg.HR_SWITCH_CMD),
     "mode_hijack": ("MANUAL authority taken, in-range unsafe dispatch", "T0831",
                     "Manipulation of Control", 0.9, reg.HR_CTRL_MODE),
+    "setpoint_ramp": ("MANUAL authority taken, DG setpoint ramped up in small steps", "T0831",
+                      "Manipulation of Control", 0.8, reg.HR_CTRL_MODE),
+    "setpoint_oscillation": ("MANUAL authority taken, DG setpoint swung between levels", "T0831",
+                             "Manipulation of Control", 0.7, reg.HR_CTRL_MODE),
+    "breaker_chatter": ("Feeder breaker opened and re-closed repeatedly", "T0855",
+                        "Unauthorized Command Message", 0.85, reg.HR_SWITCH_CMD),
 }  # fmt: skip
 
 

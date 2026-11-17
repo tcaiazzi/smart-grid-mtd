@@ -99,6 +99,14 @@ class Grammar(unittest.TestCase):
         with self.assertRaises(ValueError):
             cc.parse_modes("normal,nope")
 
+    def test_every_attack_mode_is_valid_but_the_default_grid_is_fixed(self):
+        self.assertEqual(cc.parse_modes(",".join(cc.KNOWN_MODES)), list(cc.KNOWN_MODES))
+        self.assertEqual(
+            cc.DEFAULT_MODES,
+            ("normal", "setpoint-overvoltage", "breaker-open", "manual-hijack"),
+            "a longer default grid changes every campaign run without --modes",
+        )
+
     def test_grid_is_seed_major(self):
         g = cc.build_grid(["normal", "manual-hijack"], [1, 2])
         self.assertEqual(

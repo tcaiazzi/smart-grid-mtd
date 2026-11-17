@@ -18,6 +18,9 @@ IMPACT_MODE = {
     "setpoint_oor": "setpoint-overvoltage",
     "breaker_open": "breaker-open",
     "mode_hijack": "manual-hijack",
+    "setpoint_ramp": "slow-ramp",
+    "setpoint_oscillation": "setpoint-oscillation",
+    "breaker_chatter": "breaker-chatter",
 }
 
 # How likely the sensors flag the step (0..1). The stealthy profile prefers the
@@ -29,6 +32,9 @@ DETECTABILITY = {
     "setpoint_oor": 0.9,  # out-of-range command, loud
     "breaker_open": 0.9,  # remote breaker write, policy violation
     "mode_hijack": 0.2,  # in-range writes from the HMI, quiet
+    "setpoint_ramp": 0.15,  # in-range and no single jump, quietest
+    "setpoint_oscillation": 0.6,  # in-range, but large repeated swings
+    "breaker_chatter": 0.9,  # remote breaker writes, over and over
 }
 
 STAGE_INDEX = {"it_access": 0, "it_exec": 1, "pivot": 2, "impact": 3}

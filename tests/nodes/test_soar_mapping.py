@@ -101,6 +101,40 @@ class Mapping(unittest.TestCase):
         # In-range setpoint: the hijack, not the out-of-range leaf.
         self.assertEqual(self.confirmed_leaves(snap), ["mode_hijack"])
 
+    def test_small_unsafe_steps_are_the_ramp_not_the_hijack(self):
+        snap = self.run_findings(
+            [
+                finding(
+                    "unsafe_command", 30.0, HMI, "dg_setpoint", conf=0.85, value=v, prev=v - 1.0
+                )
+                for v in (46.0, 47.0, 48.0)
+            ]
+        )
+        self.assertEqual(self.confirmed_leaves(snap), ["setpoint_ramp"])
+
+    def test_a_large_drop_is_the_oscillation(self):
+        snap = self.run_findings(
+            [finding("unsafe_command", 5.0, HMI, "dg_setpoint", conf=0.85, value=5.0, prev=55.0)]
+        )
+        self.assertEqual(self.confirmed_leaves(snap), ["setpoint_oscillation"])
+
+    def test_an_unsafe_jump_up_stays_the_hijack(self):
+        # With or without the replaced value: older sensors do not report it.
+        for extra in ({}, {"prev": 20.0}):
+            snap = self.run_findings(
+                [finding("unsafe_command", 2.0, HMI, "dg_setpoint", conf=0.85, value=60.0, **extra)]
+            )
+            self.assertEqual(self.confirmed_leaves(snap), ["mode_hijack"], extra)
+
+    def test_an_unauthorised_re_close_is_the_chatter(self):
+        snap = self.run_findings(
+            [
+                finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0),
+                finding("policy_violation", 3.0, HMI, "switch_cmd", value=0.0),
+            ]
+        )
+        self.assertEqual(self.confirmed_leaves(snap), ["breaker_chatter", "breaker_open"])
+
     def test_prerequisites_inferred(self):
         snap = self.run_findings(
             [finding("out_of_range_command", 1.0, HMI, "dg_setpoint", value=200.0)]

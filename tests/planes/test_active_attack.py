@@ -280,6 +280,19 @@ class AttackVsPLC(unittest.TestCase):
         self.assertEqual(st["mode"], reg.CTRL_AUTO)
         self.assertEqual(st["setpoint"], 20.0)  # back to nominal, not curtailed
 
+    def test_slow_ramp_walks_the_setpoint_up_under_the_plc(self):
+        events = self.attack("slow-ramp", repeat=8)
+        writes = [e for e in events if e["phase"] == "modbus_write"]
+        self.assertEqual((writes[0]["register"], writes[0]["value"]), (reg.HR_CTRL_MODE, 1.0))
+        ramp = [w["value"] for w in writes if w["register"] == reg.HR_DG_SETPOINT]
+        self.assertEqual(ramp, [25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0])
+        self.assertTrue(all(w["ok"] for w in writes))
+        time.sleep(3 * self.STEP)
+        st = self.state()
+        # Had the PLC kept authority it would have walked the ramp back down.
+        self.assertEqual((st["mode"], st["setpoint"]), (reg.CTRL_MANUAL, 60.0), st)
+        self.assertEqual(st["abnormal"], 1, st)
+
     def test_manual_hijack_persists_with_plc_running(self):
         events = self.attack("manual-hijack")
         writes = [e for e in events if e["phase"] == "modbus_write"]

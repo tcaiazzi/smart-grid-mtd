@@ -106,7 +106,17 @@ class BeliefTree(unittest.TestCase):
         self.assertEqual(tree["id"], "via_hmi")
         self.assertEqual(
             self._leaves(tree),
-            {"it_access", "it_exec", "pivot", "setpoint_oor", "breaker_open", "mode_hijack"},
+            {
+                "it_access",
+                "it_exec",
+                "pivot",
+                "setpoint_oor",
+                "breaker_open",
+                "mode_hijack",
+                "setpoint_ramp",
+                "setpoint_oscillation",
+                "breaker_chatter",
+            },
         )
 
     def test_no_foothold_nothing_feasible(self):
@@ -126,7 +136,17 @@ class BeliefTree(unittest.TestCase):
         }
         self.assertEqual(
             self._leaves(belief_tree.build(findings)),
-            {"it_access", "it_exec", "pivot", "setpoint_oor", "breaker_open", "mode_hijack"},
+            {
+                "it_access",
+                "it_exec",
+                "pivot",
+                "setpoint_oor",
+                "breaker_open",
+                "mode_hijack",
+                "setpoint_ramp",
+                "setpoint_oscillation",
+                "breaker_chatter",
+            },
         )
 
 

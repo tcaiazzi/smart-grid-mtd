@@ -35,7 +35,18 @@ SUSPECT_AT = 0.30
 MODEL_WEIGHT = 0.5  # the behavioural model alone never confirms a step
 EXPLAINED_AWAY = 0.4  # discount on consequence evidence once another leaf is confirmed
 COMMAND, CONSEQUENCE = "command", "consequence"
-IMPACT_LEAVES = ("setpoint_oor", "breaker_open", "mode_hijack")
+IMPACT_LEAVES = (
+    "setpoint_oor",
+    "breaker_open",
+    "mode_hijack",
+    "setpoint_ramp",
+    "setpoint_oscillation",
+    "breaker_chatter",
+)
+# An unsafe in-range setpoint write, read by how far it moved the setpoint: a
+# step this small is a ramp, a drop this large is the falling half of a swing.
+RAMP_STEP_MAX_KW = 2.5
+SWING_MIN_KW = 20.0
 
 # IT-sensor finding class -> the attack-tree step it directly confirms.
 _IT_KLASS_NODE = {
@@ -106,7 +117,9 @@ def evidence_from_finding(f, g):
         return [(leaf, conf, COMMAND)]
     if klass == "policy_violation":
         if name == "switch_cmd":
-            return [("breaker_open", conf, COMMAND)]
+            # Only the chatter ever re-closes the breaker without the right to.
+            closing = (f.get("evidence") or {}).get("value") == 0
+            return [("breaker_chatter" if closing else "breaker_open", conf, COMMAND)]
         return [("ot_action", conf, COMMAND)]
     if klass == "unsafe_command":
         if role == "plc":
@@ -120,8 +133,15 @@ def evidence_from_finding(f, g):
             # An unsafe setpoint *inside* the envelope is the hijack's signature
             # (legal value, wrong moment); outside it is the out-of-range leaf.
             value = (f.get("evidence") or {}).get("value")
+            prev = (f.get("evidence") or {}).get("prev")
             lo, hi = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][2:4]
             if value is not None and lo <= float(value) <= hi:
+                # Without the value it replaced, the write reads as the hijack.
+                moved = float(value) - float(prev) if prev is not None else None
+                if moved is not None and abs(moved) <= RAMP_STEP_MAX_KW:
+                    return [("setpoint_ramp", conf, CONSEQUENCE)]
+                if moved is not None and moved <= -SWING_MIN_KW:
+                    return [("setpoint_oscillation", conf, CONSEQUENCE)]
                 return [("mode_hijack", conf, CONSEQUENCE)]
             if value is not None:
                 return [("setpoint_oor", conf, CONSEQUENCE)]

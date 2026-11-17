@@ -229,6 +229,9 @@ runs on the attacker node.
 | `setpoint-overvoltage` | DG setpoint 200 kW (out of range) | Overvoltage at the DG bus; the PLC rejects the value and recovers |
 | `breaker-open` | feeder breaker open | Load de-energized |
 | `manual-hijack` | control mode MANUAL, then an in-range unsafe setpoint (60 kW) | Stealthy: in-envelope writes from an allowed host, with persistent impact |
+| `slow-ramp` | control mode MANUAL, then the setpoint from nominal to 60 kW in 1 kW steps | The hijack's impact, reached with no single jump |
+| `setpoint-oscillation` | control mode MANUAL, then the setpoint swung between 55 and 5 kW | The feeder voltage swings while the attacker writes |
+| `breaker-chatter` | feeder breaker opened and re-closed repeatedly, ending open | Load de-energized and re-energized over and over |
 
 | | |
 |---|---|
@@ -253,7 +256,7 @@ closes its path, it tries another branch, or stops.
 | `profile` | Chooses |
 |---|---|
 | `opportunistic` | the reachable impact with the highest impact first |
-| `targeted` | only `goal` (`setpoint_oor`, `breaker_open` or `mode_hijack`; required) |
+| `targeted` | only `goal` (`setpoint_oor`, `breaker_open`, `mode_hijack`, `setpoint_ramp`, `setpoint_oscillation` or `breaker_chatter`; required) |
 | `stealthy` | the least detectable reachable impact first |
 
 | | |
