@@ -42,9 +42,12 @@
     failed: { stroke: "var(--critical)", fill: null, dash: "4 3", label: "failed" },
     target: { stroke: "var(--serious)", fill: null, dash: "2 2", label: "its target" },
   };
-  // How an applied countermeasure shows on the topology (others: a generic tag).
+  // How an applied countermeasure shows on the topology, by its kind (others: a
+  // generic tag). A run recorded before kinds were has its ids for kinds.
   const CM_STYLE = {
     block_flow: { kind: "block", tag: "flow blocked" },
+    isolate_way: { kind: "isolate", tag: "isolated" },
+    isolate_ot_host: { kind: "isolate", tag: "isolated" },
     isolate_hmi: { kind: "isolate", tag: "isolated" },
     force_auto: { kind: "restore", tag: "AUTO + setpoint restored" },
     restore_breaker: { kind: "restore", tag: "breaker re-closed" },
@@ -126,7 +129,7 @@
     const tag = (host, text, color) => (tags[host] = tags[host] || []).push({ text, color });
     for (const id of Object.keys(ov.applied)) {
       const cm = T.cms[id]; if (!cm) continue;
-      const style = CM_STYLE[id] || { kind: "tag", tag: id };
+      const style = CM_STYLE[cm.kind || id] || { kind: "tag", tag: id };
       if (style.kind === "block") {
         for (const nid of cm.prevents || []) for (const tgt of (T.nodes[nid]?.targets || []))
           if (G.nodes[tgt]?.type === "flow_rule") blocked.add(tgt);

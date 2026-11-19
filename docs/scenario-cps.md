@@ -409,14 +409,14 @@ would have decided on a finished run's findings.
 How the knowledge graph and the attack tree are built, turned into a belief
 and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
 
-- **Knowledge graph** (`nodes/soc/soar_kg.py`, networkx), built from the
+- **Knowledge graph** (`nodes/common/soar_kg.py`, networkx), built from the
   inventory: hosts with their roles, zones and addresses, plus services, the
   plant's registers, role permissions (`ot_registers.ROLE_POLICY`) and the
   boundary FORWARD rules.
   `reachable(g, src, dst, port)` decides whether a host can reach a port on
   another from zones, addresses and rules. The CPS binding lives in
   `cyberrange/scenarios/cps/inventory.py` — the node software itself knows no scenario.
-- **Attack tree** (`nodes/soc/soar_trees.py`), a template of the chain grounded on the
+- **Attack tree** (`nodes/common/soar_trees.py`), a template of the chain grounded on the
   graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
   the sanctioned HMI→plant flow → one of six impacts: setpoint out of range
   (T0855), breaker open (T0855), MANUAL hijack (T0831), setpoint ramp (T0831),

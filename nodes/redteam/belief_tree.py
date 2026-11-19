@@ -2,110 +2,85 @@
 """belief_tree.py — turn what recon found into an attack tree the planner reads.
 
 The attacker does not receive the defender's tree; it builds its own *belief*
-from reconnaissance, in the same document shape the planner consumes
-(``tree_doc``: id, gate, children, impact, feasible, attck). The structure is the
-attacker's knowledge of the generic CPS pattern — exploit the web app, pivot
-through the HMI, write the plant's registers — and recon only sets which parts
-are ``feasible`` on this target and which impacts the discovered registers allow.
+from reconnaissance. Recon's findings become an inventory of the lab as the
+attacker knows it — the HMI it got a foothold on, the engine it found behind
+it, the registers it read, and a boundary it infers from the HMI talking to the
+engine — and the tree is derived from that inventory by the same generator the
+SOC runs on its full one (attack_graph.py). What the attacker never saw is not
+in its tree, or not feasible: tree fidelity scores the difference.
 
 Copied flat onto the attacker node with recon.py and red_recon_agent.py (see the
-scenario's guest_files.py). Stdlib only; reads the attacker's own vocabulary
-(steps.py) and the plant contract (ot_registers.py), never the defender's code.
+scenario's guest_files.py). Stdlib + networkx (through soar_kg).
 """
 
+import ipaddress
+
+import attack_graph
 import ot_registers as reg
+import soar_kg as kgmod
 
-AND, OR, LEAF = "AND", "OR", "LEAF"
-
-# The attacker's prior knowledge of the prerequisite steps (ATT&CK ids it would
-# attribute to each). Order follows steps.PREREQ_ORDER.
-PREREQ_META = {
-    "it_access": (
-        "Initial access to the HMI web app",
-        "T1190",
-        "Exploit Public-Facing Application",
-    ),
-    "it_exec": ("Command execution on the HMI host", "T1059", "Command and Scripting Interpreter"),
-    "pivot": ("Use the sanctioned HMI -> plant Modbus flow", None, None),
-}
-
-# The attacker's own catalogue of impacts: its *estimate* of each one's loss
-# weight and the register that realises it (names/scales from the plant contract).
-IMPACT_META = {
-    "setpoint_oor": ("DG setpoint written outside its envelope", "T0855",
-                     "Unauthorized Command Message", 0.6, reg.HR_DG_SETPOINT),
-    "breaker_open": ("Feeder breaker opened remotely", "T0855",
-                     "Unauthorized Command Message", 1.0, reg.HR_SWITCH_CMD),
-    "mode_hijack": ("MANUAL authority taken, in-range unsafe dispatch", "T0831",
-                    "Manipulation of Control", 0.9, reg.HR_CTRL_MODE),
-    "setpoint_ramp": ("MANUAL authority taken, DG setpoint ramped up in small steps", "T0831",
-                      "Manipulation of Control", 0.8, reg.HR_CTRL_MODE),
-    "setpoint_oscillation": ("MANUAL authority taken, DG setpoint swung between levels", "T0831",
-                             "Manipulation of Control", 0.7, reg.HR_CTRL_MODE),
-    "breaker_chatter": ("Feeder breaker opened and re-closed repeatedly", "T0855",
-                        "Unauthorized Command Message", 0.85, reg.HR_SWITCH_CMD),
-}  # fmt: skip
+GATEWAY = "gateway"  # the boundary the attacker infers, not one it saw
 
 
-def _node(node_id, label, gate=LEAF, children=None, attck=None, attck_name=None, impact=0.0,
-          feasible=True, targets=None):  # fmt: skip
+def _net(ip):
+    return str(ipaddress.ip_network(f"{ip}/24", strict=False))
+
+
+def _iface(name, ip, host=None):
+    """An interface on ``ip``'s /24 (the zone is named by its network); with
+    ``host``, at that host number of it rather than at ``ip``."""
+    net = ipaddress.ip_network(_net(ip))
+    addr = ip if host is None else str(net.network_address + host)
+    return {"name": name, "zone": _net(ip), "cidr": f"{addr}/{net.prefixlen}"}
+
+
+def inventory_of(findings):
+    """The lab as recon ``findings`` describe it:
+
+        {"foothold": {"ip","port"} | None,   # an HTTP host found on the IT scan
+         "ot": {"engine_ip","modbus_ok","modbus_port","registers": {addr: raw}} | {}}
+
+    A register is believed to exist when it was read, or — the engine answering
+    Modbus without an enumeration — from the known plant contract."""
+    foothold = findings.get("foothold")
+    ot = findings.get("ot") or {}
+    hosts, services, rules, plant_service, known = [], {}, [], None, None
+    if foothold:
+        hosts.append({"name": "hmi", "role": "hmi", "ifaces": [_iface("eth0", foothold["ip"])]})
+        services["hmi"] = [["web", "tcp", int(foothold["port"]), "http"]]
+    engine = ot.get("engine_ip")
+    if engine:
+        port = int(ot.get("modbus_port") or reg.MODBUS_PORT)
+        hosts.append({"name": "engine", "role": "plant", "ifaces": [_iface("eth0", engine)]})
+        services["engine"] = [["modbus", "tcp", port, "modbus"]]
+        plant_service = ["engine", "modbus"]
+        known = sorted(int(a) for a in (ot.get("registers") or {}))
+        if ot.get("modbus_ok") and not known:
+            known = sorted(reg.ACTUATOR_REGISTERS)
+        if foothold:
+            # The HMI talks to the engine on another network: something forwards
+            # that flow, and — as far as the attacker knows — that flow only.
+            hosts.append(
+                {
+                    "name": GATEWAY,
+                    "role": kgmod.BOUNDARY_ROLE,
+                    "ifaces": [_iface("eth0", foothold["ip"], 1), _iface("eth1", engine, 1)],
+                }
+            )
+            flow = f"-s {foothold['ip']} -d {engine} -p tcp --dport {port}"
+            rules = ["iptables -P FORWARD DROP", f"iptables -A FORWARD {flow} -j ACCEPT"]
     return {
-        "id": node_id,
-        "label": label,
-        "gate": gate,
-        "attck": attck,
-        "attck_name": attck_name,
-        "targets": targets or [],
-        "impact": impact,
-        "feasible": feasible,
-        "children": children or [],
+        "name": "belief",
+        "hosts": hosts,
+        "services": services,
+        "boundary": {"host": GATEWAY if rules else None, "rules": rules},
+        "plant_service": plant_service,
+        "known_registers": known,
     }
 
 
 def build(findings):
-    """Assemble the belief attack tree from recon ``findings``:
-
-        {"foothold": {"ip","port"} | None,   # an HTTP host found on the IT scan
-         "ot": {"engine_ip","modbus_ok","registers": {addr: raw}} | {}}
-
-    Returns the ``attack_tree`` document (root ``via_hmi``). Feasibility is set by
-    what recon confirmed; an impact is included only for a register the attacker
-    has reason to believe exists (discovered, or — the engine answering Modbus —
-    assumed from the known plant contract)."""
-    foothold = bool(findings.get("foothold"))
-    ot = findings.get("ot") or {}
-    pivot_ok = bool(ot.get("engine_ip"))
-    discovered = set((ot.get("registers") or {}).keys())
-    # The engine answered Modbus but the read did not enumerate: fall back to the
-    # known plant contract (the attacker has ot_registers), so impacts aren't lost.
-    if ot.get("modbus_ok") and not discovered:
-        discovered = set(reg.ACTUATOR_REGISTERS)
-
-    prereqs = []
-    for node_id in PREREQ_META:
-        label, attck, attck_name = PREREQ_META[node_id]
-        feasible = foothold if node_id in ("it_access", "it_exec") else pivot_ok
-        prereqs.append(_node(node_id, label, attck=attck, attck_name=attck_name, feasible=feasible))
-
-    impacts = []
-    for node_id in IMPACT_META:
-        label, attck, attck_name, impact, register = IMPACT_META[node_id]
-        impacts.append(
-            _node(
-                node_id,
-                label,
-                attck=attck,
-                attck_name=attck_name,
-                impact=impact,
-                feasible=pivot_ok and register in discovered,
-                targets=[f"reg:{reg.UNIT_ID}:hr:{register}"],
-            )
-        )
-
-    ot_action = _node("ot_action", "Manipulate the plant over Modbus", OR, children=impacts)
-    return _node(
-        "via_hmi",
-        "Through the HMI (the only host allowed across the boundary)",
-        AND,
-        children=prereqs + [ot_action],
-    )
+    """The belief attack tree (a tree document, as tree_doc reads it) from recon
+    ``findings``: every node says whether it is feasible on what was found."""
+    g = kgmod.build_kg(inventory_of(findings))
+    return attack_graph.attack_tree(g).to_dict(g)

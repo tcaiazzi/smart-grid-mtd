@@ -75,7 +75,7 @@ class Scoring(unittest.TestCase):
 
     def test_the_answer_to_falsified_readings_is_to_isolate_and_repair(self):
         fdi = {"kind": "fdi", "t": 14.0, "ok": True}
-        self.assertEqual(metrics.expected_response([fdi]), {"isolate_ews", "repair_arp"})
+        self.assertEqual(metrics.expected_response([fdi]), {"isolate_ot_host", "repair_arp"})
         self.assertEqual(
             metrics.expected_response([{"kind": "fdi", "ok": False}]),
             set(),
@@ -84,7 +84,7 @@ class Scoring(unittest.TestCase):
         hijack = {"kind": "modbus_write", "register_name": "ctrl_mode", "ok": True}
         self.assertEqual(
             metrics.expected_response([fdi, hijack]),
-            {"isolate_ews", "repair_arp", "block_flow", "force_auto"},
+            {"isolate_ot_host", "repair_arp", "block_flow", "force_auto"},
         )
 
 

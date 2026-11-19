@@ -1,4 +1,4 @@
-"""Attack tree + countermeasures of the CPS chain (nodes/soc/soar_trees.py),
+"""Attack tree + countermeasures of the CPS chain (nodes/common/soar_trees.py),
 grounded on the knowledge graph — the node's code, run on the host.
 
 Run: `.venv/bin/python -m pytest tests/nodes/test_soar_trees.py`.
@@ -12,6 +12,7 @@ from tests.helpers import guest_paths
 guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
 
 import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
+import attack_graph  # noqa: E402
 import soar_trees as trees  # noqa: E402
 
 from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
@@ -21,8 +22,8 @@ from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 class CPSTrees(unittest.TestCase):
     def setUp(self):
         self.g = kg.build_kg(cps_inv.inventory())
-        self.tree = trees.cps_attack_tree(self.g)
-        self.cms = trees.cps_countermeasures(self.g)
+        self.tree = attack_graph.attack_tree(self.g)
+        self.cms = attack_graph.countermeasures(self.g)
 
     def test_well_formed(self):
         idx = trees.index(self.tree)
@@ -54,9 +55,9 @@ class CPSTrees(unittest.TestCase):
         inv = cps_inv.inventory()
         inv["hosts"] = [h for h in inv["hosts"] if h["role"] != "engineering"]
         g2 = kg.build_kg(inv)
-        idx = trees.index(trees.cps_attack_tree(g2))
+        idx = trees.index(attack_graph.attack_tree(g2))
         self.assertFalse(trees.feasible(idx["direct_ot"], g2))
-        ids = {c.id for c in trees.cps_countermeasures(g2)}
+        ids = {c.id for c in attack_graph.countermeasures(g2)}
         self.assertFalse({"isolate_ews", "repair_arp"} & ids, "a response with no host to act on")
 
     def test_without_allow_rule_the_pivot_is_infeasible(self):
@@ -102,7 +103,9 @@ class CPSTrees(unittest.TestCase):
         for cid in ("force_auto", "restore_breaker"):
             self.assertEqual(by[cid].machine, "firewall", cid)
             self.assertIn(f"ot_write.py {cps.ENGINE_IP} {cps.MODBUS_PORT}", by[cid].apply[0])
-        self.assertEqual(trees.cps_context(self.g)["responder_ip"], cps.FW_OT_IP)
+        # The sensor knows that writer by its address on the plant's link.
+        self.assertEqual(attack_graph.Plant(self.g).zone, "OT")
+        self.assertEqual(kg.addresses(self.g, "firewall")[1], (cps.FW_OT_IP, "OT"))
         self.assertTrue(by["isolate_hmi"].requires_approval)
         # Every impact leaf can be undone by some countermeasure.
         restorable = {n for c in self.cms for n in c.restores}
@@ -130,7 +133,7 @@ class CPSTrees(unittest.TestCase):
         # plant, blocking its flow takes nothing from anyone.
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]
         g2 = kg.build_kg(cps_inv.inventory(rules=rules))
-        by = {c.id: c for c in trees.cps_countermeasures(g2)}
+        by = {c.id: c for c in attack_graph.countermeasures(g2)}
         self.assertEqual(by["block_flow"].cuts, [])
         self.assertEqual(by["isolate_hmi"].cuts, ["on:hmi:IT"])
 

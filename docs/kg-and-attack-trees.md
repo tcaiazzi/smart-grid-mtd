@@ -15,13 +15,15 @@ to describe a run's structure and to replay one.
 
 | File | What it holds |
 |---|---|
-| `nodes/soc/soar_kg.py` | the knowledge graph: construction from the SOC's inventory, queries, JSON |
+| `nodes/common/soar_kg.py` | the knowledge graph: construction from the SOC's inventory, queries, JSON |
 | `cyberrange/scenarios/cps/inventory.py` | the CPS binding: the lab as the SOC's inventory (topology, services, roles, rules) |
-| `nodes/soc/soar_trees.py` | the tree model and its operations, the CPS attack tree, the countermeasures |
+| `nodes/common/soar_trees.py` | the tree model and its operations (`Node`, `Countermeasure`, feasibility, prerequisites, the document) |
+| `nodes/common/techniques.py` | the steps an attack is made of, as data: labels, ATT&CK ids, impacts, the registers an action writes |
+| `nodes/common/attack_graph.py` | the generator: the attack tree and the countermeasures of the lab a graph describes |
 | `nodes/soc/soar_mapping.py` | findings → evidence on tree nodes → belief (`CampaignState`) |
 | `nodes/soc/soar_policy.py` | belief → decisions: the rules playbook and the solver |
 | `nodes/soc/soc_analytics.py` | the SOC node's runtime loop (decision + requests); its engine, offline, is the replay |
-| `nodes/redteam/` | the attacker (`red_agent.py` + planner) that walks the same tree in the lab, read from `tree.json` |
+| `nodes/redteam/` | the attacker (`red_agent.py` + planner) that walks the same tree in the lab, read from `tree.json`; with recon (`belief_tree.py`), its own tree from the same generator |
 
 ## 1. The pipeline
 
@@ -31,7 +33,7 @@ to describe a run's structure and to replay one.
    ▼
  Knowledge graph  ──────────────┐  build_kg(inventory)                      (soar_kg.py)
    │                            │
-   │ cps_context(g)             │ cps_context(g)
+   │ attack_tree(g)             │ countermeasures(g)        (attack_graph.py)
    ▼                            ▼
  Attack tree  ◄── annotated ── Countermeasures (prevents / restores tree nodes)
    │      ▲
@@ -177,7 +179,7 @@ What `reachable` does not model:
 
 ### 2.5 Layering
 
-The graph is node software now (`nodes/soc/soar_kg.py`),
+The graph is node software now (`nodes/common/soar_kg.py`),
 and node software imports no scenario (rule 8 of `CLAUDE.md`). So it
 builds the graph from an **inventory** the scenario provides
 (`cps.inventory`, derived from the
@@ -210,11 +212,32 @@ A tree is made of `trees.Node` objects:
 | `impact` | loss weight if the node is achieved, 0..1. Only the impact leaves have one |
 | `observable` | whether the OT sensor can see the step. Shown on the dashboard, not used in reasoning (§10) |
 | `review` | an open question on the mapping, kept next to it |
+| `kind` | the step it is (`techniques.py`); equal to `id` unless the step recurs (§3.2) |
 | `precondition` | `g -> bool`, checked on the knowledge graph |
+| `uses` | `g -> bool`: what the step needs of the graph to be carried out; a response whose effect makes it false prevents the step (§3.5) |
 
-### 3.2 The CPS tree
+### 3.2 The tree, generated
 
-`cps_attack_tree(g)` returns 19 nodes, 13 of them leaves:
+Nobody writes a lab's tree. `attack_graph.attack_tree(g)` instantiates the
+steps of `techniques.py` where the graph says they apply:
+
+- **a way in** (`via_<host>`, AND) through every host whose role may command
+  the plant (`ROLE_POLICY`) and that serves an application: access to it,
+  execution on it, its sanctioned flow to the plant (`pivot`), then the actions
+  on the plant;
+- **the direct way** (`direct_ot`, AND) from the hosts without a Modbus role
+  that stand on the plant's link: a foothold, then a write, or a position
+  between the PLC and the plant and falsified readings;
+- **the actions on the plant**, under every way in, for every feeder whose
+  registers they write (`techniques.IMPACTS`, by register name).
+
+A step that occurs once keeps its kind as id, so the tree of the lab every
+scenario runs is the one its consumers know. A step that recurs takes an id
+qualified by where it is: `breaker_open@hmia:u2` is the breaker of feeder 2
+opened through `hmia`. Its `kind` stays `breaker_open`, and that is what the
+mapping, the policies and the metrics read (§5, §6, §8).
+
+On the lab every CPS scenario runs, the tree has 19 nodes, 13 of them leaves:
 
 ```
 impact  OR  Physical impact on the feeder
@@ -260,18 +283,12 @@ a fact of how the lab realises the step, and lives with the steps
 
 ### 3.3 Grounding on the graph
 
-The tree is hand-written but **graph-grounded**:
-
-- **Every address, port and id it uses is read off the graph** by
-  `cps_context(g)`:
-  - hosts by role (`hmi`, `plant`, `boundary`, the first `it-host` as attacker);
-  - their addresses;
-  - the Modbus and HMI services and their ports;
-  - the firewall's address in the HMI's zone.
-
-  Nothing in the tree or in the countermeasures hard-codes `10.10.0.20` or
-  `5020`. `cps_context` takes the first host of each role, so it assumes one
-  HMI, one plant and one boundary.
+- **Every host, address, port and id it uses is read off the graph**: hosts
+  by role, their addresses, the plant's Modbus service, the services a way in
+  goes through, the boundary's rules. Nothing in the tree or in the
+  countermeasures hard-codes `10.10.0.20` or `5020`.
+- **`pivot` targets the rules that allow it**: the boundary rules that let the
+  way's host reach the plant, not every rule the boundary has.
 - **Preconditions are graph queries.** `pivot` holds only while
   `reachable(hmi → engine:5020)` is true; `ot_foothold` holds only if some host
   without a Modbus role reaches the plant.
@@ -303,8 +320,10 @@ manipulated the plant through the HMI has already done those three steps.
 
 ### 3.5 Countermeasures: the defence annotation
 
-`cps_countermeasures(g, it=False)` returns the actions available in the lab.
-Each one says which tree nodes it acts on, in two different ways:
+`attack_graph.countermeasures(g, it=False)` returns the actions available in
+the lab, one per way in, feeder or host on the plant's link where the action
+recurs (with `kind` and qualified ids, as the tree's steps). Each one says
+which tree nodes it acts on, in two different ways:
 
 - **`prevents`**: the nodes the action stops from happening or happening again
   (for example, blocking a flow);
@@ -313,6 +332,18 @@ Each one says which tree nodes it acts on, in two different ways:
 
 A response has two jobs, stopping the attacker and repairing the plant, and the
 two lists keep them apart. The solver depends on the difference (§6.2).
+
+**`prevents` is derived from the graph.** A response that changes the network
+declares its `effect` (a drop at the boundary, an interface down), and it
+prevents the leaves whose `uses` — or whose prerequisites' — hold on the graph
+and no longer hold on `kg.with_effects(g, effect)`. That is why taking the
+workstation off the OT link prevents the write and the position in the middle
+but not the foothold on it: the foothold uses nothing the isolation takes. On a
+lab without the allow rule, `block_flow` prevents nothing: the flow it blocks
+is not there. The graph has no processes and no host firewalls, so the two
+IT-side responses declare what they prevent: the way's steps from the execution
+on (`kill_proc_tree`), from the access on (`block_web_src`). `restores` comes
+from `techniques.RESTORES`, by impact kind, on the response's feeder.
 
 | Id | Runs on | Prevents | Restores | t (s) | op | energy | Approval | Order |
 |---|---|---|---|---|---|---|---|---|
@@ -330,7 +361,7 @@ Notes on the table:
 
 - **Commands.** Each countermeasure carries the shell commands it runs on
   `machine` (`apply`), and the commands that would undo it (`revert`). The
-  commands are built from `cps_context`, so they follow the graph like the tree
+  commands are built from the graph, so they follow it like the tree
   does. `force_auto` and `restore_breaker` write over Modbus to the engine from
   the boundary firewall, which already stands on the OT link: the plant holds
   no agent and no new path is opened towards it. The DPI sensor knows that
@@ -662,6 +693,18 @@ The attacker and the defender share the tree's node ids. That is why the
 ground truth (`plan_step` with `node`, `attck`, `ok`) can be scored directly
 against the defender's belief and decisions.
 
+**The attacker's own tree.** In `cps-recon` the attacker is not handed the
+tree. `belief_tree.py` writes what recon found as an inventory — the HMI it got
+a foothold on, the engine behind it, the registers it read, a boundary inferred
+from the HMI talking to the engine — and builds the tree from it with the same
+generator the SOC runs on its full inventory. What the attacker never saw is
+absent or not feasible; tree fidelity (`metrics._tree_fidelity`) counts the
+leaves each tree lets an attacker reach and scores the difference.
+
+The attacker's executable steps (`steps.py`) are the lab's single way in and
+first feeder: a step qualified by another way or feeder is not one the exploit
+client can carry out, and the planner leaves it aside.
+
 ## 8. What is recorded
 
 | File | Written by | Holds |
@@ -685,45 +728,46 @@ The dashboard draws the graph, the tree and the response over time from
 
 ## 9. Changing them
 
-**Changing the lab.** Edit `scenarios/cps/topology.py` (nodes, addresses,
-`firewall_rules()`, `services()`, roles). The graph, the tree's addresses and
-the countermeasure commands all follow on the next run. No other file needs to
-change unless a role, a service or a rule that the tree relies on disappears:
-`cps_context` looks them up by role and fails loudly if one is missing.
+**Changing the lab.** Describe it as a `LabSpec` (`scenarios/cps/lab.py`) and
+its plant with `ot_registers.plant()`. The graph, the tree — its ways in, its
+actions per feeder — and the countermeasures follow on the next run, with no
+other file to change.
 
 **Adding a node type or relation to the graph.** Add it in `build_kg` after the
 nodes it links to, give it a typed id prefix, add a query function rather than
 letting callers walk the graph, and extend `test_soar_kg.py`.
 
-**Adding a step or an impact to the tree.** The node id is a contract shared by
-several modules. A new impact leaf touches all of these:
+**Adding a step or an impact to the tree.** An impact is one entry in
+`techniques.IMPACTS`: its kind, label, ATT&CK id, impact weight and the
+registers it writes; the generator places it under every way in and on every
+feeder that has those registers. What still names it by kind:
 
 | Where | What |
 |---|---|
-| `trees.cps_attack_tree` | the `Node`, with targets, ATT&CK id, `impact`, and a precondition if one applies |
-| `mapping.evidence_from_finding` | which findings are evidence for it, and of which kind |
-| `mapping.IMPACT_LEAVES` | so it counts as an impact (explaining away, residual, `active_impacts`) |
-| `trees.cps_countermeasures` | which actions prevent or restore it |
+| `techniques.py` `IMPACTS`, `RESTORES` | the step, and which restoring response undoes it |
+| `mapping.evidence_from_finding`, `mapping.IMPACT_LEAVES` | which findings are evidence for it; that it counts as an impact |
 | `policy.RulesPolicy.PLAYBOOK` / `TRIGGERS` | what the baseline does when it is confirmed |
 | `nodes/redteam/steps.py` `IMPACT_MODE`, `DETECTABILITY` | how the attacker realises it, and how loud it is |
-| `nodes/redteam/belief_tree.py` `IMPACT_META` | the attacker's own description of it, for the tree it derives by recon |
 | `planes/attack/agents/exploit_client.py` `ATTACKS` or `SCHEDULES`, `DEFAULT_REPEAT` | the writes of the mode that realises it |
 | `planes/attack/active_attack.py` `ATTACK_TARGET`, `STEALTHY_MODES` | the registers the ground truth names for that mode |
 | `scenarios/cps/scenario.py` `ATTACK_MODES`, `GOALS` and `campaign.py` `ATTACK_MODES` | so the mode and the goal can be chosen |
 | `scenarios/cps/metrics.py` `expected_response` | what a correct response to it is |
-| tests | `test_soar_trees`, `test_soar_mapping`, `test_soar_policy`, `test_attack_planner`, `test_recon` |
 
-`tests/scenarios/cps/test_cps_impact_tables.py` fails when one of these copies
-names a different set of modes or leaves than the others.
+`tests/scenarios/cps/test_cps_impact_tables.py` fails when one of these names a
+different set of modes or leaves than the tree, and
+`tests/nodes/test_tree_snapshot.py` shows what the tree of the lab became.
 
 A new prerequisite step on an AND branch needs fewer changes:
+- add it to the way's steps in `techniques.py` and in `attack_tree`;
 - `prerequisites` picks it up automatically;
 - the planner needs it in `PREREQ_ORDER`;
 - the mapping needs a finding that observes it, or it can only ever be inferred.
 
-**Adding a countermeasure.** Add it to `cps_countermeasures`:
-- commands built from `cps_context`, not literal addresses;
-- `prevents`/`restores` lists using existing node ids;
+**Adding a countermeasure.** Add it to `attack_graph.countermeasures`:
+- commands built from the graph, not literal addresses;
+- an `effect` on the graph, from which `prevents` is derived, or — when the
+  graph cannot express it — `prevents` declared by step kind;
+- `restores` by impact kind (`techniques.RESTORES`);
 - costs on the same 0..1 scale as the others;
 - an `order` placing it among the preventive (≤ 20) or restorative (30–40)
   actions.
@@ -740,17 +784,15 @@ changing a constant. To see the effect on real data, replay recorded runs with
 
 ## 10. Limits of the current version
 
-- **The tree is hand-written.** It is grounded on the graph but not generated
-  from it. Automatic generation is WP2 T2.2 (see the internal plan
-  `docs/internal/piano-wp2-wp3.md`).
-- **The CPS tree lives in the defence plane.**
-  - `cps_attack_tree`, `cps_context` and `cps_countermeasures` are in
-    `nodes/soc/soar_trees.py`, next to the generic tree model.
-  - The mapping and the planner also hard-code CPS node ids: `IMPACT_LEAVES`,
-    `FORWARD_STEPS`, the playbook, `IMPACT_MODE`.
-  - None of these modules imports a scenario, so the layering test passes, but
-    a second scenario with a different tree would have to split them first, the
-    same way the graph's builder was split.
+- **The tree's shape is a template.** The generator instantiates the ways in
+  and the actions the steps of `techniques.py` describe, wherever the graph has
+  them; it does not chain arbitrary techniques by their pre- and
+  postconditions. A kind of way in the template does not know (a credential
+  reused across hosts, say) is a new entry in the generator, not only in the
+  data.
+- **Probability and time of a step** (WP2 T2.2's annotations) are not there yet.
+- **The attacker executes the first way in and the first feeder only**
+  (`steps.py`, §7).
 - **`observable` is static.** It marks the IT steps as unobservable, which is
   true of the OT sensor but not with the IT sensor running. Nothing reads it
   except the dashboard.

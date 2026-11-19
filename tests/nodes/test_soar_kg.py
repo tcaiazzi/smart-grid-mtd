@@ -1,4 +1,4 @@
-"""Knowledge graph of the CPS lab (nodes/soc/soar_kg.py), built from the SOC's
+"""Knowledge graph of the CPS lab (nodes/common/soar_kg.py), built from the SOC's
 inventory (cyberrange.scenarios.cps.inventory) — the node's code, run on the host.
 
 Run: `.venv/bin/python -m pytest tests/nodes/test_soar_kg.py`.

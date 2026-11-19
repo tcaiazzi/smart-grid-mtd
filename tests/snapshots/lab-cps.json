@@ -148,6 +148,8 @@
    "/soc_operator.py",
    "/soar_kg.py",
    "/soar_trees.py",
+   "/techniques.py",
+   "/attack_graph.py",
    "/soar_mapping.py",
    "/soar_policy.py",
    "/ot_registers.py"

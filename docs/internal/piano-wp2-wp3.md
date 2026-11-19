@@ -154,6 +154,15 @@ miglioramenti in percentuale non sono verificabili.
 - Validazione: le catene eseguite nel testbed devono comparire tra i cammini
   generati. Si misurano copertura e numero di cammini spuri.
 - **Output:** generatore v1 (M9), libreria di alberi per gli scenari, report.
+- **Stato (2026-11-19).** Generatore v1 in `nodes/common/attack_graph.py`: le
+  tecniche sono dati (`techniques.py`), istanziati sul knowledge graph per ogni
+  via d'ingresso, host sul link dell'impianto e feeder; le precondizioni sono
+  interrogazioni di raggiungibilità sul grafo, e ciò che una contromisura
+  previene è ricavato dal suo effetto sul grafo. Sul lab attuale riproduce
+  l'albero prima scritto a mano (`tests/snapshots/tree-cps.json`). Lo stesso
+  generatore costruisce l'albero di credenza dell'attaccante dal recon. Mancano:
+  la concatenazione di tecniche per pre/postcondizioni oltre lo schema fisso
+  delle vie d'ingresso, e le annotazioni di probabilità e tempo.
 
 **T2.3 Detector frugali (M4–M13)**
 - Famiglia di detector a costo crescente:

@@ -24,12 +24,14 @@ import ot_registers as reg  # noqa: E402
 import soar_kg as kg  # noqa: E402
 import soar_mapping as mapping  # noqa: E402
 import soar_policy as policy  # noqa: E402
+import attack_graph  # noqa: E402
 import soar_trees as trees  # noqa: E402
 import steps  # noqa: E402
 
 from cyberrange.planes.attack import active_attack  # noqa: E402
-from cyberrange.scenarios.cps import campaign, scenario  # noqa: E402
+from cyberrange.scenarios.cps import campaign, metrics, scenario  # noqa: E402
 from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
+from cyberrange.scenarios.cps import topology as cps  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[3]
 DG_LO, DG_HI = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][2:4]
@@ -79,7 +81,7 @@ class ModeTables(unittest.TestCase):
 class LeafTables(unittest.TestCase):
     def setUp(self):
         self.g = kg.build_kg(cps_inv.inventory())
-        self.tree = trees.cps_attack_tree(self.g)
+        self.tree = attack_graph.attack_tree(self.g)
         idx = trees.index(self.tree)
         # The impacts an attacker can aim for: by a write through the HMI, or
         # by falsifying readings from the engineering workstation.
@@ -96,10 +98,27 @@ class LeafTables(unittest.TestCase):
         for name, got in copies.items():
             self.assertEqual(got, set(self.leaves), f"{name} is out of step with the attack tree")
 
+    def belief(self):
+        found = {
+            "foothold": {"ip": cps.HMI_IP, "port": cps.APP_PORT},
+            "ot": {"engine_ip": cps.ENGINE_IP, "modbus_ok": True, "registers": {0: 1, 1: 0, 2: 0}},
+        }
+        doc = belief_tree.build(found)
+        out = {}
+
+        def walk(n):
+            out[n["id"]] = n
+            for c in n.get("children") or []:
+                walk(c)
+
+        walk(doc)
+        return out, metrics._feasible_leaves(doc, set())
+
     def test_the_attacker_s_own_tree_knows_the_impacts_it_can_write(self):
-        # Recon does not find the workstation's branch: what it derives is the
-        # written impacts only, and tree fidelity scores the rest as missed.
-        self.assertEqual(set(belief_tree.IMPACT_META), set(self.written))
+        # Recon does not find the workstation's branch: what it derives feasible
+        # is the written impacts only, and tree fidelity scores the rest as missed.
+        _nodes, reachable = self.belief()
+        self.assertEqual(reachable & set(self.leaves), set(self.written))
 
     def test_every_prerequisite_step_is_a_node_of_the_tree(self):
         idx = trees.index(self.tree)
@@ -112,11 +131,12 @@ class LeafTables(unittest.TestCase):
         self.assertEqual(missing, set(), "a confirmed impact the rules policy would not answer")
 
     def test_attacker_and_defender_describe_a_leaf_alike(self):
-        for leaf, (_label, attck, _name, impact, _register) in belief_tree.IMPACT_META.items():
+        belief, _reachable = self.belief()
+        for leaf in self.written:
             node = self.leaves[leaf]
             self.assertEqual(
-                (attck, impact),
-                (node.attck, node.impact),
+                (belief[leaf]["attck"], belief[leaf]["impact"], belief[leaf]["targets"]),
+                (node.attck, node.impact, node.targets),
                 f"{leaf}: the two trees disagree, and tree fidelity would score the difference",
             )
 

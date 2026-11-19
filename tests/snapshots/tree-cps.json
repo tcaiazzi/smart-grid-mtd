@@ -1,0 +1,3696 @@
+{
+ "lab": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus",
+        "rule:firewall:0"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT",
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   },
+   {
+    "apply": [
+     "ip link set eth1 down"
+    ],
+    "cuts": [
+     "on:ews:OT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "ews",
+      "eth1"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_ews",
+    "kind": "isolate_ot_host",
+    "label": "Take the engineering workstation off the OT link",
+    "machine": "ews",
+    "op_cost": 0.0,
+    "order": 15,
+    "prevents": [
+     "ot_write_unknown",
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "ip link set eth1 up"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 -c \"from scapy.all import ARP, Ether, conf, getmacbyip, sendp; conf.verb = 0; a, b = '10.20.0.10', '10.20.0.20'; ma, mb = getmacbyip(a), getmacbyip(b); p = [Ether(dst=ma) / ARP(op=2, psrc=b, hwsrc=mb, pdst=a, hwdst=ma), Ether(dst=mb) / ARP(op=2, psrc=a, hwsrc=ma, pdst=b, hwdst=mb)]; sendp(p, iface='eth1', count=3, inter=0.2)\""
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "repair_arp",
+    "kind": "repair_arp",
+    "label": "Tell the PLC and the plant each other's true address again (sent by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.05,
+    "order": 16,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "revert": [],
+    "time_to_effect_s": 2.4
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "meas_fdi": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "ot_aitm": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "ot_write_unknown": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": []
+   },
+   "pivot": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ },
+ "lab+it": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus",
+        "rule:firewall:0"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT",
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   },
+   {
+    "apply": [
+     "ip link set eth1 down"
+    ],
+    "cuts": [
+     "on:ews:OT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "ews",
+      "eth1"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_ews",
+    "kind": "isolate_ot_host",
+    "label": "Take the engineering workstation off the OT link",
+    "machine": "ews",
+    "op_cost": 0.0,
+    "order": 15,
+    "prevents": [
+     "ot_write_unknown",
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "ip link set eth1 up"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 -c \"from scapy.all import ARP, Ether, conf, getmacbyip, sendp; conf.verb = 0; a, b = '10.20.0.10', '10.20.0.20'; ma, mb = getmacbyip(a), getmacbyip(b); p = [Ether(dst=ma) / ARP(op=2, psrc=b, hwsrc=mb, pdst=a, hwdst=ma), Ether(dst=mb) / ARP(op=2, psrc=a, hwsrc=ma, pdst=b, hwdst=mb)]; sendp(p, iface='eth1', count=3, inter=0.2)\""
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "repair_arp",
+    "kind": "repair_arp",
+    "label": "Tell the PLC and the plant each other's true address again (sent by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.05,
+    "order": 16,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "revert": [],
+    "time_to_effect_s": 2.4
+   },
+   {
+    "apply": [
+     "kt() { for c in $(pgrep -P $1); do kt $c; kill -9 $c 2>/dev/null; done; }; for p in $(pgrep -f vuln_app.py); do kt $p; done; true"
+    ],
+    "cuts": [],
+    "d3fend": "Process Termination",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "kill_proc_tree",
+    "kind": "kill_proc_tree",
+    "label": "Terminate the processes the web app spawned (the RCE)",
+    "machine": "hmi",
+    "op_cost": 0.15,
+    "order": 5,
+    "prevents": [
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "iptables -I INPUT 1 -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "cuts": [],
+    "d3fend": "Inbound Traffic Filtering",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "block_web_src",
+    "kind": "block_web_src",
+    "label": "Block the attacking source at the diagnostics app",
+    "machine": "hmi",
+    "op_cost": 0.2,
+    "order": 6,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D INPUT -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "meas_fdi": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "ot_aitm": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "ot_write_unknown": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": []
+   },
+   "pivot": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ },
+ "no_ews": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus",
+        "rule:firewall:0"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": false,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": false,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT",
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "pivot": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ },
+ "no_ews+it": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus",
+        "rule:firewall:0"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": false,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": false,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT",
+     "write:hmi:reg:1:hr:0",
+     "write:hmi:reg:1:hr:2"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   },
+   {
+    "apply": [
+     "kt() { for c in $(pgrep -P $1); do kt $c; kill -9 $c 2>/dev/null; done; }; for p in $(pgrep -f vuln_app.py); do kt $p; done; true"
+    ],
+    "cuts": [],
+    "d3fend": "Process Termination",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "kill_proc_tree",
+    "kind": "kill_proc_tree",
+    "label": "Terminate the processes the web app spawned (the RCE)",
+    "machine": "hmi",
+    "op_cost": 0.15,
+    "order": 5,
+    "prevents": [
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "iptables -I INPUT 1 -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "cuts": [],
+    "d3fend": "Inbound Traffic Filtering",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "block_web_src",
+    "kind": "block_web_src",
+    "label": "Block the attacking source at the diagnostics app",
+    "machine": "hmi",
+    "op_cost": 0.2,
+    "order": 6,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D INPUT -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "pivot": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "block_flow",
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ },
+ "no_rule": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": false,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": false,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   },
+   {
+    "apply": [
+     "ip link set eth1 down"
+    ],
+    "cuts": [
+     "on:ews:OT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "ews",
+      "eth1"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_ews",
+    "kind": "isolate_ot_host",
+    "label": "Take the engineering workstation off the OT link",
+    "machine": "ews",
+    "op_cost": 0.0,
+    "order": 15,
+    "prevents": [
+     "ot_write_unknown",
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "ip link set eth1 up"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 -c \"from scapy.all import ARP, Ether, conf, getmacbyip, sendp; conf.verb = 0; a, b = '10.20.0.10', '10.20.0.20'; ma, mb = getmacbyip(a), getmacbyip(b); p = [Ether(dst=ma) / ARP(op=2, psrc=b, hwsrc=mb, pdst=a, hwdst=ma), Ether(dst=mb) / ARP(op=2, psrc=a, hwsrc=ma, pdst=b, hwdst=mb)]; sendp(p, iface='eth1', count=3, inter=0.2)\""
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "repair_arp",
+    "kind": "repair_arp",
+    "label": "Tell the PLC and the plant each other's true address again (sent by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.05,
+    "order": 16,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "revert": [],
+    "time_to_effect_s": 2.4
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "meas_fdi": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "ot_aitm": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "ot_write_unknown": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": []
+   },
+   "pivot": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "isolate_hmi"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ },
+ "no_rule+it": {
+  "attack_tree": {
+   "attck": null,
+   "attck_name": null,
+   "children": [
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T1190",
+       "attck_name": "Exploit Public-Facing Application",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_access",
+       "impact": 0.0,
+       "kind": "it_access",
+       "label": "Initial access to the HMI's web application",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "svc:hmi/diag-http"
+       ]
+      },
+      {
+       "attck": "T1059",
+       "attck_name": "Command and Scripting Interpreter",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "it_exec",
+       "impact": 0.0,
+       "kind": "it_exec",
+       "label": "Command execution on the HMI host",
+       "observable": false,
+       "review": null,
+       "targets": [
+        "host:hmi"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [],
+       "feasible": false,
+       "gate": "LEAF",
+       "id": "pivot",
+       "impact": 0.0,
+       "kind": "pivot",
+       "label": "Use the sanctioned HMI -> plant Modbus flow",
+       "observable": false,
+       "review": "ATT&CK id to be chosen (lateral movement over a trusted flow)",
+       "targets": [
+        "svc:engine/modbus"
+       ]
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oor",
+         "impact": 0.6,
+         "kind": "setpoint_oor",
+         "label": "DG setpoint written outside its envelope",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_open",
+         "impact": 1.0,
+         "kind": "breaker_open",
+         "label": "Feeder breaker opened remotely",
+         "observable": true,
+         "review": "T0813 (Denial of Control) / T0831 also plausible",
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "mode_hijack",
+         "impact": 0.9,
+         "kind": "mode_hijack",
+         "label": "MANUAL authority taken, in-range unsafe dispatch",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_ramp",
+         "impact": 0.8,
+         "kind": "setpoint_ramp",
+         "label": "MANUAL authority taken, DG setpoint ramped up in small steps",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0831",
+         "attck_name": "Manipulation of Control",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "setpoint_oscillation",
+         "impact": 0.7,
+         "kind": "setpoint_oscillation",
+         "label": "MANUAL authority taken, DG setpoint swung between levels",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:2",
+          "reg:1:hr:0"
+         ]
+        },
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "breaker_chatter",
+         "impact": 0.85,
+         "kind": "breaker_chatter",
+         "label": "Feeder breaker opened and re-closed repeatedly",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "reg:1:hr:1"
+         ]
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_action",
+       "impact": 0.0,
+       "kind": "ot_action",
+       "label": "Manipulate the plant over Modbus",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": false,
+     "gate": "AND",
+     "id": "via_hmi",
+     "impact": 0.0,
+     "kind": "via",
+     "label": "Through the HMI (the only host allowed across the boundary)",
+     "observable": true,
+     "review": null,
+     "targets": []
+    },
+    {
+     "attck": null,
+     "attck_name": null,
+     "children": [
+      {
+       "attck": "T0886",
+       "attck_name": "Remote Services",
+       "children": [],
+       "feasible": true,
+       "gate": "LEAF",
+       "id": "ot_foothold",
+       "impact": 0.0,
+       "kind": "ot_foothold",
+       "label": "Foothold on a host that reaches the plant",
+       "observable": false,
+       "review": "T0859 (Valid Accounts) also plausible: the way in is a credential",
+       "targets": []
+      },
+      {
+       "attck": null,
+       "attck_name": null,
+       "children": [
+        {
+         "attck": "T0855",
+         "attck_name": "Unauthorized Command Message",
+         "children": [],
+         "feasible": true,
+         "gate": "LEAF",
+         "id": "ot_write_unknown",
+         "impact": 0.6,
+         "kind": "ot_write_unknown",
+         "label": "Unauthorized Modbus access from that host",
+         "observable": true,
+         "review": null,
+         "targets": [
+          "svc:engine/modbus"
+         ]
+        },
+        {
+         "attck": null,
+         "attck_name": null,
+         "children": [
+          {
+           "attck": "T0830",
+           "attck_name": "Adversary-in-the-Middle",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "ot_aitm",
+           "impact": 0.0,
+           "kind": "ot_aitm",
+           "label": "Adversary in the middle of the PLC's Modbus session",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "svc:engine/modbus"
+           ]
+          },
+          {
+           "attck": "T0856",
+           "attck_name": "Spoof Reporting Message",
+           "children": [],
+           "feasible": true,
+           "gate": "LEAF",
+           "id": "meas_fdi",
+           "impact": 0.9,
+           "kind": "meas_fdi",
+           "label": "Measurements falsified on their way to the PLC",
+           "observable": true,
+           "review": null,
+           "targets": [
+            "reg:1:ir:0",
+            "reg:1:ir:1"
+           ]
+          }
+         ],
+         "feasible": true,
+         "gate": "AND",
+         "id": "via_aitm",
+         "impact": 0.0,
+         "kind": "via_aitm",
+         "label": "Between the PLC and the plant",
+         "observable": true,
+         "review": null,
+         "targets": []
+        }
+       ],
+       "feasible": true,
+       "gate": "OR",
+       "id": "ot_direct_action",
+       "impact": 0.0,
+       "kind": "ot_direct_action",
+       "label": "Act on the plant from that host",
+       "observable": true,
+       "review": null,
+       "targets": []
+      }
+     ],
+     "feasible": true,
+     "gate": "AND",
+     "id": "direct_ot",
+     "impact": 0.0,
+     "kind": "direct_ot",
+     "label": "From a host without a Modbus role",
+     "observable": true,
+     "review": null,
+     "targets": []
+    }
+   ],
+   "feasible": true,
+   "gate": "OR",
+   "id": "impact",
+   "impact": 0.0,
+   "kind": "impact",
+   "label": "Physical impact on the feeder",
+   "observable": true,
+   "review": null,
+   "targets": []
+  },
+  "countermeasures": [
+   {
+    "apply": [],
+    "cuts": [],
+    "d3fend": null,
+    "effect": [],
+    "energy_cost": 0.0,
+    "id": "notify",
+    "kind": "notify",
+    "label": "Alert the operator, no automatic action",
+    "machine": null,
+    "op_cost": 0.0,
+    "order": 90,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.0
+   },
+   {
+    "apply": [
+     "iptables -I FORWARD 1 -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP",
+     "conntrack -D -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 2>/dev/null || true"
+    ],
+    "cuts": [],
+    "d3fend": "Network Traffic Filtering",
+    "effect": [
+     [
+      "drop",
+      "firewall",
+      "10.10.0.20",
+      "10.20.0.20",
+      5020
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "block_flow",
+    "kind": "block_flow",
+    "label": "Block the HMI -> plant Modbus flow at the boundary",
+    "machine": "firewall",
+    "op_cost": 0.0,
+    "order": 10,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D FORWARD -s 10.10.0.20 -d 10.20.0.20 -p tcp --dport 5020 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "ip link set eth0 down"
+    ],
+    "cuts": [
+     "on:hmi:IT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "hmi",
+      "eth0"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_hmi",
+    "kind": "isolate_way",
+    "label": "Disconnect the HMI host from the network",
+    "machine": "hmi",
+    "op_cost": 0.0,
+    "order": 20,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": true,
+    "restores": [],
+    "revert": [
+     "ip link set eth0 up",
+     "ip route add default via 10.10.0.1 dev eth0"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 2=0 0=200"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "force_auto",
+    "kind": "force_auto",
+    "label": "Return control authority to the PLC and restore the nominal DG setpoint (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 30,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "mode_hijack",
+     "setpoint_oor",
+     "setpoint_ramp",
+     "setpoint_oscillation"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.44999999999999996
+   },
+   {
+    "apply": [
+     "python3 ot_write.py 10.20.0.20 5020 1=0"
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.02,
+    "id": "restore_breaker",
+    "kind": "restore_breaker",
+    "label": "Re-close the feeder breaker (written by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.1,
+    "order": 40,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "breaker_open",
+     "breaker_chatter"
+    ],
+    "revert": [],
+    "time_to_effect_s": 0.30000000000000004
+   },
+   {
+    "apply": [
+     "ip link set eth1 down"
+    ],
+    "cuts": [
+     "on:ews:OT"
+    ],
+    "d3fend": "Network Isolation",
+    "effect": [
+     [
+      "detach",
+      "ews",
+      "eth1"
+     ]
+    ],
+    "energy_cost": 0.01,
+    "id": "isolate_ews",
+    "kind": "isolate_ot_host",
+    "label": "Take the engineering workstation off the OT link",
+    "machine": "ews",
+    "op_cost": 0.0,
+    "order": 15,
+    "prevents": [
+     "ot_write_unknown",
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "ip link set eth1 up"
+    ],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "python3 -c \"from scapy.all import ARP, Ether, conf, getmacbyip, sendp; conf.verb = 0; a, b = '10.20.0.10', '10.20.0.20'; ma, mb = getmacbyip(a), getmacbyip(b); p = [Ether(dst=ma) / ARP(op=2, psrc=b, hwsrc=mb, pdst=a, hwdst=ma), Ether(dst=mb) / ARP(op=2, psrc=a, hwsrc=ma, pdst=b, hwdst=mb)]; sendp(p, iface='eth1', count=3, inter=0.2)\""
+    ],
+    "cuts": [],
+    "d3fend": "Restore Configuration",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "repair_arp",
+    "kind": "repair_arp",
+    "label": "Tell the PLC and the plant each other's true address again (sent by the boundary device)",
+    "machine": "firewall",
+    "op_cost": 0.05,
+    "order": 16,
+    "prevents": [],
+    "requires_approval": false,
+    "restores": [
+     "ot_aitm",
+     "meas_fdi"
+    ],
+    "revert": [],
+    "time_to_effect_s": 2.4
+   },
+   {
+    "apply": [
+     "kt() { for c in $(pgrep -P $1); do kt $c; kill -9 $c 2>/dev/null; done; }; for p in $(pgrep -f vuln_app.py); do kt $p; done; true"
+    ],
+    "cuts": [],
+    "d3fend": "Process Termination",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "kill_proc_tree",
+    "kind": "kill_proc_tree",
+    "label": "Terminate the processes the web app spawned (the RCE)",
+    "machine": "hmi",
+    "op_cost": 0.15,
+    "order": 5,
+    "prevents": [
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [],
+    "time_to_effect_s": 0.1
+   },
+   {
+    "apply": [
+     "iptables -I INPUT 1 -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "cuts": [],
+    "d3fend": "Inbound Traffic Filtering",
+    "effect": [],
+    "energy_cost": 0.01,
+    "id": "block_web_src",
+    "kind": "block_web_src",
+    "label": "Block the attacking source at the diagnostics app",
+    "machine": "hmi",
+    "op_cost": 0.2,
+    "order": 6,
+    "prevents": [
+     "it_access",
+     "it_exec",
+     "pivot",
+     "setpoint_oor",
+     "breaker_open",
+     "mode_hijack",
+     "setpoint_ramp",
+     "setpoint_oscillation",
+     "breaker_chatter"
+    ],
+    "requires_approval": false,
+    "restores": [],
+    "revert": [
+     "iptables -D INPUT -s 10.10.0.10 -p tcp --dport 8080 -j DROP"
+    ],
+    "time_to_effect_s": 0.1
+   }
+  ],
+  "defense": {
+   "breaker_chatter": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "breaker_open": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "restore_breaker"
+    ]
+   },
+   "it_access": {
+    "prevented_by": [
+     "isolate_hmi",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "it_exec": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "meas_fdi": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "mode_hijack": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "ot_aitm": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": [
+     "repair_arp"
+    ]
+   },
+   "ot_write_unknown": {
+    "prevented_by": [
+     "isolate_ews"
+    ],
+    "restored_by": []
+   },
+   "pivot": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": []
+   },
+   "setpoint_oor": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_oscillation": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   },
+   "setpoint_ramp": {
+    "prevented_by": [
+     "isolate_hmi",
+     "kill_proc_tree",
+     "block_web_src"
+    ],
+    "restored_by": [
+     "force_auto"
+    ]
+   }
+  }
+ }
+}

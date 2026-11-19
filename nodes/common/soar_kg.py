@@ -15,8 +15,9 @@ Inventory:
                 "unit": the feeder a controller is bound to (optional)}],
      "services": {host: [[name, proto, port, app], ...]},
      "boundary": {"host": name, "rules": [iptables command, ...]},
-     "plant_service": [host, service name],
-     "plant": the plant description (ot_registers.plant; default: the default plant)}
+     "plant_service": [host, service name] (no plant: no registers),
+     "plant": the plant description (ot_registers.plant; default: the default plant),
+     "known_registers": holding-register addresses known (optional; default: all)}
 
 Node ids are typed by prefix:
     zone:<name>             collision domain (IT / OT / MGMT)
@@ -66,7 +67,7 @@ def build_kg(inventory):
     plant = reg.plant(inventory.get("plant"))
     first = reg.units(plant)[0]
     bound = {h["name"]: h.get("unit") or first for h in inventory["hosts"]}
-    g = nx.MultiDiGraph(name=inventory.get("name", "lab"), limits=plant["limits"])
+    g = nx.MultiDiGraph(name=inventory.get("name", "lab"), limits=plant["limits"], plant=plant)
 
     for host in sorted(inventory["hosts"], key=lambda h: h["name"]):
         name = host["name"]
@@ -103,7 +104,8 @@ def build_kg(inventory):
             _edge(g, hid, sid, "runs")
 
     boundary = inventory.get("boundary") or {}
-    _add_registers(g, inventory.get("plant_service"), plant)
+    if inventory.get("plant_service"):
+        _add_registers(g, inventory["plant_service"], plant, inventory.get("known_registers"))
     _add_role_permissions(g, roles, bound)
     _add_rules(g, boundary.get("host"), boundary.get("rules") or [])
     return g
@@ -113,11 +115,14 @@ def _edge(g, u, v, rel, **attrs):
     g.add_edge(u, v, key=rel, rel=rel, **attrs)
 
 
-def _add_registers(g, plant_service, plant):
+def _add_registers(g, plant_service, plant, known=None):
     """Every feeder's registers: one Modbus unit each, with the same map and
-    that feeder's envelope."""
+    that feeder's envelope. ``known`` limits the holding registers to those
+    addresses: what an inventory written from reconnaissance has found."""
     for feeder in reg.units(plant):
         for addr, (name, scale, lo, hi) in reg.envelope(plant, feeder).items():
+            if known is not None and addr not in known:
+                continue
             g.add_node(
                 reg_id(feeder, "hr", addr),
                 type="register",

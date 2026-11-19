@@ -81,15 +81,20 @@ def _find(out_dir, *names):
     return None
 
 
-def _feasible_leaves(node, out):
-    """Ids of the actionable (leaf) nodes a tree document marks feasible."""
+def _feasible_leaves(node, out, ready=True):
+    """Ids of the actionable (leaf) nodes an attacker can reach on a tree
+    document: feasible themselves, with every step before them under an AND
+    feasible too. A leaf's own flag is local — the write from a host the
+    attacker has no foothold on is "feasible" as a write — so a branch whose
+    first step is not would count its later steps as reachable."""
     kids = node.get("children") or []
     if not kids:
-        if node.get("feasible", True):
+        if ready and node.get("feasible", True):
             out.add(node.get("id"))
         return out
-    for c in kids:
-        _feasible_leaves(c, out)
+    for i, c in enumerate(kids):
+        before = kids[:i] if node.get("gate") == "AND" else []
+        _feasible_leaves(c, out, ready and all(k.get("feasible", True) for k in before))
     return out
 
 
@@ -180,7 +185,9 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
     }
 
 
-HMI_CUTTING = ("block_flow", "isolate_hmi")
+# Kinds of countermeasure (nodes/common/attack_graph.py) that cut the attacker
+# off the way in: what makes the HMI unavailable to its operator.
+HMI_CUTTING = ("block_flow", "isolate_way")
 OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
 
 
@@ -193,7 +200,7 @@ def _plant_acts(gt, ok_only=False):
 
 
 def expected_response(gt):
-    """Countermeasures the run needs, derived from the registers the attacker
+    """Kinds of countermeasure the run needs, derived from the registers the attacker
     wrote — robust to both the scripted (per-mode) and planner drivers. Always
     block the flow; restore the breaker if it was opened; force AUTO if control
     mode was taken. A lone out-of-range setpoint needs only the block (the PLC
@@ -206,7 +213,7 @@ def expected_response(gt):
             continue
         names.add(e.get("register_name") or REG_NAME.get(e.get("register")))
     lied = any(e.get("kind") == "fdi" and e.get("ok") for e in gt)
-    fdi = {"isolate_ews", "repair_arp"} if lied else set()
+    fdi = {"isolate_ot_host", "repair_arp"} if lied else set()
     if not names:
         return fdi
     want = {"block_flow"} | fdi
@@ -245,13 +252,24 @@ def _operator(resp):
     }
 
 
-def _restoring(out_dir):
-    """Ids of the countermeasures that undo an impact, from the run's tree."""
+def _tree_countermeasures(out_dir):
     path = _find(out_dir, "soc.tree.json", "tree.json")
     if not path:
-        return set()
+        return []
     with open(path) as f:
-        return {c["id"] for c in json.load(f).get("countermeasures", []) if c.get("restores")}
+        return json.load(f).get("countermeasures", [])
+
+
+def _restoring(out_dir):
+    """Ids of the countermeasures that undo an impact, from the run's tree."""
+    return {c["id"] for c in _tree_countermeasures(out_dir) if c.get("restores")}
+
+
+def _kinds(out_dir):
+    """{id: kind} of the run's countermeasures: a kind recurs where the lab has
+    several ways in or feeders, under qualified ids. A run recorded before kinds
+    were has its ids for kinds."""
+    return {c["id"]: c.get("kind") or c["id"] for c in _tree_countermeasures(out_dir)}
 
 
 def _countermeasure_times(resp, restoring, mitigated_t):
@@ -285,7 +303,9 @@ def _countermeasure_times(resp, restoring, mitigated_t):
     return out
 
 
-def _response(resp, gt, findings, attack_start, mode, end_t, restoring=(), mitigated_t=None):
+def _response(
+    resp, gt, findings, attack_start, mode, end_t, restoring=(), mitigated_t=None, kinds=None
+):
     up = next((r for r in resp if r.get("kind") == "response_up"), {})
     decisions = [r for r in resp if r.get("kind") == "decision"]
     # A countermeasure taken back is on record as an action too, but it is the
@@ -294,12 +314,18 @@ def _response(resp, gt, findings, attack_start, mode, end_t, restoring=(), mitig
     actions = [r for r in resp if r.get("kind") == "action" and r.get("op") != "revert"]
     applied = [a for a in actions if a.get("ok")]
     applied_ids = {a["id"] for a in applied}
+    kinds = kinds or {}
+
+    def kind(a):
+        return kinds.get(a, a)
+
+    applied_kinds = {kind(a) for a in applied_ids}
     expected = expected_response(gt)
     hits = [
         e["t"] for e in findings if attack_start is not None and e["t"] >= attack_start - SLACK_S
     ]
     real = [a for a in applied if a["id"] != "notify"]
-    block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
+    block_t = min((a["done_t"] for a in applied if kind(a["id"]) in HMI_CUTTING), default=None)
     ok_writes = _plant_acts(gt, ok_only=True)
     pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
     # Latency is measured to the first response to the attack: a false response
@@ -314,8 +340,8 @@ def _response(resp, gt, findings, attack_start, mode, end_t, restoring=(), mitig
         accurate = bool(real)  # a countermeasure stopped it early
         over = []  # preventing before the plant is good
     else:
-        accurate = expected <= applied_ids
-        over = sorted(applied_ids - expected - {"notify"})
+        accurate = expected <= applied_kinds
+        over = sorted(a for a in applied_ids - {"notify"} if kind(a) not in expected)
     return {
         "policy": up.get("policy"),
         "approval": up.get("approval"),
@@ -458,6 +484,7 @@ def compute_metrics(out_dir: str) -> dict:
             ts[-1] + dt if ts else None,
             restoring=_restoring(out_dir),
             mitigated_t=mitigated_t,
+            kinds=_kinds(out_dir),
         )
         if resp is not None
         else None

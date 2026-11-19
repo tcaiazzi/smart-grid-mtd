@@ -1,6 +1,6 @@
 """inventory.py — what the SOC is told about the lab it watches.
 
-The SOC node builds its knowledge graph itself (nodes/soc/soar_kg.py); the one
+The SOC node builds its knowledge graph itself (nodes/common/soar_kg.py); the one
 thing it cannot discover is the network it is responsible for. This is that
 description, derived from the run's LabSpec: hosts with their roles,
 interfaces and addresses, the services, the boundary firewall's ruleset. It is

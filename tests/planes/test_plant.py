@@ -10,10 +10,16 @@ import unittest
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.DEFENSE, guest_paths.DEFENSE_AGENTS, guest_paths.TRAFFIC_AGENTS)
+guest_paths.add(
+    guest_paths.DEFENSE,
+    guest_paths.DEFENSE_AGENTS,
+    guest_paths.TRAFFIC_AGENTS,
+    guest_paths.ATTACK_AGENTS,
+)
 
 import ot_registers as reg  # noqa: E402  (flat guest imports, need the path set above)
 import ot_sensor as s  # noqa: E402
+import ot_write  # noqa: E402
 import plc_controller as plc  # noqa: E402
 
 PLC_A, PLC_B, ENGINE = "10.20.0.10", "10.20.0.11", "10.20.0.20"
@@ -71,6 +77,20 @@ class Controller(unittest.TestCase):
         self.assertEqual(plc.control(in_band, 40.0, t), 38.0, "it relaxes toward its own nominal")
         self.assertEqual(plc.control(in_band, 40.0), 38.0)
         self.assertEqual(plc.control(in_band, 21.0), 20.0, "the default plant's PLC changed")
+
+
+class Writer(unittest.TestCase):
+    """ot_write, as the responses use it: the writes, and the feeder they go to."""
+
+    def test_a_feeder_is_addressed_by_its_unit(self):
+        argv = ["ot_write.py", ENGINE, "5020", "--unit=2", "1=0"]
+        self.assertEqual(ot_write.parse_args(argv), (ENGINE, 5020, [(1, 0)], 2))
+
+    def test_without_one_the_default_plant_s_unit(self):
+        argv = ["ot_write.py", ENGINE, "5020", "2=0", "0=200"]
+        self.assertEqual(ot_write.parse_args(argv), (ENGINE, 5020, [(2, 0), (0, 200)], reg.UNIT_ID))
+        legacy = ["ot_write.py", ENGINE, "5020", "1", "0", "3"]
+        self.assertEqual(ot_write.parse_args(legacy), (ENGINE, 5020, [(1, 0)], 3))
 
 
 class Telemetry:

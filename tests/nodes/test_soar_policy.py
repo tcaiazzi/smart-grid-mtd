@@ -13,7 +13,7 @@ guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
 import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
 import soar_mapping as mapping  # noqa: E402
 import soar_policy as policy  # noqa: E402
-import soar_trees as trees  # noqa: E402
+import attack_graph  # noqa: E402
 
 from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from tests.helpers.soar import HMI, finding, model  # noqa: E402
@@ -58,8 +58,8 @@ EXPECTED = {
 class Policies(unittest.TestCase):
     def setUp(self):
         self.g = kg.build_kg(cps_inv.inventory())
-        self.tree = trees.cps_attack_tree(self.g)
-        self.cms = trees.cps_countermeasures(self.g)
+        self.tree = attack_graph.attack_tree(self.g)
+        self.cms = attack_graph.countermeasures(self.g)
 
     def drive(self, kind, findings, approval="auto"):
         p = policy.make_policy(kind, self.cms, self.tree, approval=approval)
@@ -240,7 +240,7 @@ class Policies(unittest.TestCase):
     def test_rules_early_response_on_it_exec(self):
         # With the IT sensor, a confirmed it_exec triggers an early response
         # (kill the foothold + pre-block the pivot) before the plant is touched.
-        cms = trees.cps_countermeasures(self.g, it=True)
+        cms = attack_graph.countermeasures(self.g, it=True)
         p = policy.make_policy("rules", cms, self.tree)
         st = mapping.CampaignState(self.tree, self.g)
         st.update(self.it_finding("web_child_process", "it_exec", 1.0))
@@ -250,11 +250,11 @@ class Policies(unittest.TestCase):
         self.assertTrue(d.explained)
 
     def test_it_countermeasures_absent_without_it_sensor(self):
-        cms = trees.cps_countermeasures(self.g, it=False)
+        cms = attack_graph.countermeasures(self.g, it=False)
         self.assertNotIn("kill_proc_tree", {c.id for c in cms})
 
     def test_solver_prefers_cheap_early_cut_with_it(self):
-        cms = trees.cps_countermeasures(self.g, it=True)
+        cms = attack_graph.countermeasures(self.g, it=True)
         p = policy.make_policy("solver", cms, self.tree)
         st = mapping.CampaignState(self.tree, self.g)
         st.update(self.it_finding("web_child_process", "it_exec", 1.0))

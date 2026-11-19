@@ -30,11 +30,13 @@ scanners of our own (CLAUDE.md rule 8):
 
 From the findings it builds a **belief tree** (`nodes/redteam/belief_tree.py`) in
 the same document shape the planner consumes (`tree_doc`: `id/gate/children/
-impact/feasible/attck`): the structure is the attacker's knowledge of the generic
-CPS pattern (exploit the web app → pivot → write registers), and recon only sets
-which parts are `feasible` on this target and which impacts the discovered
-registers allow. It then plans and executes on that tree, **reusing
-`red_agent.RedAgent` unchanged**.
+impact/feasible/attck`). The findings become an inventory of the lab as the
+attacker knows it — the HMI it got a foothold on, the engine behind it, the
+registers it read, a boundary inferred from the HMI talking to the engine — and
+the tree is derived from it by **the same generator the SOC runs on its full
+inventory** (`nodes/common/attack_graph.py`, on the attacker's image with
+networkx). What recon did not find is absent or not feasible. It then plans and
+executes on that tree, **reusing `red_agent.RedAgent` unchanged**.
 
 Everything downstream is the `cps` chain: the planner, `tree_doc`, `steps`, the
 exploit primitives (`exploit_client.py` / `ot_write.py`), the sensors and the
@@ -56,7 +58,8 @@ recon findings added.
 ## Scoring: tree fidelity
 
 `metrics.py` adds `tree_fidelity` (only when a belief tree is present, so `cps` /
-`cps-advisor` are unaffected): it compares the feasible leaves of the belief tree
+`cps-advisor` are unaffected): it compares the leaves an attacker can reach on
+the belief tree (feasible, with every step before them feasible)
 against the true `tree.json` recorded at deploy and reports **precision** (of what
 the attacker believed feasible, how much is real), **recall** (of what is really
 feasible, how much it found), and the id lists `discovered` / `missing` /

@@ -18,6 +18,7 @@ from tests.helpers import guest_paths
 guest_paths.add(guest_paths.REDTEAM, guest_paths.SOC, guest_paths.DEFENSE)
 
 import soar_kg as _kg  # noqa: E402  (node code, to build the tree document under test)
+import attack_graph  # noqa: E402
 import soar_trees as _trees  # noqa: E402
 
 import red_steps  # noqa: E402  (nodes/redteam, flat as on the attacker)
@@ -32,7 +33,7 @@ def _attack_tree():
     """The attack tree as the document the planner reads (tree.json's
     ``attack_tree``), built from the node's own code."""
     g = _kg.build_kg(cps_inv.inventory())
-    return _trees.to_json(_trees.cps_attack_tree(g), _trees.cps_countermeasures(g), g)[
+    return _trees.to_json(attack_graph.attack_tree(g), attack_graph.countermeasures(g), g)[
         "attack_tree"
     ]
 

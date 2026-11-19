@@ -128,9 +128,12 @@ class Fidelity(unittest.TestCase):
     """The scored comparison of the derived tree against the true one."""
 
     def _write(self, out_dir, belief_leaves, true_leaves):
+        # Alternatives under one OR: each leaf counts by its own flag, which is
+        # what precision and recall are about here (reachability is tested with
+        # the generated trees, tests/nodes/test_recon.py).
         def tree(leaves):
             return {
-                "id": "via_hmi", "gate": "AND",
+                "id": "impact", "gate": "OR",
                 "children": [{"id": i, "gate": "LEAF", "feasible": i in leaves,
                               "children": []} for i in ALL],
             }  # fmt: skip

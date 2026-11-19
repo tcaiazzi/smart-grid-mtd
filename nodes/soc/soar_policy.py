@@ -62,10 +62,17 @@ class Decision:
         )
 
 
+def impact_nodes(tree):
+    """The ids of ``tree``'s impact steps (by kind: the step may recur)."""
+    return [n.id for n in tree.walk() if (n.kind or n.id) in mapping.IMPACT_LEAVES]
+
+
 class _Base:
     name = "base"
 
-    def __init__(self, countermeasures, allowed=None):
+    def __init__(self, countermeasures, allowed=None, tree=None):
+        self.tree = tree
+        self.impacts = impact_nodes(tree) if tree is not None else list(mapping.IMPACT_LEAVES)
         self.cms = {c.id: c for c in countermeasures}
         self.allowed = set(allowed) if allowed is not None else set(self.cms)
         self.applied = set()  # countermeasures already in effect
@@ -99,7 +106,7 @@ class _Base:
         # What each action addresses: believed nodes it prevents/restores, plus
         # the impact leaves it pre-emptively guards (a block before the plant is
         # touched is justified by the impact it prevents, even if not yet seen).
-        relevant = set(nodes) | set(mapping.IMPACT_LEAVES)
+        relevant = set(nodes) | set(self.impacts)
         out = {}
         for a in ids:
             cm = self.cms[a]
@@ -126,9 +133,11 @@ class _Base:
 
 
 class RulesPolicy(_Base):
-    """Static playbook: confirmed impact leaf -> fixed countermeasures."""
+    """Static playbook: confirmed step -> fixed kinds of countermeasure, each
+    taken where it acts on that step."""
 
     name = "rules"
+    # Step kind -> countermeasure kinds (attack_graph.py).
     PLAYBOOK = {
         # Early IT steps (observed only with the IT sensor): stop the foothold
         # and pre-emptively block the pivot before the plant is touched.
@@ -143,14 +152,38 @@ class RulesPolicy(_Base):
         "breaker_chatter": ["block_flow", "restore_breaker"],
         # Between the PLC and the plant: take the host that stands there off the
         # OT link, at the position already, before a reading is falsified.
-        "ot_aitm": ["isolate_ews", "repair_arp"],
-        "meas_fdi": ["isolate_ews", "repair_arp"],
+        "ot_aitm": ["isolate_ot_host", "repair_arp"],
+        "meas_fdi": ["isolate_ot_host", "repair_arp"],
     }
     TRIGGERS = ["it_access", "it_exec", "ot_aitm"] + list(mapping.IMPACT_LEAVES)
 
+    def _kind(self, n):
+        node = trees.index(self.tree).get(n) if self.tree is not None else None
+        return (node.kind if node is not None and node.kind else None) or n
+
+    def _instances(self, cm_kind, node):
+        """The countermeasures of ``cm_kind`` that act on ``node``; failing
+        that, those that act on its way in (a block ahead of the pivot)."""
+        of_kind = [c for c in self.cms.values() if (c.kind or c.id) == cm_kind]
+        on_node = [c.id for c in of_kind if node in c.prevents or node in c.restores]
+        if on_node or self.tree is None:
+            return on_node
+        par = trees.parents(self.tree)
+        way = node
+        while way in par and par[way].id != self.tree.id:
+            way = par[way].id
+        on_way = {n.id for n in trees.index(self.tree)[way].walk()}
+        return [c.id for c in of_kind if on_way & (set(c.prevents) | set(c.restores))]
+
     def decide(self, snapshot, t=None):
         nodes = snapshot["nodes"]
-        confirmed = [n for n in self.TRIGGERS if nodes.get(n, {}).get("state") == mapping.CONFIRMED]
+        ordered = [n.id for n in self.tree.walk()] if self.tree is not None else self.TRIGGERS
+        confirmed = [
+            n
+            for n in ordered
+            if self._kind(n) in self.TRIGGERS and nodes.get(n, {}).get("state") == mapping.CONFIRMED
+        ]
+        confirmed.sort(key=lambda n: self.TRIGGERS.index(self._kind(n)))
         if not confirmed:
             return self._notify(
                 snapshot,
@@ -158,9 +191,12 @@ class RulesPolicy(_Base):
                 "suspicious activity below the confirmation "
                 "threshold: operator notified, no automatic action",
             )
-        want = []
+        want, chosen = [], {}
         for node in confirmed:
-            for a in self.PLAYBOOK.get(node, []):
+            chosen[node] = [
+                a for k in self.PLAYBOOK.get(self._kind(node), []) for a in self._instances(k, node)
+            ]
+            for a in chosen[node]:
                 if a not in want:
                     want.append(a)
         new = [a for a in want if a not in self.applied and a in self.allowed]
@@ -168,8 +204,7 @@ class RulesPolicy(_Base):
             return None
         new = self._order(new)
         rationale = "; ".join(
-            f"{node} confirmed ({', '.join(nodes[node]['classes'])}) "
-            f"-> {', '.join(self.PLAYBOOK.get(node, []))}"
+            f"{node} confirmed ({', '.join(nodes[node]['classes'])}) -> {', '.join(chosen[node])}"
             for node in confirmed
         )
         return Decision(
@@ -180,7 +215,7 @@ class RulesPolicy(_Base):
             {},
             rationale,
             needs_approval=[a for a in new if self.cms[a].requires_approval],
-            active_impacts=[n for n in confirmed if n in mapping.IMPACT_LEAVES],
+            active_impacts=[n for n in confirmed if n in self.impacts],
         )
 
 
@@ -197,21 +232,20 @@ class SolverPolicy(_Base):
     name = "solver"
 
     def __init__(self, countermeasures, tree, weights=None, allowed=None, approval_delay_s=0.0):
-        super().__init__(countermeasures, allowed)
-        self.tree = tree
+        super().__init__(countermeasures, allowed, tree)
         self.w = weights or Weights()
         # How long a countermeasure that needs approval waits before it runs.
         self.approval_delay_s = float(approval_delay_s)
         self.impact = {n.id: n.impact for n in tree.walk() if n.impact > 0}
-        self.gateways = self._gateways(tree)
+        self.gateways = self._gateways(tree, self.impacts)
 
     @staticmethod
-    def _gateways(tree):
+    def _gateways(tree, impacts):
         """{step: impact leaves behind it}: the last step before each impact,
         i.e. the sibling just before it (or before the gate that holds it) under
         the nearest AND. Holding that step is holding the way to those impacts."""
         parent, out = trees.parents(tree), {}
-        for leaf in mapping.IMPACT_LEAVES:
+        for leaf in impacts:
             node = trees.index(tree).get(leaf)
             while node is not None and node.id in parent:
                 up = parent[node.id]
@@ -242,7 +276,7 @@ class SolverPolicy(_Base):
         residual = sum(
             scores.get(n, 0.0) * imp
             for n, imp in self.impact.items()
-            if n in mapping.IMPACT_LEAVES and n not in restored
+            if n in self.impacts and n not in restored
         )
         # The attacker still holds a path: further manipulation is possible
         # unless the path or the manipulations behind it are prevented.
@@ -262,7 +296,7 @@ class SolverPolicy(_Base):
         time = sum(
             scores.get(n, 0.0) * imp * self._late([a for a in new if n in self.cms[a].restores])
             for n, imp in self.impact.items()
-            if n in mapping.IMPACT_LEAVES and n in restored and n not in held_r
+            if n in self.impacts and n in restored and n not in held_r
         )
         for gateway, behind in self.gateways.items():
             if gateway in prevented and gateway not in held_p:
@@ -306,7 +340,7 @@ class SolverPolicy(_Base):
         preventable = {n for a in self.allowed for n in self.cms[a].prevents}
         out = []
         for leaf in sorted(restored):
-            if leaf not in mapping.IMPACT_LEAVES or scores.get(leaf, 0.0) <= 0.0:
+            if leaf not in self.impacts or scores.get(leaf, 0.0) <= 0.0:
                 continue
             path = [leaf] + trees.prerequisites(self.tree, leaf)
             if any(n in prevented for n in path):
@@ -348,9 +382,7 @@ class SolverPolicy(_Base):
             f"late +{best_cost['time']}, op +{best_cost['op']}, energy +{best_cost['energy']}); "
             "beliefs "
             + ", ".join(
-                f"{n}={scores[n]}"
-                for n in list(mapping.IMPACT_LEAVES) + list(self.gateways)
-                if n in scores
+                f"{n}={scores[n]}" for n in list(self.impacts) + list(self.gateways) if n in scores
             )
         )
         if paired:
@@ -396,7 +428,7 @@ def make_policy(kind, countermeasures, tree, approval="auto", weights=None, appr
     the others wait for theirs, which the solver counts against them."""
     allowed = {c.id for c in countermeasures if not (approval == "deny" and c.requires_approval)}
     if kind == "rules":
-        return RulesPolicy(countermeasures, allowed=allowed)
+        return RulesPolicy(countermeasures, allowed=allowed, tree=tree)
     if kind == "solver":
         return SolverPolicy(
             countermeasures,

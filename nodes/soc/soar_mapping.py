@@ -35,6 +35,7 @@ SUSPECT_AT = 0.30
 MODEL_WEIGHT = 0.5  # the behavioural model alone never confirms a step
 EXPLAINED_AWAY = 0.4  # discount on consequence evidence once another leaf is confirmed
 COMMAND, CONSEQUENCE = "command", "consequence"
+# The kinds of step (techniques.py) that are an impact on the plant.
 IMPACT_LEAVES = (
     "setpoint_oor",
     "breaker_open",
@@ -74,8 +75,10 @@ _VOLTAGE_FEATURES = {"v_min", "v_max"}
 
 
 def evidence_from_finding(f, g):
-    """One finding -> [(node_id, weight, kind)]. ``g`` is the knowledge graph,
-    used to resolve the source address to a host and its role."""
+    """One finding -> [(step kind, weight, kind of evidence)]. ``g`` is the
+    knowledge graph, used to resolve the source address to a host and its role.
+    Which node of the tree a step kind is, where it recurs, is CampaignState's
+    to resolve."""
     klass = f.get("klass")
     det = f.get("detector") or "rules"
     ent = f.get("entities") or {}
@@ -164,6 +167,8 @@ class CampaignState:
         self.tree, self.g = tree, g
         self.idx = trees.index(tree)
         self.parents = trees.parents(tree)
+        self.kind_of = {n: node.kind or n for n, node in self.idx.items()}
+        self.impacts = [n.id for n in tree.walk() if self.kind_of[n.id] in IMPACT_LEAVES]
         # node -> {"command": best, "consequence": best}; first/last seen; classes
         self.ev = {n: {COMMAND: 0.0, CONSEQUENCE: 0.0} for n in self.idx}
         self.first_seen, self.last_seen = {}, {}
@@ -180,26 +185,54 @@ class CampaignState:
         t = finding.get("t")
         src = (finding.get("entities") or {}).get("src")
         touched = []
-        for node, w, kind in evidence_from_finding(finding, self.g):
-            if node not in self.idx:
-                continue
-            e = self.ev[node]
-            e[kind] = max(e[kind], min(1.0, w))
-            self.first_seen.setdefault(node, t)
-            self.last_seen[node] = t
-            k = finding.get("klass")
-            if k not in self.classes[node]:
-                self.classes[node].append(k)
-            touched.append(node)
+        for step, w, kind in evidence_from_finding(finding, self.g):
+            for node in self.resolve(step, finding):
+                e = self.ev[node]
+                e[kind] = max(e[kind], min(1.0, w))
+                self.first_seen.setdefault(node, t)
+                self.last_seen[node] = t
+                k = finding.get("klass")
+                if k not in self.classes[node]:
+                    self.classes[node].append(k)
+                touched.append(node)
         if touched and src:
             host = kgmod.host_of_ip(self.g, src)
             if host:
                 self.sources.add(host)
         return touched
 
+    def resolve(self, step, finding):
+        """The nodes a step kind names for this finding: the only one, or those
+        on the finding's feeder and on the way its source goes through."""
+        found = [n for n, k in self.kind_of.items() if k == step]
+        if len(found) <= 1:
+            return found
+        ent = finding.get("entities") or {}
+        unit = ent.get("unit")
+        if unit is not None:
+            mine = [n for n in found if unit in self._feeders(n)]
+            found = mine or found
+        src = kgmod.host_of_ip(self.g, ent["src"]) if ent.get("src") else None
+        if src:
+            way = f"via_{src}"
+            mine = [n for n in found if way in self._ancestors(n)]
+            found = mine or found
+        return found
+
+    def _feeders(self, n):
+        """The feeders a node's register targets belong to (reg:<unit>:...)."""
+        return {int(t.split(":")[1]) for t in self.idx[n].targets if t.startswith("reg:")}
+
+    def _ancestors(self, n):
+        out = []
+        while n in self.parents:
+            n = self.parents[n].id
+            out.append(n)
+        return out
+
     # ── read ─────────────────────────────────────────────────────────────────
     def _command_confirmed(self):
-        return {n for n in IMPACT_LEAVES if n in self.idx and self.ev[n][COMMAND] >= CONFIRM_AT}
+        return {n for n in self.impacts if self.ev[n][COMMAND] >= CONFIRM_AT}
 
     def observed_scores(self):
         """Direct score per node after explaining away."""
@@ -207,7 +240,7 @@ class CampaignState:
         scores = {}
         for n, e in self.ev.items():
             cons = e[CONSEQUENCE]
-            if cmd_conf and n not in cmd_conf and n in IMPACT_LEAVES:
+            if cmd_conf and n not in cmd_conf and n in self.impacts:
                 cons *= EXPLAINED_AWAY
             scores[n] = max(e[COMMAND], cons)
         return scores
@@ -227,16 +260,18 @@ class CampaignState:
                     s[p] = v
                     inferred[p] = True
         # Forward belief: a confirmed early IT step means the chain is under way,
-        # so the pivot (the gateway to the plant) is likely next — a discounted,
-        # never-confirming score so the response can act before the manipulation.
-        early = max(
-            (obs.get(n, 0.0) for n in FORWARD_STEPS if obs.get(n, 0.0) >= CONFIRM_AT), default=0.0
-        )
-        if early and "pivot" in self.idx:
-            fwd = min(FORWARD_WEIGHT * early, CONFIRM_AT - 0.01)
-            if fwd > s.get("pivot", 0.0):
-                s["pivot"] = fwd
-                inferred["pivot"] = True
+        # so the pivot of its way (the gateway to the plant) is likely next — a
+        # discounted, never-confirming score so the response can act before the
+        # manipulation.
+        for n, v in obs.items():
+            if self.kind_of[n] not in FORWARD_STEPS or v < CONFIRM_AT:
+                continue
+            way = self.parents[n]
+            for pivot in (c.id for c in way.children if self.kind_of[c.id] == "pivot"):
+                fwd = min(FORWARD_WEIGHT * v, CONFIRM_AT - 0.01)
+                if fwd > s.get(pivot, 0.0):
+                    s[pivot] = fwd
+                    inferred[pivot] = True
         for node in reversed(list(self.tree.walk())):  # children before parents
             if node.children:
                 s[node.id] = max([s.get(node.id, 0.0)] + [s[c.id] for c in node.children])
@@ -263,14 +298,19 @@ class CampaignState:
                 "first_seen": self.first_seen.get(n),
                 "last_seen": self.last_seen.get(n),
             }
-        active = [n for n in IMPACT_LEAVES if n in nodes and s[n] >= SUSPECT_AT]
+        active = [n for n in self.impacts if n in nodes and s[n] >= SUSPECT_AT]
         hosts = sorted(
             h for h in self.sources if self.g.nodes[f"host:{h}"]["role"] not in ("plc", "plant")
         )
-        if any(n in nodes for n in ("it_exec", "pivot")):
-            hmi = trees.cps_context(self.g)["hmi"]
-            if hmi not in hosts:
-                hosts.append(hmi)
+        # A step through a way in implicates the host it goes through: the target
+        # of the way's execution step.
+        for n in nodes:
+            if self.idx[n].kind in ("it_exec", "pivot"):
+                way = self.parents[n]
+                execute = next(c for c in way.children if c.kind == "it_exec")
+                host = execute.targets[0].split(":", 1)[1]
+                if host not in hosts:
+                    hosts.append(host)
         return {
             "t": t,
             "findings": self.n_findings,

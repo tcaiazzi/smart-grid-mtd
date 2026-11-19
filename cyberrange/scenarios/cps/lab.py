@@ -15,7 +15,7 @@ import ipaddress
 from dataclasses import dataclass, field
 from typing import Optional
 
-# Roles, as the knowledge graph reads them (nodes/soc/soar_kg.py).
+# Roles, as the knowledge graph reads them (nodes/common/soar_kg.py).
 BOUNDARY_ROLE = "boundary"
 SOC_ROLE = "soc"
 

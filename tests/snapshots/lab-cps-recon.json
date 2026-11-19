@@ -9,7 +9,11 @@
    "/tree_doc.py",
    "/recon.py",
    "/belief_tree.py",
-   "/red_recon_agent.py"
+   "/red_recon_agent.py",
+   "/soar_kg.py",
+   "/soar_trees.py",
+   "/techniques.py",
+   "/attack_graph.py"
   ],
   "settings": {
    "0": "IT",
@@ -151,6 +155,8 @@
    "/soc_operator.py",
    "/soar_kg.py",
    "/soar_trees.py",
+   "/techniques.py",
+   "/attack_graph.py",
    "/soar_mapping.py",
    "/soar_policy.py",
    "/ot_registers.py"

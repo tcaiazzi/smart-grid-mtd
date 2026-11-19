@@ -30,9 +30,13 @@ NODES = REPO_ROOT / "nodes"
 WAZUH_AGENT = NODES / "wazuh" / "agent"
 #: The manager's own integrations (cps-soc: the one with DFIR-IRIS).
 WAZUH_MANAGER = NODES / "wazuh" / "manager"
-#: SOC node: the analytics (soc_analytics) and the SOAR modules it imports.
-#: ot_registers rides along in DEFENSE (a flat dual-use module).
-SOC = NODES / "soc"
+#: Node software shared by the SOC and the attacker: the knowledge graph, the
+#: attack tree's model and its generator.
+COMMON = NODES / "common"
+#: SOC node: the analytics (soc_analytics) and the SOAR modules it imports, with
+#: the shared ones it is staged with. ot_registers rides along in DEFENSE (a
+#: flat dual-use module).
+SOC = (NODES / "soc", COMMON)
 #: Attacker node: the autonomous attacker (red_agent, with its planner) and the
 #: red team's console.
 REDTEAM = NODES / "redteam"
@@ -40,11 +44,17 @@ REDTEAM = NODES / "redteam"
 SOAR = NODES / "soar"
 
 
+def _flat(directories):
+    """A node may be staged from several host directories (a tuple of them)."""
+    for d in directories:
+        yield from (_flat(d) if isinstance(d, tuple) else [d])
+
+
 def add(*directories):
     """Put ``directories`` at the front of sys.path, as a container's root is."""
     import sys
 
-    for directory in directories:
+    for directory in _flat(directories):
         entry = str(directory)
         if entry in sys.path:
             sys.path.remove(entry)
@@ -55,7 +65,7 @@ def pythonpath(*directories, base=None):
     """``PYTHONPATH`` value for a subprocess that runs a guest module."""
     import os
 
-    parts = [str(d) for d in directories]
+    parts = [str(d) for d in _flat(directories)]
     if base:
         parts.append(base)
     return os.pathsep.join(p for p in parts if p)

@@ -53,6 +53,7 @@ import time
 import urllib.error
 import urllib.request
 
+import attack_graph
 import soar_kg as kgmod
 import soar_mapping as mapping
 import soar_policy as policy
@@ -117,7 +118,7 @@ def write_structure(out_dir, g, it=False):
     """kg.json + tree.json (knowledge graph, attack-defense tree) into ``out_dir``."""
     os.makedirs(out_dir, exist_ok=True)
     kgmod.save(g, os.path.join(out_dir, "kg.json"))
-    doc = trees.to_json(trees.cps_attack_tree(g), trees.cps_countermeasures(g, it=it), g)
+    doc = trees.to_json(attack_graph.attack_tree(g), attack_graph.countermeasures(g, it=it), g)
     with open(os.path.join(out_dir, "tree.json"), "w") as f:
         json.dump(doc, f, indent=1)
 
@@ -128,8 +129,8 @@ class ResponseEngine:
 
     def __init__(self, kind, g, approval="auto", record=None, it=False):
         self.g = g
-        self.tree = trees.cps_attack_tree(g)
-        self.cms = {c.id: c for c in trees.cps_countermeasures(g, it=it)}
+        self.tree = attack_graph.attack_tree(g)
+        self.cms = {c.id: c for c in attack_graph.countermeasures(g, it=it)}
         mode, seconds = parse_approval(approval)
         self.policy = (
             None

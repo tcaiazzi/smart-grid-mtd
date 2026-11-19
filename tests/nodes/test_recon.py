@@ -14,9 +14,13 @@ from tests.helpers import guest_paths
 # The recon agents are node software imported flat, as on the attacker; DEFENSE
 # supplies ot_registers, ATTACK_AGENTS supplies the exploit chain red_recon_agent
 # reuses for its RCE tunnel.
-guest_paths.add(guest_paths.REDTEAM, guest_paths.ATTACK_AGENTS, guest_paths.DEFENSE)
+guest_paths.add(
+    guest_paths.REDTEAM, guest_paths.COMMON, guest_paths.ATTACK_AGENTS, guest_paths.DEFENSE
+)
 
 import belief_tree  # noqa: E402
+
+from cyberrange.scenarios.cps.metrics import _feasible_leaves  # noqa: E402
 import recon  # noqa: E402
 import red_recon_agent  # noqa: E402
 
@@ -82,20 +86,8 @@ class Recon(unittest.TestCase):
 
 class BeliefTree(unittest.TestCase):
     def _leaves(self, tree):
-        """Feasible leaf ids of a tree document."""
-        out = set()
-
-        def walk(n):
-            kids = n.get("children") or []
-            if not kids:
-                if n.get("feasible", True):
-                    out.add(n["id"])
-                return
-            for c in kids:
-                walk(c)
-
-        walk(tree)
-        return out
+        """The leaves the attacker believes it can reach: what tree fidelity scores."""
+        return _feasible_leaves(tree, set())
 
     def test_full_discovery_all_feasible(self):
         findings = {
@@ -103,7 +95,8 @@ class BeliefTree(unittest.TestCase):
             "ot": {"engine_ip": "10.20.0.20", "modbus_ok": True, "registers": {0: 1, 1: 0, 2: 0}},
         }
         tree = belief_tree.build(findings)
-        self.assertEqual(tree["id"], "via_hmi")
+        # The SOC's generator on what recon found: the same root, the same ids.
+        self.assertEqual(tree["id"], "impact")
         self.assertEqual(
             self._leaves(tree),
             {

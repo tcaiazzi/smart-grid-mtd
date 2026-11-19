@@ -6,7 +6,7 @@ runs this to pivot across the IT/OT boundary and write an actuator register on
 the physical engine. Pure stdlib (no pymodbus) so it runs with nothing extra
 installed on the compromised host.
 
-Usage: ot_write.py <engine_ip> <port> <register>=<raw_value> [<register>=<raw_value> ...]
+Usage: ot_write.py <engine_ip> <port> [--unit=<unit_id>] <register>=<raw_value> [...]
        ot_write.py <engine_ip> <port> <register> <raw_value> [unit_id]   (legacy form)
 `raw_value` is the already-scaled 16-bit register word (see ot_registers.encode).
 Several writes go out back to back over ONE TCP connection, in order.
@@ -49,12 +49,15 @@ def parse_args(argv):
     if len(argv) < 4:
         raise ValueError("usage")
     engine_ip, port, rest = argv[1], int(argv[2]), argv[3:]
-    if "=" in rest[0]:
+    # The feeder a plant of several serves as its own Modbus unit.
+    unit = next((int(a.split("=", 1)[1]) for a in rest if a.startswith("--unit=")), reg.UNIT_ID)
+    rest = [a for a in rest if not a.startswith("--unit=")]
+    if rest and "=" in rest[0]:
         writes = [tuple(int(x) for x in a.split("=", 1)) for a in rest]
-        return engine_ip, port, writes, reg.UNIT_ID
+        return engine_ip, port, writes, unit
     if len(rest) < 2:
         raise ValueError("usage")
-    unit = int(rest[2]) if len(rest) > 2 else reg.UNIT_ID
+    unit = int(rest[2]) if len(rest) > 2 else unit
     return engine_ip, port, [(int(rest[0]), int(rest[1]))], unit
 
 

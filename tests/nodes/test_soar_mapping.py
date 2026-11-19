@@ -12,7 +12,7 @@ guest_paths.add(guest_paths.SOC, guest_paths.DEFENSE)
 
 import soar_kg as kg  # noqa: E402  (flat guest imports, need the path set above)
 import soar_mapping as mapping  # noqa: E402
-import soar_trees as trees  # noqa: E402
+import attack_graph  # noqa: E402
 
 from cyberrange.scenarios.cps import inventory as cps_inv  # noqa: E402
 from cyberrange.scenarios.cps import topology as cps  # noqa: E402
@@ -47,7 +47,7 @@ def model(t, *features, conf=0.9):
 class Mapping(unittest.TestCase):
     def setUp(self):
         self.g = kg.build_kg(cps_inv.inventory())
-        self.tree = trees.cps_attack_tree(self.g)
+        self.tree = attack_graph.attack_tree(self.g)
 
     def run_findings(self, findings):
         st = mapping.CampaignState(self.tree, self.g)
