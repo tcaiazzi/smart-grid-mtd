@@ -7,7 +7,8 @@ writes its actuators.
 Copied flat onto the engine machine (see the scenario's guest_files.py);
 imports grid_sim and ot_registers as flat modules.
 
-Two threads share one pymodbus datastore:
+Each feeder of the plant (ot_registers.plant, --plant-b64) is a Modbus unit of
+its own, with the same register map. Two threads share the datastore:
   - a background TCP server answering the PLC's reads/writes, and
   - a stepping loop that, once per interval, reads the actuator holding
     registers the master has written, advances the power flow, and refreshes the
@@ -34,83 +35,85 @@ import ot_registers as reg
 log = logging.getLogger("modbus_engine")
 
 
-def _build_context():
-    """One slave context: holding registers seeded to the nominal actuator
-    setpoints, input registers zeroed (filled on the first step)."""
-    hr_init = [0] * reg.ACTUATOR_COUNT
-    hr_init[reg.HR_DG_SETPOINT] = reg.encode(
-        grid_sim.DG_NOMINAL_KW, reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
-    )
-    hr_init[reg.HR_SWITCH_CMD] = 0  # breaker closed
-    hr_init[reg.HR_CTRL_MODE] = reg.CTRL_AUTO
-    slave = ModbusSlaveContext(
-        ir=ModbusSequentialDataBlock(0, [0] * reg.SENSOR_COUNT),
-        hr=ModbusSequentialDataBlock(0, hr_init),
-        zero_mode=True,
-    )
-    ctx = ModbusServerContext(slaves={reg.UNIT_ID: slave}, single=False)
-    return ctx, slave
+def _build_context(st):
+    """One slave context per feeder, under its unit id: holding registers seeded
+    to the feeder's nominal actuator setpoints, input registers zeroed (filled
+    on the first step)."""
+    slaves = {}
+    for f in st.feeders:
+        hr_init = [0] * reg.ACTUATOR_COUNT
+        scale = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
+        hr_init[reg.HR_DG_SETPOINT] = reg.encode(f.spec["dg_kw"], scale)
+        hr_init[reg.HR_SWITCH_CMD] = 0  # breaker closed
+        hr_init[reg.HR_CTRL_MODE] = reg.CTRL_AUTO
+        slaves[f.unit] = ModbusSlaveContext(
+            ir=ModbusSequentialDataBlock(0, [0] * reg.SENSOR_COUNT),
+            hr=ModbusSequentialDataBlock(0, hr_init),
+            zero_mode=True,
+        )
+    return ModbusServerContext(slaves=slaves, single=False), slaves
 
 
 def _read_actuators(slave) -> dict:
     """Decode the holding registers the master has written into engineering
     units for grid_sim.step_grid()."""
     raw = slave.getValues(0x03, 0, reg.ACTUATOR_COUNT)
-    return {
-        "dg_setpoint": reg.decode(
-            raw[reg.HR_DG_SETPOINT], reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
-        ),
-        "switch_cmd": reg.decode(
-            raw[reg.HR_SWITCH_CMD], reg.ACTUATOR_REGISTERS[reg.HR_SWITCH_CMD][1]
-        ),
-        # Not a physical actuator (grid_sim ignores it) but recorded in every
-        # frame so metrics can tell how long control authority was in MANUAL.
-        "ctrl_mode": int(raw[reg.HR_CTRL_MODE]),
+    out = {
+        name: reg.decode(raw[a], scale)
+        for a, (name, scale, _lo, _hi) in reg.ACTUATOR_REGISTERS.items()
     }
+    # Not a physical actuator (grid_sim ignores it) but recorded in every frame
+    # so metrics can tell how long control authority was in MANUAL.
+    out["ctrl_mode"] = int(raw[reg.HR_CTRL_MODE])
+    return out
 
 
-def _write_sensors(slave, sensors: dict):
-    """Encode grid_sim sensor outputs into the input registers."""
+def _write_sensors(slave, readings: dict):
+    """Encode one feeder's readings into its input registers."""
     words = [0] * reg.SENSOR_COUNT
-    words[reg.IR_V_LOAD] = reg.encode(sensors["v_load"], reg.SENSOR_REGISTERS[reg.IR_V_LOAD][1])
-    words[reg.IR_V_DG] = reg.encode(sensors["v_dg"], reg.SENSOR_REGISTERS[reg.IR_V_DG][1])
-    words[reg.IR_LINE_LOAD] = reg.encode(
-        sensors["line_load"], reg.SENSOR_REGISTERS[reg.IR_LINE_LOAD][1]
-    )
-    words[reg.IR_P_LOAD] = reg.encode(sensors["p_load"], reg.SENSOR_REGISTERS[reg.IR_P_LOAD][1])
-    words[reg.IR_P_DG] = reg.encode(sensors["p_dg"], reg.SENSOR_REGISTERS[reg.IR_P_DG][1])
-    words[reg.IR_ABNORMAL] = int(sensors["abnormal"])
+    for a, (name, scale, _unit) in reg.SENSOR_REGISTERS.items():
+        words[a] = reg.encode(float(readings[name]), scale)
     slave.setValues(0x04, 0, words)
 
 
-def _stepper(slave, st, interval, duration, frame_log, stop):
+def _step(slaves, st, interval):
+    """One physics step: actuators in, frame out, input registers refreshed."""
+    actuators = {unit: _read_actuators(slave) for unit, slave in slaves.items()}
+    frame = grid_sim.step_grid(st, actuators, dt_s=interval)
+    for unit, readings in grid_sim.unit_readings(st, frame).items():
+        _write_sensors(slaves[unit], readings)
+    frame["actuators"] = actuators[st.feeders[0].unit]
+    if "units" in frame:
+        for unit, a in actuators.items():
+            frame["units"][str(unit)]["actuators"] = a
+    return frame
+
+
+def _stepper(slaves, st, interval, duration, frame_log, stop):
     """Advance the physics once per `interval` until `duration` (0 = forever)."""
     start = time.time()
     while not stop.is_set():
-        actuators = _read_actuators(slave)
-        sensors = grid_sim.step_grid(st, actuators, dt_s=interval)
-        _write_sensors(slave, sensors)
-        frame = {**sensors, "actuators": actuators}
+        frame = _step(slaves, st, interval)
         if frame_log:
             frame_log.write(json.dumps(frame) + "\n")
             frame_log.flush()
-        if sensors["abnormal"]:
+        if frame["abnormal"]:
             log.warning(
                 "ABNORMAL step=%d v_load=%.3f v_dg=%.3f setpoint=%.1f switch_open=%s",
-                sensors["step"],
-                sensors["v_load"],
-                sensors["v_dg"],
-                actuators["dg_setpoint"],
-                sensors["switch_open"],
+                frame["step"],
+                frame["v_load"],
+                frame["v_dg"],
+                frame["actuators"]["dg_setpoint"],
+                frame["switch_open"],
             )
         else:
             log.info(
                 "step=%d v_load=%.3f v_dg=%.3f line=%.1f%% p_grid=%.1f",
-                sensors["step"],
-                sensors["v_load"],
-                sensors["v_dg"],
-                sensors["line_load"],
-                sensors["p_grid"],
+                frame["step"],
+                frame["v_load"],
+                frame["v_dg"],
+                frame["line_load"],
+                frame["p_grid"],
             )
         if duration and (time.time() - start) >= duration:
             stop.set()
@@ -129,6 +132,7 @@ def main():
         "--duration", type=float, default=0.0, help="run this many seconds then exit (0 = forever)"
     )
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--plant-b64", default=None, help="the plant (default: the default plant)")
     ap.add_argument(
         "--frame-log", default=None, help="append one JSON physics frame per step to this file"
     )
@@ -141,20 +145,20 @@ def main():
         filename=args.log_file or None,
     )
 
-    st = grid_sim.build_grid(seed=args.seed)
-    ctx, slave = _build_context()
+    st = grid_sim.build_grid(seed=args.seed, plant=args.plant_b64)
+    ctx, slaves = _build_context(st)
     # Prime the input registers with the nominal state before the server starts.
-    _write_sensors(slave, grid_sim.step_grid(st, _read_actuators(slave), dt_s=args.interval))
+    _step(slaves, st, args.interval)
 
     frame_log = open(args.frame_log, "a", buffering=1) if args.frame_log else None
     stop = threading.Event()
     stepper = threading.Thread(
         target=_stepper,
-        args=(slave, st, args.interval, args.duration, frame_log, stop),
+        args=(slaves, st, args.interval, args.duration, frame_log, stop),
         daemon=True,
     )
     stepper.start()
-    log.info("engine serving Modbus/TCP on %s:%d unit=%d", args.host, args.port, reg.UNIT_ID)
+    log.info("engine serving Modbus/TCP on %s:%d units=%s", args.host, args.port, sorted(slaves))
 
     server_thread = threading.Thread(
         target=StartTcpServer,

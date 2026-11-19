@@ -16,29 +16,33 @@ import json
 import logging
 import time
 
+from cyberrange.planes.defense import ot_registers as reg
+
 log = logging.getLogger("active_attack")
 
 STAGE_TO_GT = {"it_access": "rce"}  # map the access step to the kind metrics expect
 
-# Attack mode -> the actuator writes it performs (mirrors exploit_client.ATTACKS;
-# kept as a plain hint so this host module needs no guest imports).
+
+def _write(addr, value):
+    return {"register": addr, "name": reg.ACTUATOR_REGISTERS[addr][0], "value": value}
+
+
+_MANUAL = _write(reg.HR_CTRL_MODE, float(reg.CTRL_MANUAL))
+_RATED = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][3]
+# Attack mode -> the actuator writes it performs: the values mirror
+# exploit_client.ATTACKS (a guest module this host module does not import), the
+# registers are the plant contract's.
 ATTACK_TARGET = {
-    "setpoint-overvoltage": [{"register": 0, "name": "dg_setpoint", "value": 200.0}],
-    "breaker-open": [{"register": 1, "name": "switch_cmd", "value": 1.0}],
-    "manual-hijack": [
-        {"register": 2, "name": "ctrl_mode", "value": 1.0},
-        {"register": 0, "name": "dg_setpoint", "value": 60.0},
-    ],
-    "slow-ramp": [
-        {"register": 2, "name": "ctrl_mode", "value": 1.0},
-        {"register": 0, "name": "dg_setpoint", "value": 60.0},  # where the ramp ends
-    ],
+    "setpoint-overvoltage": [_write(reg.HR_DG_SETPOINT, 200.0)],
+    "breaker-open": [_write(reg.HR_SWITCH_CMD, 1.0)],
+    "manual-hijack": [_MANUAL, _write(reg.HR_DG_SETPOINT, _RATED)],
+    "slow-ramp": [_MANUAL, _write(reg.HR_DG_SETPOINT, _RATED)],  # where the ramp ends
     "setpoint-oscillation": [
-        {"register": 2, "name": "ctrl_mode", "value": 1.0},
-        {"register": 0, "name": "dg_setpoint", "value": 55.0},
-        {"register": 0, "name": "dg_setpoint", "value": 5.0},
+        _MANUAL,
+        _write(reg.HR_DG_SETPOINT, 55.0),
+        _write(reg.HR_DG_SETPOINT, 5.0),
     ],
-    "breaker-chatter": [{"register": 1, "name": "switch_cmd", "value": 1.0}],
+    "breaker-chatter": [_write(reg.HR_SWITCH_CMD, 1.0)],
     "meas-fdi": [],  # no write of the attacker's: the PLC's readings are falsified
 }
 REGISTER_NAMES = {t["register"]: t["name"] for ts in ATTACK_TARGET.values() for t in ts}

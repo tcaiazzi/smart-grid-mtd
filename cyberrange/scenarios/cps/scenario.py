@@ -25,6 +25,7 @@ import types
 
 from cyberrange.planes.attack import components as attack
 from cyberrange.planes.defense import components as defense
+from cyberrange.planes.defense import ot_registers as reg
 from cyberrange.planes.monitor import components as monitor
 from cyberrange.core.scenario import PhaseSpec, Scenario
 from cyberrange.scenarios.cps import inventory
@@ -79,7 +80,10 @@ def plant_of(spec):
     """The hosts and addresses the episode works with, found in ``spec`` by
     role: the names and numbers the components are started with."""
     soc, sensor = spec.one("soc").name, spec.one("sensor").name
-    engine, plc, hmi = spec.one("plant").name, spec.one("plc").name, spec.one("hmi").name
+    # The plant's first controller and HMI: the HMI the attack targets, the PLC
+    # whose writes the ground truth calls authorized.
+    engine = spec.one("plant").name
+    plc, hmi = spec.with_role("plc")[0].name, spec.with_role("hmi")[0].name
     ews = spec.with_role("engineering")
     plant_zone = spec.zone_of(engine)
     return types.SimpleNamespace(
@@ -117,6 +121,11 @@ class CpsScenario(Scenario):
     def lab_spec(self, args):
         """The lab of a run (lab.LabSpec)."""
         return T.DEFAULT
+
+    def plant_spec(self, args):
+        """The plant of a run (ot_registers.plant): its feeders, each a Modbus
+        unit of the engine."""
+        return reg.plant()
 
     # ── options ──────────────────────────────────────────────────────────────
     def add_arguments(self, ap):
@@ -256,6 +265,8 @@ class CpsScenario(Scenario):
             learn_s=args.learn_seconds,
             respond=args.respond or "off",
             it=bool(args.it_telemetry),
+            # The plant's normal band, for the dashboard to draw the readings against.
+            v_band=self.plant_spec(args)["limits"]["v_band"],
         )
         for f in self.features:
             info |= f.run_info(args)
@@ -307,7 +318,10 @@ class CpsScenario(Scenario):
         the same tool (soc_tool) on the lab's inventory to lay them down first."""
         from cyberrange.scenarios.cps import soc_tool
 
-        soc_tool.describe(ctx.out_dir, it=bool(ctx.args.it_telemetry), spec=self.lab_spec(ctx.args))
+        a = ctx.args
+        soc_tool.describe(
+            ctx.out_dir, it=bool(a.it_telemetry), spec=self.lab_spec(a), plant=self.plant_spec(a)
+        )
 
     def metrics(self, run_dir):
         from cyberrange.scenarios.cps.metrics import compute_metrics
@@ -379,8 +393,12 @@ class CpsScenario(Scenario):
 
     def episode(self, ctx):
         a = ctx.args
-        spec = self.lab_spec(a)
+        spec, plant = self.lab_spec(a), self.plant_spec(a)
         p = plant_of(spec)
+        plant_b64 = reg.plant_b64(plant)
+        first = reg.units(plant)[0]
+        plcs = [(h.name, spec.ip(h.name), h.unit or first) for h in spec.with_role("plc")]
+        hmis = [(h.name, spec.ip(h.name), h.unit or first) for h in spec.with_role("hmi")]
         it = bool(a.it_telemetry)
         # The management plane (Wazuh + SOC analytics) runs in every episode, so
         # a detection-only run (respond=off) carries the same load and is
@@ -400,37 +418,53 @@ class CpsScenario(Scenario):
                     p.sensor_iface,
                     p.engine_ip,
                     p.modbus_port,
-                    p.plc_ip,
-                    p.hmi_ip,
+                    ",".join(f"{ip}@{unit}" for _n, ip, unit in plcs),
+                    ",".join(f"{ip}@{unit}" for _n, ip, unit in hmis),
                     a.detectors,
                     a.learn_seconds,
                     dashboard_port=T.DASHBOARD_GUEST_PORT if a.dashboard_port else None,
                     # Only when a response runs: with none, a write from the
                     # firewall is nobody's and must be reported.
                     responder_ip=p.responder_ip if responding else None,
+                    plant_b64=plant_b64,
                 )
             )
             ctx.start(
                 traffic.PhysicalProcess(
-                    p.engine, p.modbus_port, a.step_interval, seed=ctx.role_seed("engine")
+                    p.engine,
+                    p.modbus_port,
+                    a.step_interval,
+                    seed=ctx.role_seed("engine"),
+                    plant_b64=plant_b64,
                 )
             )
             time.sleep(SERVICE_SETTLE_S)
-            ctx.start(
-                traffic.PlcController(
-                    p.plc, p.engine_ip, p.modbus_port, a.step_interval, seed=ctx.role_seed("plc")
+            # One controller per feeder, each on its own seed: the first keeps
+            # the role's seed a single-feeder plant has always used.
+            for i, (name, _ip, unit) in enumerate(plcs):
+                ctx.start(
+                    traffic.PlcController(
+                        name,
+                        p.engine_ip,
+                        p.modbus_port,
+                        a.step_interval,
+                        seed=ctx.role_seed("plc" if i == 0 else f"plc:{unit}"),
+                        unit=unit,
+                        plant_b64=plant_b64,
+                    )
                 )
-            )
-            ctx.start(
-                traffic.HmiClient(
-                    p.hmi,
-                    p.engine_ip,
-                    p.modbus_port,
-                    seed=ctx.role_seed("hmi"),
-                    diag_url=f"http://127.0.0.1:{p.app_port}" if it else None,
-                    diag_targets=(p.engine_ip, "localhost", p.plc_ip, "127.0.0.1"),
+            for i, (name, _ip, unit) in enumerate(hmis):
+                ctx.start(
+                    traffic.HmiClient(
+                        name,
+                        p.engine_ip,
+                        p.modbus_port,
+                        seed=ctx.role_seed("hmi" if i == 0 else f"hmi:{unit}"),
+                        diag_url=f"http://127.0.0.1:{p.app_port}" if it and i == 0 else None,
+                        diag_targets=(p.engine_ip, "localhost", p.plc_ip, "127.0.0.1"),
+                        unit=unit,
+                    )
                 )
-            )
             ctx.start(attack.VulnApp(p.hmi, p.app_port, access_log=ACCESS_LOG if it else None))
             if p.ews:
                 maint = spec.service(p.ews, "maint-http").port
@@ -477,7 +511,7 @@ class CpsScenario(Scenario):
             ctx.start(
                 defense.SocAnalytics(
                     p.soc,
-                    inventory.inventory(spec),
+                    inventory.inventory(spec, plant=plant),
                     policy=a.respond or "off",
                     approval=a.approval,
                     interval=a.respond_interval,

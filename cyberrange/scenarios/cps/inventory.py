@@ -11,17 +11,19 @@ are not in the spec, so they are not in the inventory: the SOC protects the
 plant and the hosts around it, not itself.
 """
 
+from cyberrange.planes.defense import ot_registers as reg
 from cyberrange.scenarios.cps import topology as T
 
 
-def inventory(spec=None, rules=None) -> dict:
-    """The lab ``spec`` (default: the default lab) as the SOC's inventory
-    (JSON-serialisable). ``rules`` replaces the boundary ruleset, for asking
-    what the graph would be without one of them."""
+def inventory(spec=None, rules=None, plant=None) -> dict:
+    """The lab ``spec`` (default: the default lab) and its ``plant`` (default:
+    the default plant) as the SOC's inventory (JSON-serialisable). ``rules``
+    replaces the boundary ruleset, for asking what the graph would be without
+    one of them."""
     spec = spec or T.DEFAULT
-    # The knowledge graph knows one plant service, whose registers it lists: a
-    # lab with several plants gives it the first one's.
-    plant = spec.with_role("plant")[0]
+    # One engine serves the whole plant, a Modbus unit per feeder: a lab with
+    # several engine hosts gives the graph the first one's service.
+    engine = spec.with_role("plant")[0]
     return {
         "name": spec.name,
         "hosts": [
@@ -37,6 +39,7 @@ def inventory(spec=None, rules=None) -> dict:
                     }
                     for i, n in enumerate(h.nics)
                 ],
+                **({"unit": h.unit} if h.unit is not None else {}),
             }
             for h in spec.hosts
         ],
@@ -45,5 +48,6 @@ def inventory(spec=None, rules=None) -> dict:
             "host": spec.boundary,
             "rules": list(spec.boundary_rules() if rules is None else rules),
         },
-        "plant_service": [plant.name, plant.services[0].name],
+        "plant_service": [engine.name, engine.services[0].name],
+        "plant": reg.plant(plant),
     }

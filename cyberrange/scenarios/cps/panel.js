@@ -592,10 +592,12 @@
       return;
     }
     box.querySelector(".empty")?.remove();
+    // The plant's normal band, from the run; a run recorded without one had the default plant's.
+    const band = r.info?.v_band || [0.95, 1.05];
     legend.append(
       h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
       h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
-      h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), "normal band 0.95–1.05 pu"));
+      h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), `normal band ${band[0]}–${band[1]} pu`));
     const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
     const t0 = r.start_t, pts = r.plant;
     const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
@@ -615,7 +617,7 @@
       svg.append(s("text", { x: x1 + 4, y: H - m.b - 6, "font-size": 11, fill: "var(--muted)" }, "model calibration"));
     }
     // band + grid
-    svg.append(s("rect", { x: m.l, y: Y(1.05), width: W - m.l - m.r, height: Y(0.95) - Y(1.05), fill: "var(--wash)", stroke: "var(--grid)" }));
+    svg.append(s("rect", { x: m.l, y: Y(band[1]), width: W - m.l - m.r, height: Y(band[0]) - Y(band[1]), fill: "var(--wash)", stroke: "var(--grid)" }));
     for (const v of [0.8, 0.9, 1.0, 1.1, 1.2]) {
       svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
       svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, v.toFixed(2)));
@@ -777,7 +779,7 @@
     control: "Who drives the plant's distributed generator: auto (the PLC) or MANUAL (whoever writes the setpoint)",
     "DG setpoint": "Power the distributed generator is told to produce",
     breaker: "The feeder breaker: OPEN cuts the load off",
-    plant: "Whether the bus voltages are inside the 0.95–1.05 pu band",
+    plant: "Whether the bus voltages are inside the plant's normal band",
     "rules fired": "First rules finding after the first attacker write (or how many, with no attack)",
     "model fired": "First learned-model finding after the first attacker write (or how many, with no attack)",
     "score · detection": "Detection latency from the first malicious write (green: before the physical impact)",

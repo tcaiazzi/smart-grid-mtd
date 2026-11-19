@@ -34,7 +34,7 @@ def _settle(actuators, n=5, seed=7):
 
 class NormalOperation(unittest.TestCase):
     def test_in_band(self):
-        _, r = _settle({"dg_setpoint": grid_sim.DG_NOMINAL_KW, "switch_cmd": 0})
+        _, r = _settle({"dg_setpoint": reg.DG_NOMINAL_KW, "switch_cmd": 0})
         self.assertTrue(r["converged"])
         self.assertEqual(r["abnormal"], 0)
         for v in (r["v_load"], r["v_dg"]):
@@ -74,7 +74,7 @@ class SetpointManipulation(unittest.TestCase):
 
 class BreakerManipulation(unittest.TestCase):
     def test_open_feeder_deenergizes_load(self):
-        _, r = _settle({"dg_setpoint": grid_sim.DG_NOMINAL_KW, "switch_cmd": 1})
+        _, r = _settle({"dg_setpoint": reg.DG_NOMINAL_KW, "switch_cmd": 1})
         self.assertEqual(r["abnormal"], 1)
         self.assertLess(r["v_load"], reg.V_BAND_LOW)
 
@@ -103,7 +103,7 @@ class Reproducibility(unittest.TestCase):
 
 class EnergyAccounting(unittest.TestCase):
     def test_energy_accumulates_under_import(self):
-        st, r = _settle({"dg_setpoint": grid_sim.DG_NOMINAL_KW, "switch_cmd": 0}, n=6)
+        st, r = _settle({"dg_setpoint": reg.DG_NOMINAL_KW, "switch_cmd": 0}, n=6)
         self.assertGreater(r["energy_kwh"], 0.0)  # importing from the grid
 
 
@@ -115,6 +115,62 @@ class RegisterRoundTrip(unittest.TestCase):
     def test_clamp(self):
         self.assertEqual(reg.encode(1e9, 10.0), reg.REG_WORD_MAX)
         self.assertEqual(reg.encode(-5.0, 10.0), 0)
+
+
+def two_feeders(rating_2=60.0):
+    p = reg.plant()
+    p["feeders"].append(dict(p["feeders"][0], unit=2, load_kw=40.0, dg_rating_kw=rating_2))
+    return p
+
+
+class SeveralFeeders(unittest.TestCase):
+    """A plant of two feeders on one slack bus: each its own unit, its own
+    physics, its own readings — and the first one is the single-feeder plant."""
+
+    def run_plant(self, actuators, n=6, seed=7, plant=None):
+        st = grid_sim.build_grid(seed=seed, plant=plant or two_feeders())
+        frame = None
+        for _ in range(n):
+            frame = grid_sim.step_grid(st, actuators)
+        return st, frame
+
+    def test_both_feeders_run_in_band(self):
+        _st, f = self.run_plant({1: {"dg_setpoint": 20.0}, 2: {"dg_setpoint": 20.0}})
+        self.assertEqual(f["abnormal"], 0)
+        self.assertEqual(sorted(f["units"]), ["1", "2"])
+        for r in f["units"].values():
+            self.assertTrue(reg.V_BAND_LOW <= r["v_dg"] <= reg.V_BAND_HIGH, r)
+
+    def test_an_overvoltage_on_one_feeder_is_that_feeders(self):
+        _st, f = self.run_plant({1: {"dg_setpoint": 20.0}, 2: {"dg_setpoint": 200.0}})
+        self.assertEqual(f["units"]["2"]["abnormal"], 1)
+        self.assertEqual(f["units"]["1"]["abnormal"], 0, "one feeder's DG moved the other's buses")
+        self.assertEqual(f["abnormal"], 1, "the plant is abnormal when any feeder is")
+
+    def test_an_open_breaker_cuts_its_feeder_only(self):
+        _st, f = self.run_plant({1: {"switch_cmd": 0}, 2: {"switch_cmd": 1}})
+        self.assertEqual(f["units"]["2"]["v_load"], 0.0)
+        self.assertTrue(f["units"]["2"]["switch_open"])
+        self.assertGreater(f["units"]["1"]["v_load"], reg.V_BAND_LOW)
+
+    def test_the_first_feeder_is_the_single_feeder_plant(self):
+        # Its load walks on the stream a single-feeder plant has always drawn
+        # from: adding a feeder does not reshuffle the first one's randomness.
+        single = grid_sim.build_grid(seed=11)
+        double = grid_sim.build_grid(seed=11, plant=two_feeders())
+        for _ in range(8):
+            grid_sim.step_grid(single, {"dg_setpoint": 20.0})
+            grid_sim.step_grid(double, {1: {"dg_setpoint": 20.0}, 2: {"dg_setpoint": 20.0}})
+            self.assertEqual(single.feeders[0].load_mw, double.feeders[0].load_mw)
+        self.assertNotEqual(double.feeders[0].load_mw, double.feeders[1].load_mw)
+
+    def test_readings_by_unit_are_what_the_engine_writes(self):
+        st, f = self.run_plant({1: {}, 2: {}}, n=2)
+        by_unit = grid_sim.unit_readings(st, f)
+        self.assertEqual(sorted(by_unit), [1, 2])
+        single_st, single = self.run_plant({}, n=2, plant=reg.plant())
+        self.assertEqual(sorted(grid_sim.unit_readings(single_st, single)), [1])
+        self.assertNotIn("units", single, "a single-feeder frame changed shape")
 
 
 if __name__ == "__main__":

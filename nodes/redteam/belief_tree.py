@@ -98,7 +98,7 @@ def build(findings):
                 attck_name=attck_name,
                 impact=impact,
                 feasible=pivot_ok and register in discovered,
-                targets=[f"reg:hr:{register}"],
+                targets=[f"reg:{reg.UNIT_ID}:hr:{register}"],
             )
         )
 

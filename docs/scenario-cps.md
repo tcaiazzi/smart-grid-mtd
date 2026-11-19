@@ -132,6 +132,23 @@ The feeder is deliberately sized so that even a *legal* command — the DG at
 100% of its rating — causes an overvoltage. That is what makes the scenario
 interesting: a command can be formally valid and still dangerous.
 
+**The plant is a description.** `ot_registers.plant()`
+(`cyberrange/planes/defense/ot_registers.py`) holds the feeders, their lines,
+loads and DGs, and the plant's limits; the feeder above is `DEFAULT_PLANT`. A
+plant may have several feeders on the same slack bus. Each one is a Modbus unit
+of the engine, with the same register map and its own envelope: its DG's
+rating is the top of its setpoint. Every party that needs the plant receives
+the same description as `--plant-b64`: the engine, the PLCs, the OT sensor,
+and the SOC through its inventory.
+
+- **Engine.** It solves the whole plant in one power flow.
+- **PLCs and HMIs.** Each is bound to one feeder (`Host.unit` in the lab spec).
+- **OT sensor.** It keeps each feeder's state apart, and reports a controller
+  that commands a feeder that is not its own. Its behavioural model learns
+  the first feeder only.
+- **Frames.** A frame carries the first feeder's readings at its top level, and
+  each feeder's under `units` when there are several.
+
 ## 4. The components
 
 | Component | Role | Zone |

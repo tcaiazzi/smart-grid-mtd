@@ -57,7 +57,9 @@ class Service:
 class Host:
     """A machine of the lab. ``nics`` are in interface order (eth0 first).
     ``profile`` names the software it runs (its guest files); by default it is
-    the host's name, which is what the lab's own hosts are called."""
+    the host's name, which is what the lab's own hosts are called. ``unit`` is
+    the plant feeder a controller (a PLC, an HMI) is bound to; None is the
+    plant's first."""
 
     name: str
     role: str
@@ -65,6 +67,7 @@ class Host:
     services: tuple = ()
     image: Optional[str] = None
     profile: Optional[str] = None
+    unit: Optional[int] = None
 
     def __post_init__(self):
         self.nics = tuple(self.nics)

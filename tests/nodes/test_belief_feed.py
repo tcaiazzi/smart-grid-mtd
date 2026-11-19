@@ -190,7 +190,7 @@ class KnowledgeGraph(unittest.TestCase):
     def test_a_graph_element_is_on_the_host_an_attack_lands_on(self):
         (rule,) = [i for i, n in self.graph.nodes.items() if n["type"] == "flow_rule"]
         self.assertEqual(self.graph.host_of("svc:hmi/diag-http"), "hmi")
-        self.assertEqual(self.graph.host_of("reg:hr:0"), "engine", "the plant exposes it")
+        self.assertEqual(self.graph.host_of("reg:1:hr:0"), "engine", "the plant exposes it")
         self.assertEqual(self.graph.host_of("host:plc"), "plc")
         self.assertIsNone(self.graph.host_of(rule), "a rule is enforced, not attacked")
 

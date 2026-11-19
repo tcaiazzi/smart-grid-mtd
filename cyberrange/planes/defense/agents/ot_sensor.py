@@ -212,7 +212,15 @@ def _finding(klass, reasons, confidence, src, dst, unit, address, evidence, dete
     }
 
 
-def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str, policy=None):
+def classify_write(
+    src_ip: str,
+    dst_ip: str,
+    write: dict,
+    authorized_writer: str,
+    policy=None,
+    actuators=None,
+    unit_of=None,
+):
     """Write-time rules. Return a finding dict for a suspicious write, or None.
 
     ``write`` names one register: the caller splits a multi-register write, so
@@ -220,7 +228,9 @@ def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str
 
     `policy` maps client IP -> role (see ot_registers.ROLE_POLICY). Without it,
     `authorized_writer` (the PLC) is the only known client — the original,
-    source-only behaviour."""
+    source-only behaviour. ``actuators`` is the envelope of the unit written
+    (default: the default plant's); ``unit_of`` maps a client bound to one
+    feeder to its unit, and a write of it to another unit violates the policy."""
     if policy is None:
         policy = {authorized_writer: "plc"} if authorized_writer else {}
     addr = write["address"]
@@ -229,7 +239,7 @@ def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str
     confidence = 0.0
 
     for v in write["values"]:
-        if reg.actuator_out_of_range(addr, v) is not None:
+        if reg.actuator_out_of_range(addr, v, actuators) is not None:
             reasons.append("out_of_range_command")
             confidence = max(confidence, 0.9)
             break
@@ -243,6 +253,10 @@ def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str
             reasons.append("unauthorized_write")
             confidence = max(confidence, 0.7)
     elif role is not None and addr not in reg.ROLE_POLICY.get(role, {}).get("writes", set()):
+        reasons.append("policy_violation")
+        confidence = max(confidence, 0.9 if sensitive else 0.7)
+    elif unit_of and src_ip in unit_of and write["unit"] != unit_of[src_ip]:
+        # A controller of one feeder commanding another.
         reasons.append("policy_violation")
         confidence = max(confidence, 0.9 if sensitive else 0.7)
 
@@ -261,6 +275,7 @@ def classify_write(src_ip: str, dst_ip: str, write: dict, authorized_writer: str
             "raw": write["values"],
             "value": reg.actuator_value(addr, write["values"][0]),
             "role": role,
+            "own_unit": (unit_of or {}).get(src_ip),
             "ts": round(time.time(), 3),
         },
     )
@@ -309,7 +324,8 @@ class ProcessRules:
     (one seen more than ACQUIT_GRACE_S after the write, i.e. after the physics
     has stepped on it)."""
 
-    def __init__(self):
+    def __init__(self, unit=reg.UNIT_ID, band=(reg.V_BAND_LOW, reg.V_BAND_HIGH)):
+        self.unit, self.band = unit, tuple(band)  # the feeder these rules watch
         self.last_writes = []  # [(t, src, dst, unit, address, value, prev)] state-changing writes
         self.blamed = set()  # writes already reported as unsafe
         self.hr_state = {}  # address -> value in force (from writes / fc03 reads)
@@ -334,12 +350,12 @@ class ProcessRules:
         self.last_writes.append((t, src, dst, unit, address, value, prev))
         self.last_writes = [w for w in self.last_writes if t - w[0] <= UNSAFE_WINDOW_S]
 
-    @staticmethod
-    def out_of_band(state):
+    def out_of_band(self, state):
         vs = [state[k] for k in ("v_load", "v_dg") if state.get(k) is not None]
         if state.get("abnormal"):
             return True
-        return any(v < reg.V_BAND_LOW or v > reg.V_BAND_HIGH for v in vs)
+        lo, hi = self.band
+        return any(v < lo or v > hi for v in vs)
 
     def on_state(self, t, state):
         """-> (findings, active_conditions). active_conditions is the set of
@@ -401,7 +417,7 @@ class ProcessRules:
                             0.9,
                             None,
                             None,
-                            reg.UNIT_ID,
+                            self.unit,
                             reg.HR_CTRL_MODE,
                             {**ev, "observations": self.excursion_obs, "ts": round(t, 3)},
                         )
@@ -430,22 +446,32 @@ class OTSensor:
         window_s=1.0,
         model_k=6.0,
         responder_ip=None,
+        plant=None,
+        clients=(),
     ):
+        """``clients`` are more [(ip, role, unit)] beyond the PLC and the HMI
+        given by address: the controllers of a plant's other feeders. A client
+        bound to a unit may command that unit only."""
         self.iface = iface
         self.engine_ip = engine_ip
         self.engine_port = engine_port
         self.authorized_writer = authorized_writer
         self.telemetry = telemetry
-        self.policy = {}
-        if authorized_writer:
-            self.policy[authorized_writer] = "plc"
-        if hmi_ip:
-            self.policy[hmi_ip] = "hmi"
+        self.plant = reg.plant(plant)
+        self.policy, self.unit_of = {}, {}
+        first = reg.units(self.plant)[0]
+        bound = [(authorized_writer, "plc", first), (hmi_ip, "hmi", first), *clients]
+        for ip, role, unit in bound:
+            if ip:
+                self.policy[ip] = role
+                self.unit_of[ip] = unit
         self.responder_ip = responder_ip
         if responder_ip:
             self.policy[responder_ip] = "responder"
         self.detectors = set(detectors)
-        self.rules = ProcessRules()
+        # The behavioural model learns one feeder: the authorized writer's.
+        self.model_unit = first
+        self._rules = {}
         self._pending = {}  # (client_ip, client_port, txn) -> (fc, address, t)
         self._answered = {}  # same key -> (fc, address, words, t) of the reading served
         self._mac_of = {}  # ip -> the MAC that first spoke for it
@@ -466,6 +492,23 @@ class OTSensor:
             self.model = RobustAnomalyModel(k=model_k)
         self._model_quiet = 0
         self._early_win = None
+
+    def rules_for(self, unit):
+        """The process rules of one feeder, made when it is first seen."""
+        if unit not in self._rules:
+            self._rules[unit] = ProcessRules(unit, self.plant["limits"]["v_band"])
+        return self._rules[unit]
+
+    @property
+    def rules(self):
+        """The process rules of the model's feeder (the plant's first)."""
+        return self.rules_for(self.model_unit)
+
+    def envelope(self, unit):
+        try:
+            return reg.envelope(self.plant, unit)
+        except KeyError:
+            return reg.ACTUATOR_REGISTERS  # a unit the plant does not have
 
     # ── alerts ───────────────────────────────────────────────────────────────
     def _raise(self, key, finding, t):
@@ -588,8 +631,10 @@ class OTSensor:
                 w = {"unit": unit, "fc": fc, "address": address, "values": [raw]}
                 value = reg.actuator_value(address, raw)
                 responder = src == self.responder_ip
-                self.rules.note_write(t, src, dst, unit, address, value, suspect=not responder)
-                if self.featurizer:
+                self.rules_for(unit).note_write(
+                    t, src, dst, unit, address, value, suspect=not responder
+                )
+                if self.featurizer and unit == self.model_unit:
                     self._model_windows(self.featurizer.observe_write(t, src, address, value))
                     if not responder:
                         self._model_early(t)
@@ -600,7 +645,15 @@ class OTSensor:
                         "ot_response_write", src=src, dst=dst, register=address, value=value
                     )
                 if "rules" in self.detectors:
-                    f = classify_write(src, dst, w, self.authorized_writer, policy=self.policy)
+                    f = classify_write(
+                        src,
+                        dst,
+                        w,
+                        self.authorized_writer,
+                        policy=self.policy,
+                        actuators=self.envelope(unit),
+                        unit_of=self.unit_of,
+                    )
                     if f:
                         self._emit(f, t)
             return
@@ -633,15 +686,17 @@ class OTSensor:
         state = registers_to_state(fc, address, words)
         if not state:
             return
-        if self.featurizer:
+        unit = adu["unit"]
+        if self.featurizer and unit == self.model_unit:
             self._model_windows(self.featurizer.observe_state(t, state))
         if "rules" in self.detectors:
-            findings, active = self.rules.on_state(t, state)
+            findings, active = self.rules_for(unit).on_state(t, state)
+            excursion = ("rules", "manual_mode_excursion", unit)
             for f in findings:
-                key = ("rules", f["klass"]) if f["klass"] == "manual_mode_excursion" else None
+                key = excursion if f["klass"] == "manual_mode_excursion" else None
                 self._emit(f, t, key=key)
             if active is not None and ("manual_mode_excursion",) not in active:
-                self._clear(("rules", "manual_mode_excursion"), t)
+                self._clear(excursion, t)
 
     def _second_reading(self, t, src, dst, key, adu):
         """A response to a request already answered. The same words again is a
@@ -679,7 +734,7 @@ class OTSensor:
             min(0.99, 0.5 + 0.05 * score),
             None,
             self.engine_ip,
-            reg.UNIT_ID,
+            self.model_unit,
             None,
             {
                 "score": round(score, 2),
@@ -785,6 +840,18 @@ class OTSensor:
         s.close()
 
 
+def bound_clients(arg, role, plant):
+    """[(ip, role, unit)] from ``IP[@UNIT],...``; an IP with no unit is bound to
+    the plant's first feeder."""
+    first = reg.units(plant)[0]
+    out = []
+    for item in (arg or "").split(","):
+        if item.strip():
+            ip, _, unit = item.strip().partition("@")
+            out.append((ip, role, int(unit) if unit else first))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="Passive Modbus-DPI OT sensor")
     ap.add_argument("--iface", default="eth0", help="OT-link interface to sniff")
@@ -795,9 +862,11 @@ def main():
         "--authorized-writer",
         dest="plc_ip",
         default=None,
-        help="the PLC's IP (role 'plc' in the access policy)",
+        help="the PLC's IP (role 'plc' in the access policy); IP@UNIT,... for a plant's "
+        "several feeders, the first being the model's",
     )
-    ap.add_argument("--hmi-ip", default=None, help="the HMI's IP (role 'hmi')")
+    ap.add_argument("--hmi-ip", default=None, help="the HMI's IP (role 'hmi'), or IP@UNIT,...")
+    ap.add_argument("--plant-b64", default=None, help="the plant (default: the default plant)")
     ap.add_argument(
         "--responder-ip",
         default=None,
@@ -823,13 +892,18 @@ def main():
     if args.dashboard_port and DashboardServer is not None:
         DashboardServer(tel, args.dashboard_port).start()
     detectors = tuple(d.strip() for d in args.detectors.split(",") if d.strip())
+    plant = reg.plant(args.plant_b64)
+    plcs = bound_clients(args.plc_ip, "plc", plant)
+    hmis = bound_clients(args.hmi_ip, "hmi", plant)
     OTSensor(
         args.iface,
         args.engine_ip,
         args.engine_port,
-        args.plc_ip,
+        plcs[0][0] if plcs else None,
         tel,
-        hmi_ip=args.hmi_ip,
+        hmi_ip=hmis[0][0] if hmis else None,
+        plant=plant,
+        clients=plcs[1:] + hmis[1:],
         detectors=detectors,
         learn_seconds=args.learn_seconds,
         window_s=args.window,

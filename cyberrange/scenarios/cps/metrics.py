@@ -46,8 +46,11 @@ import glob
 import json
 import os
 
-V_BAND_LOW, V_BAND_HIGH = 0.95, 1.05
+from cyberrange.planes.defense import ot_registers as reg
+
 V_NOMINAL = 1.0
+# Register name by holding-register address, for writes recorded without one.
+REG_NAME = {addr: spec[0] for addr, spec in reg.ACTUATOR_REGISTERS.items()}
 
 
 def _read_jsonl(path):
@@ -197,8 +200,6 @@ def expected_response(gt):
     rejects the value and recovers). Falsified readings come from the
     engineering workstation and write nothing: that host is taken off the link,
     and the PLC and the engine are told each other's true address again."""
-    # Register name, or the number as a fallback (HR_SWITCH_CMD=1, HR_CTRL_MODE=2).
-    REG_NAME = {0: "dg_setpoint", 1: "switch_cmd", 2: "ctrl_mode"}
     names = set()
     for e in gt:
         if e.get("kind") != "modbus_write":
@@ -385,10 +386,12 @@ def compute_metrics(out_dir: str) -> dict:
     first_abn = abn[0]["timestamp"] if abn else None
     last_abn = abn[-1]["timestamp"] if abn else None
     ongoing = bool(frames) and bool(frames[-1].get("abnormal")) and bool(abn)
+    # Every feeder's buses: a plant of several carries each one's under "units".
     vs = [
         v
         for fr in win
-        for v in (fr.get("v_load", V_NOMINAL), fr.get("v_dg", V_NOMINAL))
+        for feeder in [fr, *(fr.get("units") or {}).values()]
+        for v in (feeder.get("v_load", V_NOMINAL), feeder.get("v_dg", V_NOMINAL))
         if v is not None
     ]
     manual_spans = _manual_windows(frames, dt)

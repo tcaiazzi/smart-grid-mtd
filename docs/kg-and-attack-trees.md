@@ -89,7 +89,7 @@ Node ids are typed by prefix, and every node carries a `type` attribute:
 | host | `host:<machine>` | `image`, `role`; the boundary also has `forward_default` |
 | ip | `ip:<addr>` | `addr`, `prefix`, `network`, `iface`, `host` |
 | service | `svc:<host>/<name>` | `proto`, `port`, `app`, `host` |
-| register | `reg:hr:<addr>` / `reg:ir:<addr>` | `name`, `kind` (holding/input), `scale`, `lo`/`hi` or `unit`, `sensitive` |
+| register | `reg:<feeder>:hr:<addr>` / `reg:<feeder>:ir:<addr>` | `feeder` (its Modbus unit), `name`, `kind` (holding/input), `scale`, `lo`/`hi` or `unit`, `sensitive` |
 | flow_rule | `rule:<firewall>:<n>` | `order`, `action`, `src`, `dst`, `proto`, `dport` |
 
 It is a networkx `MultiDiGraph`. Each edge's key equals its `rel` attribute, so
@@ -126,10 +126,13 @@ is the sanctioned flow that the whole attack chain goes through.
 previous ones:
 
 1. **Hosts, zones, addresses, services**, machine by machine in name order.
-2. **Registers** from the plant contract. If `plant_service` names a service
-   that exists, that service gets an `exposes` edge to every register.
+2. **Registers** from the plant contract, for every feeder of the inventory's
+   `plant` (one Modbus unit each, with that feeder's envelope). If
+   `plant_service` names a service that exists, that service gets an `exposes`
+   edge to every register. The plant's limits are kept as `g.graph["limits"]`.
 3. **Role permissions.** For every host whose role has an entry in
-   `ROLE_POLICY`, one `may_write` edge per writable holding register. In the
+   `ROLE_POLICY`, one `may_write` edge per writable holding register of the
+   host's feeder (its inventory `unit`, the plant's first by default). In the
    lab, the PLC may write the setpoint and the HMI may write the setpoint and
    the control mode. Nobody may write the breaker.
 4. **Boundary rules.** `parse_forward_rules` reads the iptables strings:
@@ -221,12 +224,12 @@ impact  OR  Physical impact on the feeder
 │   ├── pivot          (ATT&CK id under review)                  → svc:engine/modbus, rule:firewall:0
 │   │                  precondition: reachable(hmi → engine:5020)
 │   └── ot_action  OR  Manipulate the plant over Modbus
-│       ├── setpoint_oor   T0855  impact 0.6   → reg:hr:0   setpoint outside its envelope
-│       ├── breaker_open   T0855  impact 1.0   → reg:hr:1   feeder breaker opened
-│       ├── mode_hijack    T0831  impact 0.9   → reg:hr:2, reg:hr:0   MANUAL taken, in-range unsafe dispatch
-│       ├── setpoint_ramp  T0831  impact 0.8   → reg:hr:2, reg:hr:0   MANUAL taken, setpoint ramped up in small steps
-│       ├── setpoint_oscillation  T0831  impact 0.7   → reg:hr:2, reg:hr:0   MANUAL taken, setpoint swung between levels
-│       └── breaker_chatter  T0855  impact 0.85  → reg:hr:1   feeder breaker opened and re-closed repeatedly
+│       ├── setpoint_oor   T0855  impact 0.6   → reg:1:hr:0   setpoint outside its envelope
+│       ├── breaker_open   T0855  impact 1.0   → reg:1:hr:1   feeder breaker opened
+│       ├── mode_hijack    T0831  impact 0.9   → reg:1:hr:2, reg:1:hr:0   MANUAL taken, in-range unsafe dispatch
+│       ├── setpoint_ramp  T0831  impact 0.8   → reg:1:hr:2, reg:1:hr:0   MANUAL taken, setpoint ramped up in small steps
+│       ├── setpoint_oscillation  T0831  impact 0.7   → reg:1:hr:2, reg:1:hr:0   MANUAL taken, setpoint swung between levels
+│       └── breaker_chatter  T0855  impact 0.85  → reg:1:hr:1   feeder breaker opened and re-closed repeatedly
 └── direct_ot  AND  From a host without a Modbus role
     ├── ot_foothold        T0886 Remote Services
     │                      precondition: a host outside the Modbus roles reaches engine:5020
@@ -234,7 +237,7 @@ impact  OR  Physical impact on the feeder
         ├── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
         └── via_aitm  AND  Between the PLC and the plant
             ├── ot_aitm    T0830 Adversary-in-the-Middle             → svc:engine/modbus
-            └── meas_fdi   T0856  impact 0.9   → reg:ir:0, reg:ir:1   measurements falsified on their way to the PLC
+            └── meas_fdi   T0856  impact 0.9   → reg:1:ir:0, reg:1:ir:1   measurements falsified on their way to the PLC
     └── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
 ```
 

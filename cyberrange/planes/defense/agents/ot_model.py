@@ -27,6 +27,8 @@ import math
 
 import numpy as np
 
+import ot_registers as reg  # flat import; copied alongside on the sensor
+
 FEATURES = (
     "reads_ir",  # fc 0x04 requests
     "reads_hr",  # fc 0x03 requests
@@ -72,9 +74,9 @@ class WindowFeaturizer:
         self,
         plc_ip,
         window_s=1.0,
-        setpoint_register=0,
-        mode_register=2,
-        manual_value=1,
+        setpoint_register=reg.HR_DG_SETPOINT,
+        mode_register=reg.HR_CTRL_MODE,
+        manual_value=reg.CTRL_MANUAL,
         responder_ip=None,
     ):
         self.plc_ip = plc_ip
@@ -173,9 +175,9 @@ class WindowFeaturizer:
         if src == self.responder_ip:
             return closed
         self._c["sources"].add(src)
-        if fc == 0x04:
+        if fc == reg.FC_READ_INPUT_REGISTERS:
             self._c["reads_ir"] += 1
-        elif fc == 0x03:
+        elif fc == reg.FC_READ_HOLDING_REGISTERS:
             self._c["reads_hr"] += 1
         return closed
 

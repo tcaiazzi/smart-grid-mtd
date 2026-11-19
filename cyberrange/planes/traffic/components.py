@@ -12,15 +12,27 @@ from cyberrange.core.context import seed_arg
 PLANE = "traffic"
 
 
+def plant_arg(plant_b64):
+    """`` --plant-b64 …`` when a plant is given: the default plant needs none."""
+    return f" --plant-b64 {plant_b64}" if plant_b64 else ""
+
+
+def unit_arg(unit):
+    return f" --unit-id {int(unit)}" if unit is not None else ""
+
+
 # ── cyber-physical ────────────────────────────────────────────────────────────
 class PhysicalProcess(GuestAgent):
     """The plant: grid physics stepper + Modbus/TCP server exposing it."""
 
-    def __init__(self, node, port, step_interval, seed=None, frame_log="engine_frames.jsonl"):
+    def __init__(
+        self, node, port, step_interval, seed=None, frame_log="engine_frames.jsonl", plant_b64=None
+    ):
         super().__init__(
             node,
             f"python3 modbus_engine.py --host 0.0.0.0 --port {port} "
-            f"--interval {step_interval} --frame-log {frame_log}{seed_arg(seed)}",
+            f"--interval {step_interval} --frame-log {frame_log}{seed_arg(seed)}"
+            f"{plant_arg(plant_b64)}",
             "engine.log",
             plane=PLANE,
             name="physical_process",
@@ -30,13 +42,14 @@ class PhysicalProcess(GuestAgent):
 
 
 class PlcController(GuestAgent):
-    """The PLC: Modbus master closing the control loop (legitimate OT traffic)."""
+    """The PLC: Modbus master closing the control loop (legitimate OT traffic)
+    of one feeder, the engine's ``unit``."""
 
-    def __init__(self, node, engine_ip, port, interval, seed=None):
+    def __init__(self, node, engine_ip, port, interval, seed=None, unit=None, plant_b64=None):
         super().__init__(
             node,
             f"python3 plc_controller.py --engine-host {engine_ip} --port {port} "
-            f"--interval {interval}{seed_arg(seed)}",
+            f"--interval {interval}{seed_arg(seed)}{unit_arg(unit)}{plant_arg(plant_b64)}",
             "plc.log",
             plane=PLANE,
             name="plc",
@@ -48,8 +61,9 @@ class HmiClient(GuestAgent):
     operator's legitimate use of the diagnostics web app, on ``diag_targets``
     (the hosts an operator would ping)."""
 
-    def __init__(self, node, engine_ip, port, seed=None, diag_url=None, diag_targets=()):
+    def __init__(self, node, engine_ip, port, seed=None, diag_url=None, diag_targets=(), unit=None):
         diag = f" --diag-url {diag_url}" if diag_url else ""
+        diag += unit_arg(unit)
         if diag_url and diag_targets:
             diag += f" --diag-targets {','.join(diag_targets)}"
         super().__init__(

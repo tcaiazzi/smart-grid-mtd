@@ -73,11 +73,15 @@ class OtSensor(GuestAgent):
         learn_seconds,
         dashboard_port=None,
         responder_ip=None,
+        plant_b64=None,
     ):
         """``responder_ip``: the address the automated response writes to the
-        plant from; without it the sensor reports those writes as an attack."""
+        plant from; without it the sensor reports those writes as an attack.
+        ``plc_ip`` and ``hmi_ip`` may bind several clients to their feeders
+        (``IP@UNIT,...``); ``plant_b64`` is the plant they belong to."""
         dash = f" --dashboard-port {dashboard_port}" if dashboard_port else ""
         resp = f" --responder-ip {responder_ip}" if responder_ip else ""
+        resp += f" --plant-b64 {plant_b64}" if plant_b64 else ""
         super().__init__(
             node,
             f"python3 ot_sensor.py --iface {iface} --engine-ip {engine_ip} "

@@ -25,7 +25,8 @@ import os
 import re
 import time
 
-from mtd_telemetry import Telemetry  # flat import; copied alongside on the guest
+import ot_registers as reg  # flat imports; copied alongside on the guest
+from mtd_telemetry import Telemetry
 
 # A legitimate /diag target is a bare host or IP; anything else is suspicious.
 PLAIN_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -262,7 +263,7 @@ def _hex_endpoint(ip, port):
 def main():
     ap = argparse.ArgumentParser(description="IT-side sensor on the HMI host")
     ap.add_argument("--engine-ip", required=True)
-    ap.add_argument("--engine-port", type=int, default=5020)
+    ap.add_argument("--engine-port", type=int, default=reg.MODBUS_PORT)
     ap.add_argument("--access-log", default="/vuln_app.access.jsonl")
     ap.add_argument("--app-match", default="vuln_app.py")
     ap.add_argument("--learn-seconds", type=float, default=45.0)

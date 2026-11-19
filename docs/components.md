@@ -135,34 +135,37 @@ Shared helpers:
 The legitimate activity of the system, which attacks and defenses play
 against.
 
-### `PhysicalProcess(node, port, step_interval, seed=None, frame_log="engine_frames.jsonl")`
+### `PhysicalProcess(node, port, step_interval, seed=None, frame_log="engine_frames.jsonl", plant_b64=None)`
 
-The plant: a pandapower low-voltage feeder (`cyberrange/planes/traffic/agents/grid_sim.py`)
+The plant: pandapower low-voltage feeders (`cyberrange/planes/traffic/agents/grid_sim.py`)
 stepped every `step_interval` seconds behind a Modbus/TCP server
-(`modbus_engine.py`).
+(`modbus_engine.py`). `plant_b64` is the plant description
+(`ot_registers.plant_b64`); without it, the default single feeder. Each feeder is
+a Modbus unit of its own.
 
 | | |
 |---|---|
-| **Starts** | `python3 modbus_engine.py --host 0.0.0.0 --port P --interval S --frame-log F [--seed N]` |
+| **Starts** | `python3 modbus_engine.py --host 0.0.0.0 --port P --interval S --frame-log F [--seed N] [--plant-b64 B]` |
 | **Register map** | Defined in `cyberrange/planes/defense/ot_registers.py`. Input registers (fc04) carry the sensors; holding registers (fc03/06/10) carry the actuators: DG setpoint (HR 0), feeder breaker (HR 1), control mode (HR 2). |
 | **Artifacts** | `<node>.engine.log`; `<node>.<frame_log>` with one physical frame per step (voltages, line loading, power, energy, actuators, `abnormal`) |
 | **Read live by** | `PlantMirror` (reads `frame_log`) |
 
 Start it before its Modbus clients. The CPS scenario waits about 2 s after it.
 
-### `PlcController(node, engine_ip, port, interval, seed=None)`
+### `PlcController(node, engine_ip, port, interval, seed=None, unit=None, plant_b64=None)`
 
-The PLC: a Modbus master closing the control loop. It reads the plant,
+The PLC of one feeder (the engine's `unit`): a Modbus master closing the
+control loop, tuned to that feeder's DG (`plant_b64`). It reads the plant,
 curtails the DG on overvoltage, rejects setpoints outside the envelope, and
 hands control over while control mode is MANUAL. This is the legitimate OT
 traffic.
 
 | | |
 |---|---|
-| **Starts** | `python3 plc_controller.py --engine-host IP --port P --interval S [--seed N]` |
+| **Starts** | `python3 plc_controller.py --engine-host IP --port P --interval S [--seed N] [--unit-id U] [--plant-b64 B]` |
 | **Artifacts** | `<node>.plc.log` |
 
-### `HmiClient(node, engine_ip, port, seed=None, diag_url=None)`
+### `HmiClient(node, engine_ip, port, seed=None, diag_url=None, diag_targets=(), unit=None)`
 
 The HMI/SCADA host: operator polling plus occasional dispatches. It is the one
 IT client the boundary firewall lets reach the plant. With `diag_url` it also
@@ -329,7 +332,8 @@ only.
 
 | | |
 |---|---|
-| **Starts** | `python3 ot_sensor.py --iface IFACE --engine-ip … --detectors D --learn-seconds L --telemetry-file telemetry.jsonl [--responder-ip R] [--dashboard-port P]` |
+| **Starts** | `python3 ot_sensor.py --iface IFACE --engine-ip … --plc-ip IP[@UNIT],… --hmi-ip IP[@UNIT],… --detectors D --learn-seconds L --telemetry-file telemetry.jsonl [--responder-ip R] [--plant-b64 B] [--dashboard-port P]` |
+| **Feeders** | Each PLC and HMI is bound to its feeder (`IP@UNIT`; no unit is the plant's first): a write of it to another feeder is a `policy_violation`. Each feeder's state and envelope are its own. The behavioural model learns the first feeder. |
 | **`detectors`** | `rules`, `model` or `rules,model`. **Rules** pair requests with responses and apply the role policy: `unauthorized_write`, `unauthorized_write_to_actuator`, `unauthorized_read`, `policy_violation`, `out_of_range_command`, `unsafe_command`, `manual_mode_excursion`. **Model** fits a median/MAD profile during the first `learn_seconds` and then reports `behavioral_anomaly`. |
 | **`responder_ip`** | The address the automated response writes to the plant from (role `responder`). Its writes raise no finding and stay out of the model's features; without it the sensor reports them as an unknown writer. Pass it only when a response runs. |
 | **Telemetry** | `sensor:/telemetry.jsonl`, name `ot`: `ot_finding`, `ot_alert` (raised/cleared), `model_fitted`, `model_error`, `ot_response_write` |

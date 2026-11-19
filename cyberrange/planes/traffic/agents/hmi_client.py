@@ -53,6 +53,7 @@ def diag_loop(base_url, every, jitter, rng, stop, targets):
 
 
 DG_SCALE = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1]
+V_SCALE = reg.SENSOR_REGISTERS[reg.IR_V_LOAD][1]
 SAFE_SETPOINT_KW = (15.0, 35.0)  # operator dispatches stay well inside the safe band
 
 
@@ -178,8 +179,8 @@ def main():
                     if not ir.isError() and not hr.isError():
                         log.info(
                             "poll v_load=%.3f v_dg=%.3f mode=%d setpoint=%.1fkW",
-                            reg.decode(ir.registers[reg.IR_V_LOAD], 1000.0),
-                            reg.decode(ir.registers[reg.IR_V_DG], 1000.0),
+                            reg.decode(ir.registers[reg.IR_V_LOAD], V_SCALE),
+                            reg.decode(ir.registers[reg.IR_V_DG], V_SCALE),
                             hr.registers[reg.HR_CTRL_MODE],
                             reg.decode(hr.registers[reg.HR_DG_SETPOINT], DG_SCALE),
                         )

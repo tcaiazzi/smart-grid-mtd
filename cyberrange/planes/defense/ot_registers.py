@@ -17,11 +17,21 @@ to [0, 65535], and ``value = raw / scale``. Sensors (engine -> PLC) live in the
 live in the **holding registers** (read/write, function codes 0x03 read /
 0x06 write-single / 0x10 write-multiple) — writes only ever target holding
 registers, which is exactly what the DPI sensor watches for.
+
+The plant itself is a description (``DEFAULT_PLANT``, ``plant()``): feeders of
+one radial layout, each served by the engine as a Modbus unit of its own, with
+the same register map. What differs between feeders — line lengths, load, the
+DG's setpoint and rating — and the plant's limits are data, handed to every
+party that needs them as ``--plant-b64``. The module constants below are the
+default plant's: what a party that serves or reads one feeder needs.
 """
+
+import base64
+import copy
+import json
 
 # ── Transport ────────────────────────────────────────────────────────────────
 MODBUS_PORT = 5020  # TCP port the engine's Modbus server listens on
-UNIT_ID = 1  # Modbus unit / slave id of the physical engine
 
 # Modbus function codes the sensor cares about (writes to holding registers).
 FC_READ_HOLDING_REGISTERS = 0x03
@@ -61,7 +71,7 @@ CTRL_AUTO, CTRL_MANUAL = 0, 1
 # valid_lo/valid_hi define the legitimate command envelope; a write outside it
 # is an out-of-range command (one of the sensor's finding classes).
 ACTUATOR_REGISTERS = {
-    HR_DG_SETPOINT: ("dg_setpoint", 10.0, 0.0, 60.0),  # DG rated 60 kW
+    HR_DG_SETPOINT: ("dg_setpoint", 10.0, 0.0, None),  # up to the feeder's DG rating, below
     HR_SWITCH_CMD: ("switch_cmd", 1.0, 0.0, 1.0),  # boolean breaker
     HR_CTRL_MODE: ("ctrl_mode", 1.0, 0.0, 1.0),  # auto / manual
 }
@@ -93,17 +103,111 @@ ROLE_POLICY = {
     },
 }
 
-# ── Control constants shared by the PLC and the sensor ───────────────────────
-DG_NOMINAL_KW = 20.0  # setpoint the PLC holds / returns to in AUTO
-V_REG_LOW = 0.97  # PLC regulation band (tighter than the alarm band)
-V_REG_HIGH = 1.03
-
-# ── Normal operating envelope (defines "out of normal state") ────────────────
-V_BAND_LOW = 0.95  # pu
-V_BAND_HIGH = 1.05  # pu
-LINE_LOAD_MAX = 100.0  # percent
-
 REG_WORD_MAX = 0xFFFF
+
+# ── The plant ────────────────────────────────────────────────────────────────
+# A radial LV feeder per Modbus unit, all fed from one slack bus:
+#     slack --(breaker)--feeder-- load bus --dg_tie-- DG bus
+# The DG tie is long enough that a full-rated DG at nominal load overvolts its
+# bus: an in-range command can still be unsafe.
+DEFAULT_PLANT = {
+    "name": "cps-lv-feeder",
+    "vn_kv": 0.4,
+    "slack_vm_pu": 1.02,
+    "line": {"r_ohm_per_km": 0.642, "x_ohm_per_km": 0.083, "c_nf_per_km": 0.0, "max_i_ka": 0.142},
+    # v_band: the normal operating envelope ("out of normal state" outside it);
+    # v_reg: the PLC's regulation band, tighter than the alarm band.
+    "limits": {"v_band": [0.95, 1.05], "v_reg": [0.97, 1.03], "line_load_max": 100.0},
+    "feeders": [
+        {
+            "unit": 1,
+            "feeder_km": 0.14,
+            "dg_tie_km": 0.20,
+            "load_kw": 50.0,
+            "load_sigma_kw": 4.0,
+            "dg_kw": 20.0,  # the setpoint the PLC holds / returns to in AUTO
+            "dg_rating_kw": 60.0,  # the top of the setpoint's legitimate envelope
+        }
+    ],
+}
+FEEDER_KEYS = (
+    "unit",
+    "feeder_km",
+    "dg_tie_km",
+    "load_kw",
+    "load_sigma_kw",
+    "dg_kw",
+    "dg_rating_kw",
+)
+
+
+def plant(arg=None) -> dict:
+    """The plant description: ``arg`` is None (the default plant), a dict, or
+    its JSON — plain or base64, as ``--plant-b64`` carries it. Checked here, so
+    that every party refuses the same malformed plant."""
+    if arg is None:
+        p = copy.deepcopy(DEFAULT_PLANT)
+    elif isinstance(arg, dict):
+        p = copy.deepcopy(arg)
+    else:
+        text = arg if arg.lstrip().startswith("{") else base64.b64decode(arg).decode()
+        p = json.loads(text)
+    units = [f.get("unit") for f in p.get("feeders", [])]
+    if not units:
+        raise ValueError("a plant has at least one feeder")
+    if len(set(units)) != len(units) or not all(
+        isinstance(u, int) and 1 <= u <= 247 for u in units
+    ):
+        raise ValueError(f"feeder units must be distinct Modbus unit ids (1-247), got {units}")
+    for f in p["feeders"]:
+        missing = [k for k in FEEDER_KEYS if k not in f]
+        if missing:
+            raise ValueError(f"feeder {f.get('unit')} misses {missing}")
+        if not 0 <= f["dg_kw"] <= f["dg_rating_kw"]:
+            raise ValueError(f"feeder {f['unit']}: the DG's setpoint is outside its rating")
+    return p
+
+
+def plant_b64(p) -> str:
+    """``p`` as the ``--plant-b64`` argument: JSON, base64, nothing a shell reads."""
+    return base64.b64encode(json.dumps(plant(p), sort_keys=True).encode()).decode()
+
+
+def units(p):
+    """The plant's Modbus unit ids, in feeder order."""
+    return [f["unit"] for f in p["feeders"]]
+
+
+def feeder(p, unit=None) -> dict:
+    """The feeder served as ``unit`` (default: the first)."""
+    if unit is None:
+        return p["feeders"][0]
+    for f in p["feeders"]:
+        if f["unit"] == unit:
+            return f
+    raise KeyError(f"the plant has no unit {unit}")
+
+
+def envelope(p, unit=None) -> dict:
+    """{address: (name, scale, lo, hi)} of ``unit``'s actuators: the register
+    map, with the setpoint's top at that feeder's DG rating."""
+    out = dict(ACTUATOR_REGISTERS)
+    name, scale, lo, _hi = out[HR_DG_SETPOINT]
+    out[HR_DG_SETPOINT] = (name, scale, lo, float(feeder(p, unit)["dg_rating_kw"]))
+    return out
+
+
+# ── The default plant, as constants ──────────────────────────────────────────
+_DEFAULT_FEEDER = DEFAULT_PLANT["feeders"][0]
+UNIT_ID = _DEFAULT_FEEDER["unit"]  # Modbus unit id of the default plant's feeder
+ACTUATOR_REGISTERS[HR_DG_SETPOINT] = (
+    *ACTUATOR_REGISTERS[HR_DG_SETPOINT][:3],
+    _DEFAULT_FEEDER["dg_rating_kw"],
+)
+DG_NOMINAL_KW = _DEFAULT_FEEDER["dg_kw"]
+V_REG_LOW, V_REG_HIGH = DEFAULT_PLANT["limits"]["v_reg"]
+V_BAND_LOW, V_BAND_HIGH = DEFAULT_PLANT["limits"]["v_band"]  # pu
+LINE_LOAD_MAX = DEFAULT_PLANT["limits"]["line_load_max"]  # percent
 
 
 def encode(value: float, scale: float) -> int:
@@ -126,11 +230,12 @@ def actuator_value(address: int, raw: int):
     return decode(raw, spec[1])
 
 
-def actuator_out_of_range(address: int, raw: int):
+def actuator_out_of_range(address: int, raw: int, actuators=None):
     """Return (name, value, lo, hi) if a written actuator value is outside its
     legitimate envelope, else None. Unknown addresses are reported too (a write
-    to a non-actuator holding register is itself anomalous)."""
-    spec = ACTUATOR_REGISTERS.get(address)
+    to a non-actuator holding register is itself anomalous). ``actuators`` is
+    one unit's envelope (``envelope(plant, unit)``); default: the default plant's."""
+    spec = (actuators or ACTUATOR_REGISTERS).get(address)
     if spec is None:
         return ("unknown", None, None, None)
     name, scale, lo, hi = spec

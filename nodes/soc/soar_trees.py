@@ -239,7 +239,9 @@ def cps_context(g):
 def cps_attack_tree(g):
     """Attack tree of the CPS chain, grounded on knowledge graph ``g``."""
     c = cps_context(g)
-    hr = lambda a: f"reg:hr:{a}"  # noqa: E731
+    # The first feeder's registers: this tree is the chain of one feeder.
+    feeder = kgmod.feeders(g)[0]
+    hr = lambda a: kgmod.reg_id(feeder, "hr", a)  # noqa: E731
 
     def via_trusted_flow(gg):
         return kgmod.reachable(gg, c["hmi"], c["engine"], c["modbus_port"])
@@ -389,7 +391,10 @@ def cps_attack_tree(g):
                                 "Measurements falsified on their way to the PLC",
                                 attck="T0856",
                                 attck_name="Spoof Reporting Message",
-                                targets=[f"reg:ir:{reg.IR_V_LOAD}", f"reg:ir:{reg.IR_V_DG}"],
+                                targets=[
+                                    kgmod.reg_id(feeder, "ir", reg.IR_V_LOAD),
+                                    kgmod.reg_id(feeder, "ir", reg.IR_V_DG),
+                                ],
                                 impact=0.9,
                             ),
                         ],

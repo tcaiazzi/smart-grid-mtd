@@ -2,26 +2,29 @@
 """soar_kg.py — knowledge graph of the lab the SOC watches.
 
 Built from the SOC's inventory (the hosts with their roles, interfaces and
-addresses, the services, the boundary firewall's ruleset) and the OT plant
-contract (ot_registers.py). The inventory is what a SOC is configured with; the
-graph is what it reasons on.
+addresses, the services, the boundary firewall's ruleset, the plant) and the
+OT plant contract (ot_registers.py). The inventory is what a SOC is configured
+with; the graph is what it reasons on.
 
 Copied flat onto the SOC node next to soc_analytics.py (see the scenario's
 guest_files.py). Stdlib + networkx.
 
 Inventory:
     {"name": lab name,
-     "hosts": [{"name", "role", "image", "ifaces": [{"name", "zone", "cidr"|null}]}],
+     "hosts": [{"name", "role", "image", "ifaces": [{"name", "zone", "cidr"|null}],
+                "unit": the feeder a controller is bound to (optional)}],
      "services": {host: [[name, proto, port, app], ...]},
      "boundary": {"host": name, "rules": [iptables command, ...]},
-     "plant_service": [host, service name]}
+     "plant_service": [host, service name],
+     "plant": the plant description (ot_registers.plant; default: the default plant)}
 
 Node ids are typed by prefix:
     zone:<name>             collision domain (IT / OT / MGMT)
     host:<name>             machine; attrs image, role
     ip:<addr>               interface address; attrs prefix, iface, host
     svc:<host>/<name>       network service; attrs proto, port, app
-    reg:<hr|ir>:<addr>      Modbus register; attrs name, kind, sensitive, lo, hi
+    reg:<u>:<hr|ir>:<addr>  Modbus register of feeder (unit) u; attrs feeder, name, kind,
+                            sensitive, lo, hi
     rule:<host>:<n>         forwarding rule; attrs action, src, dst, proto, dport
 
 Edges carry a ``rel`` attribute (and the MultiDiGraph key is the same string):
@@ -46,6 +49,11 @@ import ot_registers as reg
 BOUNDARY_ROLE = "boundary"
 
 
+def reg_id(unit, kind, addr):
+    """The node id of a register: ``kind`` is "hr" (holding) or "ir" (input)."""
+    return f"reg:{unit}:{kind}:{addr}"
+
+
 # ── Construction ─────────────────────────────────────────────────────────────
 
 
@@ -55,7 +63,10 @@ def build_kg(inventory):
     registers that role may write; the plant service exposes the registers."""
     services = inventory.get("services") or {}
     roles = {h["name"]: h.get("role") or "unknown" for h in inventory["hosts"]}
-    g = nx.MultiDiGraph(name=inventory.get("name", "lab"))
+    plant = reg.plant(inventory.get("plant"))
+    first = reg.units(plant)[0]
+    bound = {h["name"]: h.get("unit") or first for h in inventory["hosts"]}
+    g = nx.MultiDiGraph(name=inventory.get("name", "lab"), limits=plant["limits"])
 
     for host in sorted(inventory["hosts"], key=lambda h: h["name"]):
         name = host["name"]
@@ -92,8 +103,8 @@ def build_kg(inventory):
             _edge(g, hid, sid, "runs")
 
     boundary = inventory.get("boundary") or {}
-    _add_registers(g, inventory.get("plant_service"))
-    _add_role_permissions(g, roles)
+    _add_registers(g, inventory.get("plant_service"), plant)
+    _add_role_permissions(g, roles, bound)
     _add_rules(g, boundary.get("host"), boundary.get("rules") or [])
     return g
 
@@ -102,30 +113,35 @@ def _edge(g, u, v, rel, **attrs):
     g.add_edge(u, v, key=rel, rel=rel, **attrs)
 
 
-def _add_registers(g, plant_service):
-    for addr, (name, scale, lo, hi) in reg.ACTUATOR_REGISTERS.items():
-        g.add_node(
-            f"reg:hr:{addr}",
-            type="register",
-            kind="holding",
-            addr=addr,
-            name=name,
-            scale=scale,
-            lo=lo,
-            hi=hi,
-            sensitive=addr in reg.SENSITIVE_ACTUATORS,
-        )
-    for addr, (name, scale, unit) in reg.SENSOR_REGISTERS.items():
-        g.add_node(
-            f"reg:ir:{addr}",
-            type="register",
-            kind="input",
-            addr=addr,
-            name=name,
-            scale=scale,
-            unit=unit,
-            sensitive=False,
-        )
+def _add_registers(g, plant_service, plant):
+    """Every feeder's registers: one Modbus unit each, with the same map and
+    that feeder's envelope."""
+    for feeder in reg.units(plant):
+        for addr, (name, scale, lo, hi) in reg.envelope(plant, feeder).items():
+            g.add_node(
+                reg_id(feeder, "hr", addr),
+                type="register",
+                kind="holding",
+                feeder=feeder,
+                addr=addr,
+                name=name,
+                scale=scale,
+                lo=lo,
+                hi=hi,
+                sensitive=addr in reg.SENSITIVE_ACTUATORS,
+            )
+        for addr, (name, scale, unit) in reg.SENSOR_REGISTERS.items():
+            g.add_node(
+                reg_id(feeder, "ir", addr),
+                type="register",
+                kind="input",
+                feeder=feeder,
+                addr=addr,
+                name=name,
+                scale=scale,
+                unit=unit,
+                sensitive=False,
+            )
     if plant_service:
         sid = f"svc:{plant_service[0]}/{plant_service[1]}"
         if sid in g:
@@ -133,13 +149,21 @@ def _add_registers(g, plant_service):
                 _edge(g, sid, n, "exposes")
 
 
-def _add_role_permissions(g, roles):
+def _add_role_permissions(g, roles, bound):
+    """A controller may write its own feeder's registers, as its role allows."""
     for host, role in roles.items():
         pol = reg.ROLE_POLICY.get(role)
         if not pol or f"host:{host}" not in g:
             continue
         for addr in pol["writes"]:
-            _edge(g, f"host:{host}", f"reg:hr:{addr}", "may_write")
+            target = reg_id(bound[host], "hr", addr)
+            if target in g:
+                _edge(g, f"host:{host}", target, "may_write")
+
+
+def feeders(g):
+    """The plant's feeders (Modbus units) the graph holds registers of."""
+    return sorted({d["feeder"] for _n, d in g.nodes(data=True) if d.get("type") == "register"})
 
 
 def parse_forward_rules(rules):

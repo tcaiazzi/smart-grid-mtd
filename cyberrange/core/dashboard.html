@@ -270,7 +270,7 @@ function runOf(id) {
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
       states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
-      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false, x: {} };
+      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false, x: {}, info: {} };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -283,7 +283,9 @@ function resetRunDetail(r, ev) {
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
     states: [], decisions: [], actions: [], respond: ev.respond || null,
-    approvals: {}, teams: [], playground: !!ev.playground, x: {} });
+    approvals: {}, teams: [], playground: !!ev.playground, x: {},
+    // The run_start event whole: what the scenario's run_info says, for its panel.
+    info: ev });
 }
 
 function apply(ev) {
