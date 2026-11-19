@@ -6,7 +6,11 @@
 # trust another.
 #
 # The distinguished names are the ones the indexer's security plugin is told
-# to trust (nodes/wazuh/indexer/opensearch.yml: nodes_dn, admin_dn). A lab
+# to trust (nodes/wazuh/indexer/opensearch.yml: nodes_dn, admin_dn). The
+# certificates name services, not addresses: the lab's nodes dial the services
+# by these names (cyberrange/scenarios/cps_soc/feature.py writes them into
+# /etc/hosts), so a lab that moves a service needs no new image. IRIS's also
+# names 127.0.0.1, where the team's browser reaches it. A lab
 # certificate authority: its keys sit in the images and protect nothing beyond
 # the lab.
 FROM debian:12-slim
@@ -31,10 +35,10 @@ RUN set -eu; \
         rm "$name.csr" "$name.ext"; \
     }; \
     issue admin admin "DNS:admin"; \
-    issue indexer wazuh.indexer "DNS:wazuh.indexer,IP:10.30.0.21"; \
-    issue dashboard wazuh.dashboard "DNS:wazuh.dashboard,IP:10.30.0.22"; \
-    issue manager wazuh.manager "DNS:wazuh.manager,IP:10.30.0.20"; \
-    issue iris iris.lab "DNS:iris.lab,IP:10.30.0.40,IP:127.0.0.1"; \
+    issue indexer wazuh.indexer "DNS:wazuh.indexer"; \
+    issue dashboard wazuh.dashboard "DNS:wazuh.dashboard"; \
+    issue manager wazuh.manager "DNS:wazuh.manager"; \
+    issue iris iris.lab "DNS:iris.lab,IP:127.0.0.1"; \
     rm root-ca.key root-ca.srl; \
     chmod 444 /pki/*
 

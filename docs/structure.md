@@ -79,15 +79,16 @@ applies to the dashboard: a scenario declares its own panel and structure
 (`Scenario.panel_js`, `Scenario.structure`) and the core asks the registry,
 rather than importing one scenario's knowledge graph.
 
-**A scenario may build on another scenario, never the reverse.** `cps-advisor`
-and `cps-recon` subclass `CpsScenario` and deploy its lab under another name;
-`cps` knows nothing of them. What a derived scenario needs to vary is a hook or a
-class attribute on the base (`extra_services`, `engage`, `operator_api`,
-`check_approval`, `attacker`, `topology`, `DEFAULT_*`), not a test on the
-scenario's name — `cps-recon` overrides `attacker` to return a `ReconAttacker`
-and `topology` to put that attacker on its own image. Its `SOURCES`
-list only its own directory and its `GUEST_MANIFESTS` only the files it adds to
-the nodes, so the shared lab is counted once, under `cps`.
+**A scenario may build on another scenario, never the reverse.** `cps-advisor`,
+`cps-soc` and `cps-recon` are `CpsScenario` with a tuple of features
+(`cyberrange/scenarios/cps/feature.py`), deploying its lab under their own
+names; `cps` knows nothing of them. What a scenario adds is a `Feature` in its
+own directory (`People`, `SocTools`, `Recon`), not a test on the scenario's
+name: `Recon` returns a `ReconAttacker` from its `attacker` hook and puts that
+attacker on its own image through `extras`. A scenario's `SOURCES` list only its
+own directory and its `GUEST_MANIFESTS` only the files it adds to the nodes, so
+the shared lab is counted once, under `cps`. The lab itself is data
+(`cyberrange/scenarios/cps/lab.py`, see [platform.md](platform.md)).
 
 **A file counted twice is a false number in the paper.** `make platform-loc`
 sums each category in `SOURCES` independently, so a file matched by two

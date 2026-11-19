@@ -4,8 +4,8 @@
 # Installed by wazuh-dashboard-start.sh; based on Wazuh's single-node deployment.
 server.host: 0.0.0.0
 server.port: 5601
-opensearch.hosts: https://10.30.0.21:9200
-opensearch.ssl.verificationMode: certificate
+opensearch.hosts: https://wazuh.indexer:9200
+opensearch.ssl.verificationMode: full
 opensearch.ssl.certificateAuthorities: ["/usr/share/wazuh-dashboard/certs/root-ca.pem"]
 opensearch.requestHeadersWhitelist: ["securitytenant", "Authorization"]
 opensearch_security.multitenancy.enabled: false

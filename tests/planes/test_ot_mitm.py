@@ -6,8 +6,10 @@ on a real link is proven by the scenario's live runs.
 Run: `.venv/bin/python -m pytest tests/planes/test_ot_mitm.py`.
 """
 
+import os
 import socket
 import struct
+import tempfile
 import unittest
 
 from tests.helpers import guest_paths
@@ -115,6 +117,37 @@ class Modes(unittest.TestCase):
     def test_unknown_mode_is_refused(self):
         with self.assertRaises(ValueError):
             m.Rewriter("drop")
+
+
+class Interface(unittest.TestCase):
+    """The tool finds its interface on the plant's link from the host's routing
+    table: the platform does not tell it, and on another lab it is another NIC."""
+
+    def routes(self, *rows):
+        def word(dotted):
+            return f"{struct.unpack('=I', socket.inet_aton(dotted))[0]:08X}"
+
+        lines = ["Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT"]
+        for iface, dest, gw, mask in rows:
+            lines.append(f"{iface}\t{word(dest)}\t{word(gw)}\t0001\t0\t0\t0\t{word(mask)}\t0\t0\t0")
+        f = tempfile.NamedTemporaryFile("w", delete=False, suffix=".route")
+        f.write("\n".join(lines) + "\n")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_the_nic_on_the_engines_link(self):
+        table = self.routes(
+            ("eth0", "0.0.0.0", "10.10.0.1", "0.0.0.0"),  # the default route, via the boundary
+            ("eth0", "10.10.0.0", "0.0.0.0", "255.255.255.0"),
+            ("eth2", "10.20.0.0", "0.0.0.0", "255.255.255.0"),
+        )
+        self.assertEqual(m.iface_towards(ENGINE, table), "eth2")
+
+    def test_no_link_of_its_own_to_the_engine(self):
+        table = self.routes(("eth0", "0.0.0.0", "10.10.0.1", "0.0.0.0"))
+        with self.assertRaises(RuntimeError):
+            m.iface_towards(ENGINE, table)
 
 
 if __name__ == "__main__":

@@ -163,8 +163,8 @@ def to_iris(alert, ids):
 class Iris:
     def __init__(self, url, key, cafile=CAFILE, timeout=20.0):
         self.url, self.key, self.timeout = url.rstrip("/"), key, timeout
+        # IRIS is dialled by the name its certificate carries.
         self.context = ssl.create_default_context(cafile=cafile)
-        self.context.check_hostname = False  # the lab's certificates name addresses
 
     def call(self, method, path, body=None):
         req = urllib.request.Request(

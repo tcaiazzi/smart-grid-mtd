@@ -10,7 +10,7 @@ objects, in the indexer: this waits for the dashboard to answer and creates
 them through its saved-objects API, under fixed ids, so that the team's link to
 the dashboard is the same at every run.
 
-    OSD_PASSWORD=… dashboard_objects.py --url https://10.30.0.22:5601 \
+    OSD_PASSWORD=… dashboard_objects.py --url https://wazuh.dashboard:5601 \
         --user kibanaserver --ca /pki/root-ca.pem [--specs /]
 
 Copied flat onto the dashboard node and run by wazuh-dashboard-start.sh. Stdlib

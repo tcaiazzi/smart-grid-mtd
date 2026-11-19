@@ -25,9 +25,9 @@ from cyberrange.scenarios.cps.inventory import inventory
 TOOL = "soc_analytics.py"
 
 
-def run(*argv, args=None):
-    """Run the SOC tool with the lab's inventory; returns its stdout. ``args``
-    are the scenario arguments the topology is built from (default: defaults)."""
+def run(*argv, spec=None):
+    """Run the SOC tool with the inventory of the lab ``spec`` (default: the
+    default lab); returns its stdout."""
     stage = tempfile.mkdtemp(prefix="soc-tool-")
     try:
         for host_path, guest_path in SOC_FILES:
@@ -35,7 +35,7 @@ def run(*argv, args=None):
                 shutil.copy(paths.resolve(host_path), os.path.join(stage, guest_path.lstrip("/")))
         inv = os.path.join(stage, "inventory.json")
         with open(inv, "w") as f:
-            json.dump(inventory(args), f)
+            json.dump(inventory(spec), f)
         done = subprocess.run(
             [sys.executable, TOOL, "--inventory", inv, *argv],
             cwd=stage,
@@ -50,9 +50,9 @@ def run(*argv, args=None):
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def describe(out_dir, it=False, args=None):
-    """Write kg.json and tree.json of the lab into ``out_dir``."""
-    run("--describe", "--out-dir", os.path.abspath(out_dir), *(["--it"] if it else []), args=args)
+def describe(out_dir, it=False, spec=None):
+    """Write kg.json and tree.json of the lab ``spec`` into ``out_dir``."""
+    run("--describe", "--out-dir", os.path.abspath(out_dir), *(["--it"] if it else []), spec=spec)
 
 
 def structure(it=False):

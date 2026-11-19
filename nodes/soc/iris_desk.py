@@ -101,12 +101,10 @@ class IrisApi:
     def __init__(self, url, key, cafile=None, timeout=20.0, http=None):
         self.url, self.key, self.timeout = url.rstrip("/"), key, timeout
         if http is None:
+            # IRIS is dialled by the name its certificate carries.
             context = ssl.create_default_context(cafile=cafile) if cafile else None
             if context is None:
                 context = ssl._create_unverified_context()
-            else:
-                # The lab's certificates name addresses, which is what is dialled.
-                context.check_hostname = False
             http = self._urllib(context)
         self.http = http
 

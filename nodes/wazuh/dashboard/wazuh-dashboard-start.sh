@@ -23,10 +23,9 @@ chown -R 1000:1000 $HOME_DIR/config $HOME_DIR/certs $HOME_DIR/data
 chmod 600 $HOME_DIR/certs/*
 
 # In the background: the views can only be created once the dashboard, started
-# below, answers. On the node's own address, the one its certificate names.
-ADDRESS=$(ip -4 -o addr show dev eth0 | awk '{print $4}' | cut -d/ -f1)
+# below, answers. By the name its certificate carries (/etc/hosts has it).
 OSD_PASSWORD="$KIBANASERVER_PASSWORD" python3 /dashboard_objects.py \
-    --url "https://$ADDRESS:5601" --user kibanaserver \
+    --url "https://wazuh.dashboard:5601" --user kibanaserver \
     --ca /pki/root-ca.pem --specs / > /dashboard_objects.log 2>&1 &
 
 exec chroot --userspec=1000:1000 / env HOME=$HOME_DIR \

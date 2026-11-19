@@ -1,6 +1,6 @@
 # filebeat.yml — ships the cps-soc manager's alerts to the lab's indexer, as the
 # Wazuh server does in a full deployment (Wazuh's own filebeat.yml, with the
-# lab's address and authority). It writes as the indexer's `filebeat` user, whose
+# lab's indexer and authority). It writes as the indexer's `filebeat` user, whose
 # role lets it write alerts and nothing else; the password is this run's, from
 # the keystore written by wazuh-shipper-start.sh.
 filebeat.modules:
@@ -15,12 +15,13 @@ setup.template.json.path: /etc/filebeat/wazuh-template.json
 setup.template.json.name: wazuh
 setup.ilm.enabled: false
 output.elasticsearch:
-  hosts: ["https://10.30.0.21:9200"]
+  hosts: ["https://wazuh.indexer:9200"]
   username: filebeat
   password: "${INDEXER_PASSWORD}"
   ssl.certificate_authorities: ["/pki/root-ca.pem"]
   ssl.certificate: /pki/manager.pem
   ssl.key: /pki/manager-key.pem
-  # The indexer's certificate names its lab address; the authority is the lab's.
-  ssl.verification_mode: certificate
+  # The indexer is dialled by the name its certificate carries (the node's
+  # /etc/hosts resolves it); the authority is the lab's.
+  ssl.verification_mode: full
 logging.metrics.enabled: false

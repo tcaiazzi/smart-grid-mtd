@@ -29,80 +29,94 @@ it without crossing the boundary — which is what the workstation, on OT, can d
 
 What the experiment itself reads (ledger, dashboard, artifacts) never travels
 on a lab network: it goes through the container runtime, so no node can see it.
-Node roles are the knowledge graph's.
+
+The lab is data (lab.py); this module turns a LabSpec into the platform's
+Topology, adding what each host runs. The module constants below are the
+default lab's, for the code and the tests that speak of that lab in particular.
 """
 
 import types
 from dataclasses import dataclass, field
 
 from cyberrange.core.topology import Iface, Node, Route, Topology, build_lab as _build
+from cyberrange.scenarios.cps import lab as L
 from cyberrange.scenarios.cps.guest_files import (
     ATTACKER_CPS_FILES,
     ENGINE_FILES,
+    EWS_FILES,
     FW_FILES,
     HMI_FILES,
-    EWS_FILES,
     PLC_FILES,
     SENSOR_FILES,
     SOC_FILES,
 )
 
 LAB_NAME = "cps"
-IMAGE = "kathara/cps"
-SOC_IMAGE = "kathara/soc"  # the Wazuh manager; too heavy to put on every node
-# Zones (collision domains)
-IT, OT, MGMT = "IT", "OT", "MGMT"
-# Addresses
-ATTACKER_IP = "10.10.0.10"
-HMI_IP = "10.10.0.20"
-EWS_IP = "10.10.0.30"
-FW_IT_IP = "10.10.0.1"
-FW_OT_IP = "10.20.0.1"
-PLC_IP = "10.20.0.10"
-ENGINE_IP = "10.20.0.20"
-EWS_OT_IP = "10.20.0.30"
-# MGMT stays numerically above IT and OT: the knowledge graph lists a host's
-# addresses in string order and takes the first as its primary one.
-FW_MGMT_IP = "10.30.0.1"
-SENSOR_MGMT_IP = "10.30.0.10"
-SOC_IP = "10.30.0.20"
-HMI_MGMT_IP = "10.30.0.30"
-EWS_MGMT_IP = "10.30.0.50"  # .21-.40 belong to the SOC's tooling (cps-soc)
-IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
-MODBUS_PORT = 5020
-APP_PORT = 8080
-MAINT_PORT = 8081  # the workstation's remote-maintenance service
+IMAGE, SOC_IMAGE = L.IMAGE, L.SOC_IMAGE
+IT, OT, MGMT = L.IT, L.OT, L.MGMT
+MODBUS_PORT, APP_PORT, MAINT_PORT = L.MODBUS_PORT, L.APP_PORT, L.MAINT_PORT
 DASHBOARD_GUEST_PORT = 8080
 # What a team's node serves to the people of the team, when a scenario puts
 # people in the lab: its console and its web terminal.
 CONSOLE_GUEST_PORT = 8090
 TERMINAL_GUEST_PORT = 8091
-# Primary address per machine NIC — also the "addresses" meta on each Machine.
-# The sensor's OT NIC (eth0) is passive and deliberately has no address.
-ADDRESSES = {
-    "attacker": {"eth0": f"{ATTACKER_IP}/24"},
-    "hmi": {"eth0": f"{HMI_IP}/24", "eth1": f"{HMI_MGMT_IP}/24"},
-    "ews": {"eth0": f"{EWS_IP}/24", "eth1": f"{EWS_OT_IP}/24", "eth2": f"{EWS_MGMT_IP}/24"},
-    "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24", "eth2": f"{FW_MGMT_IP}/24"},
-    "plc": {"eth0": f"{PLC_IP}/24"},
-    "engine": {"eth0": f"{ENGINE_IP}/24"},
-    "sensor": {"eth1": f"{SENSOR_MGMT_IP}/24"},
-    "soc": {"eth0": f"{SOC_IP}/24"},
+
+# What each host runs, by its profile.
+PROFILE_FILES = {
+    "attacker": ATTACKER_CPS_FILES,
+    "hmi": HMI_FILES,
+    "ews": EWS_FILES,
+    "firewall": FW_FILES,
+    "plc": PLC_FILES,
+    "engine": ENGINE_FILES,
+    "sensor": SENSOR_FILES,
+    "soc": SOC_FILES,
 }
 
+# ── the default lab, by name ─────────────────────────────────────────────────
+DEFAULT = L.default_spec()
+IT_NET, OT_NET, MGMT_NET = (DEFAULT.zone(z).cidr for z in (IT, OT, MGMT))
+ATTACKER_IP = DEFAULT.ip("attacker")
+HMI_IP = DEFAULT.ip("hmi", IT)
+EWS_IP = DEFAULT.ip("ews", IT)
+FW_IT_IP = DEFAULT.ip("firewall", IT)
+FW_OT_IP = DEFAULT.ip("firewall", OT)
+PLC_IP = DEFAULT.ip("plc")
+ENGINE_IP = DEFAULT.ip("engine")
+EWS_OT_IP = DEFAULT.ip("ews", OT)
+FW_MGMT_IP = DEFAULT.ip("firewall", MGMT)
+SENSOR_MGMT_IP = DEFAULT.ip("sensor", MGMT)
+SOC_IP = DEFAULT.ip("soc")
+HMI_MGMT_IP = DEFAULT.ip("hmi", MGMT)
+EWS_MGMT_IP = DEFAULT.ip("ews", MGMT)
+# Primary address per machine NIC — also the "addresses" meta on each Machine.
+ADDRESSES = {h.name: DEFAULT.addresses(h.name) for h in DEFAULT.hosts}
 
-# Hosts that run a Wazuh agent, with the id the manager knows each by. The
-# engine and the PLC have none: the plant is watched from the wire and acted on
-# from the boundary.
-WAZUH_AGENTS = {"sensor": "001", "hmi": "002", "firewall": "003", "ews": "004"}
+
+def wazuh_agents(spec=None):
+    """{host: agent id} of the hosts that run a Wazuh agent: those on the SOC's
+    network. The engine and the PLC have none: the plant is watched from the
+    wire and acted on from the boundary."""
+    spec = spec or DEFAULT
+    return {h.name: f"{i:03d}" for i, h in enumerate(spec.managed(), 1)}
 
 
-def sensor_rules():
+WAZUH_AGENTS = wazuh_agents()
+
+
+def firewall_rules(spec=None):
+    """The boundary's standing ruleset (LabSpec.boundary_rules)."""
+    return (spec or DEFAULT).boundary_rules()
+
+
+def sensor_rules(ifaces):
     """The sensor's live page is instrumentation, reached through the bridged
     NIC only. Its server listens on every address, so without this rule the
     page would also answer on MGMT, where the HMI — the attacker's foothold —
     could read the defense's own view of the attack."""
-    return [f"iptables -A INPUT -i eth1 -p tcp --dport {DASHBOARD_GUEST_PORT} -j DROP"]
+    return [
+        f"iptables -A INPUT -i {i} -p tcp --dport {DASHBOARD_GUEST_PORT} -j DROP" for i in ifaces
+    ]
 
 
 def closed_on(iface, *ports):
@@ -126,114 +140,76 @@ class Extra:
     startup: list = field(default_factory=list)
     image: str = None
 
-
-def firewall_rules():
-    """Standing boundary ruleset: default-drop forwarding, keep established
-    flows, and allow ONLY the sanctioned HMI -> engine Modbus flow — so nothing
-    is forwarded to or from MGMT either. The firewall
-    cannot tell a legitimate operator command from a hijacked one — it only sees
-    "HMI, TCP to 5020" — which is what the DPI sensor and the SOAR response
-    exist to compensate for."""
-    return [
-        "sysctl -w net.ipv4.ip_forward=1",
-        "iptables -P FORWARD DROP",
-        "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
-        f"iptables -A FORWARD -s {HMI_IP} -d {ENGINE_IP} -p tcp --dport {MODBUS_PORT} -j ACCEPT",
-    ]
+    def merged(self, other):
+        """This and ``other`` on the same node: files, ports and startup in
+        order; two different images cannot both be the node's."""
+        if self.image and other.image and self.image != other.image:
+            raise ValueError(f"one node, two images: {self.image} and {other.image}")
+        return Extra(
+            self.files + other.files,
+            self.ports + other.ports,
+            self.startup + other.startup,
+            other.image or self.image,
+        )
 
 
-def ews_rules():
-    """The workstation is no router. Every container forwards by default, and
-    with two feet it would carry IT straight onto OT, around the boundary."""
-    return ["iptables -P FORWARD DROP"]
-
-
-def topology(args, name=LAB_NAME, extras=None) -> Topology:
-    """The lab, named ``name``: a scenario that reuses it under another name can
-    run next to this one. ``extras`` ({node: Extra}) is what such a scenario
-    adds to the nodes; this lab is the same without it."""
+def topology(args, name=LAB_NAME, extras=None, spec=None) -> Topology:
+    """The lab ``spec`` (default: the default lab), named ``name``: a scenario
+    that reuses it under another name can run next to this one. ``extras``
+    ({node: Extra}) is what such a scenario adds to the nodes; the lab is the
+    same without it."""
+    spec = spec or DEFAULT
     dashboard = int(getattr(args, "dashboard_port", 0) or 0)
     extras = extras or {}
-    nodes = _nodes(dashboard, extras)
-    for node in nodes:
-        extra = extras.get(node.name)
-        if extra is None:
-            continue
+    unknown = set(extras) - {h.name for h in spec.hosts}
+    if unknown:
+        raise ValueError(f"extras for hosts the lab does not have: {sorted(unknown)}")
+    sensors = spec.with_role("sensor")
+    nodes = []
+    for h in spec.hosts:
+        extra = extras.get(h.name) or Extra()
+        node = _node(spec, h, published=bool(extra.ports))
+        if dashboard and sensors and h is sensors[0]:
+            node.mgmt_port = f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp"
         node.files = list(node.files) + list(extra.files)
         node.startup = list(node.startup) + list(extra.startup)
         if extra.ports:
             node.mgmt_port = node.published_ports() + list(extra.ports)
         if extra.image:
             node.image = extra.image
+        nodes.append(node)
     return Topology(name, default_image=IMAGE, nodes=nodes)
 
 
-def _nodes(dashboard, extras):
-    def gw(via):
-        return [Route("default", via, "eth0")]
-
-    def addr(name, i):
-        return ADDRESSES[name].get(f"eth{i}")
-
-    def ports_of(name):
-        return list(getattr(extras.get(name), "ports", ()))
-
-    return [
-        Node(
-            "attacker",
-            [Iface(IT, addr("attacker", 0))],
-            role="it-host",
-            # A published port brings a bridged NIC with a default route of its
-            # own: the lab's must replace it, not fail next to it.
-            routes=[Route("default", FW_IT_IP, "eth0", replace=bool(ports_of("attacker")))],
-            files=ATTACKER_CPS_FILES,
-        ),
-        Node(
-            "hmi",
-            # IT first: the response isolates the HMI by taking eth0 down,
-            # and must still reach it afterwards on eth1.
-            [Iface(IT, addr("hmi", 0)), Iface(MGMT, addr("hmi", 1))],
-            role="hmi",
-            routes=gw(FW_IT_IP),
-            files=HMI_FILES,
-        ),
-        Node(
-            "ews",
-            [Iface(IT, addr("ews", 0)), Iface(OT, addr("ews", 1)), Iface(MGMT, addr("ews", 2))],
-            role="engineering",
-            routes=gw(FW_IT_IP),
-            startup=ews_rules(),
-            files=EWS_FILES,
-        ),
-        Node(
-            "firewall",
-            [
-                Iface(IT, addr("firewall", 0)),
-                Iface(OT, addr("firewall", 1)),
-                Iface(MGMT, addr("firewall", 2)),
-            ],
-            role="boundary",
-            startup=firewall_rules(),
-            files=FW_FILES,
-        ),
-        Node("plc", [Iface(OT, addr("plc", 0))], role="plc", routes=gw(FW_OT_IP), files=PLC_FILES),
-        Node(
-            "engine",
-            [Iface(OT, addr("engine", 0))],
-            role="plant",
-            routes=gw(FW_OT_IP),
-            files=ENGINE_FILES,
-        ),
-        Node(
-            "sensor",
-            [Iface(OT, promisc=True), Iface(MGMT, addr("sensor", 1))],
-            role="sensor",
-            startup=sensor_rules(),
-            files=SENSOR_FILES,
-            mgmt_port=f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp" if dashboard else None,
-        ),
-        Node("soc", [Iface(MGMT, addr("soc", 0))], image=SOC_IMAGE, role="soc", files=SOC_FILES),
+def _node(spec, h, published):
+    ifaces = [
+        Iface(n.zone, promisc=True) if n.passive else Iface(n.zone, spec.cidr_of(n)) for n in h.nics
     ]
+    routes = []
+    gw = spec.gateway(h.name)
+    if gw:
+        # A published port brings a bridged NIC with a default route of its
+        # own: the lab's must replace it, not fail next to it.
+        routes = [Route("default", gw[0], gw[1], replace=published)]
+    startup = []
+    if h.name == spec.boundary:
+        startup += spec.boundary_rules()
+    if spec.forwards(h.name):
+        # The host is no router. Every container forwards by default, and with
+        # feet on two zones it would carry one straight onto the other, around
+        # the boundary.
+        startup.append("iptables -P FORWARD DROP")
+    if h.role == "sensor":
+        startup += sensor_rules(spec.addresses(h.name))
+    return Node(
+        h.name,
+        ifaces,
+        image=h.image,
+        role=h.role,
+        routes=routes,
+        startup=startup,
+        files=PROFILE_FILES.get(h.profile, []),
+    )
 
 
 def default_args():
@@ -246,15 +222,7 @@ def build_lab(args=None):
     return _build(topology(args or default_args()))
 
 
-def roles():
-    """{machine: knowledge-graph role}, from the topology."""
-    return {n.name: n.role for n in topology(default_args()).nodes}
-
-
-def services():
+def services(spec=None):
     """Exposed services per machine: (name, proto, port, app)."""
-    return {
-        "hmi": [("diag-http", "tcp", APP_PORT, "http")],
-        "ews": [("maint-http", "tcp", MAINT_PORT, "http")],
-        "engine": [("modbus", "tcp", MODBUS_PORT, "modbus")],
-    }
+    spec = spec or DEFAULT
+    return {h.name: [tuple(vars(s).values()) for s in h.services] for h in spec.hosts if h.services}

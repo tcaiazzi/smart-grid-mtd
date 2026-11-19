@@ -45,10 +45,13 @@ class PlcController(GuestAgent):
 
 class HmiClient(GuestAgent):
     """The HMI: operator polling + dispatches; with ``diag_url`` also the
-    operator's legitimate use of the diagnostics web app."""
+    operator's legitimate use of the diagnostics web app, on ``diag_targets``
+    (the hosts an operator would ping)."""
 
-    def __init__(self, node, engine_ip, port, seed=None, diag_url=None):
+    def __init__(self, node, engine_ip, port, seed=None, diag_url=None, diag_targets=()):
         diag = f" --diag-url {diag_url}" if diag_url else ""
+        if diag_url and diag_targets:
+            diag += f" --diag-targets {','.join(diag_targets)}"
         super().__init__(
             node,
             f"python3 hmi_client.py --engine-host {engine_ip} --port {port}{seed_arg(seed)}{diag}",

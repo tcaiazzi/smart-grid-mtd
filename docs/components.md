@@ -171,7 +171,7 @@ gives the IT sensor a baseline of normal use.
 
 | | |
 |---|---|
-| **Starts** | `python3 hmi_client.py --engine-host IP --port P [--seed N] [--diag-url URL]` |
+| **Starts** | `python3 hmi_client.py --engine-host IP --port P [--seed N] [--diag-url URL --diag-targets HOSTS]` |
 | **Artifacts** | `<node>.hmi.log` |
 
 ### `BackgroundReplay(node, iface, mbps, duration=None)`

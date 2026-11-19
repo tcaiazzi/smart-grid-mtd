@@ -157,22 +157,65 @@ The artifacts a run downloads are the union of its components' artifacts. The
 
 ### A scenario built on another
 
-A scenario may subclass another and deploy the same lab under its own name;
-the base never knows. `cps-advisor` does this with `cps`, and what it varies is
-only what the base exposes for the purpose:
+The CPS scenarios share one lab and one episode, and differ by what they add
+to them. Two things make that possible without copying the base.
 
-| On the base (`CpsScenario`) | What the derived scenario does with it |
+**The lab is data.** `cyberrange/scenarios/cps/lab.py` describes a lab as a
+`LabSpec`, which holds:
+
+- zones, with their CIDR, and whether the boundary forwards between them;
+- hosts, each with a role, NICs in interface order, services, and an optional
+  image;
+- the flows the boundary lets through.
+
+Everything else is derived from the spec:
+
+- addresses, routes and the boundary's ruleset;
+- which hosts carry a Wazuh agent;
+- the SOC's inventory.
+
+`topology.py` turns a spec into the platform's `Topology`. The episode finds its
+hosts by role (`plant_of(spec)`) instead of by name. When a spec is built,
+`LabSpec.check()` refuses one that breaks a constraint the rest of the system
+relies on: two NICs on one address, a primary address that does not sort first
+for the knowledge graph, or a name Kathará refuses. `default_spec()` is the lab
+every CPS scenario runs today. A larger lab is another spec, overriding
+`CpsScenario.lab_spec(args)`.
+
+**Additions are features.** A `Feature` (`cyberrange/scenarios/cps/feature.py`)
+is one addition, with neutral hooks. A scenario is `CpsScenario` with a tuple
+of them:
+
+| Scenario | `features` |
 |---|---|
-| `DEFAULT_OUT_DIR`, `DEFAULT_RESPOND`, `DEFAULT_APPROVAL`, `APPROVAL_HELP` | other defaults for the same options |
-| `check_approval(spec)` | accepts `operator:<s>` only, where the base accepts `auto`, `deny`, `delay:<s>` |
-| `operator_api(args)` | the `operator_*` arguments of `SocAnalytics`: the base returns none |
-| `extra_services(ctx)` | components started with the services (terminals, recorded shells, the jump host) |
-| `engage(ctx)` | called once the ground truth is open, when an attack may begin (the red team is let in) |
-| `topology.topology(args, name=, extras=)` | the same lab under another name, with `{node: Extra(files, ports, startup)}` added to its nodes |
+| `cps` | `()` |
+| `cps-advisor` | `(People(),)` |
+| `cps-soc` | `(SocTools(), People(console=False))` |
+| `cps-recon` | `(Recon(),)` |
 
-The derived scenario's `SOURCES` list only its own directory and its manifests
-only what it adds, so the shared lab is counted once (see
-[structure.md](structure.md)).
+| Hook | What a feature does with it |
+|---|---|
+| `add_arguments`, `validate`, `prepare`, `run_info` | its options, their checks, per-run secrets, what the ledger may know |
+| `check_approval(spec)` | takes over what `--approval` may be (People: `operator:<s>` only) |
+| `host_ports(args)` | the host ports it publishes; the scenario refuses two features publishing one port |
+| `extras(spec, args)` | `{host: Extra(files, ports, startup, image)}` added to the lab's hosts |
+| `nodes(spec, args)` | nodes of its own next to the lab (the SOC's tools) |
+| `links(args)`, `operator_api(scenario, args)` | what each team is handed; the `SocAnalytics` arguments it sets |
+| `services(ctx)`, `engage(ctx)` | components started with the services; once the ground truth is open |
+| `attacker(scenario, args)` | its own attack driver (Recon) |
+
+The scenario calls the features in the order it lists them. What one feature
+puts on a host (files, startup commands) comes before what the next one puts
+there, and its services start first. Two features may not give one host two
+different images.
+
+A combination no scenario declares yet, such as the SOC's tools with a recon
+attacker, is one more tuple (`tests/scenarios/cps/test_cps_lab.py` builds that
+one).
+
+Each feature lives in its scenario's directory. The scenario's `SOURCES` list
+only that directory, and its manifests list only what it adds, so the shared lab
+is counted once (see [structure.md](structure.md)).
 
 ## 3. The three streams of a run
 

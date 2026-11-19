@@ -69,6 +69,13 @@ class Options(unittest.TestCase):
                 f"IRIS would refuse {name}'s password",
             )
 
+    def test_no_password_reads_as_an_option(self):
+        # token_urlsafe draws '-' as often as any other character: one run in 64
+        # would hand the SOC an --iris-analyst-password it cannot parse.
+        from cyberrange.scenarios.cps_soc.feature import password
+
+        self.assertFalse(any(password().startswith("-") for _ in range(2000)))
+
     def test_the_blue_team_gets_the_siem_and_the_cases_not_the_console(self):
         args = args_of(self.s)
         blue = self.s.links(args)["blue"]
@@ -170,7 +177,7 @@ class Episode(unittest.TestCase):
         self.assertEqual(mgr.deployed, ["cps-soc"])
         secrets = args.soc_secrets
         soc = self.started(mgr, "soc", "soc_analytics.py")
-        self.assertIn("--desk iris --iris-url https://10.30.0.40", soc)
+        self.assertIn("--desk iris --iris-url https://iris.lab", soc)
         self.assertIn(f"--iris-key {secrets['iris_key']}", soc)
         self.assertIn(f"--iris-case {os.path.basename(self.out)}", soc)
         self.assertNotIn("--operator-port", soc, "a console nobody can reach")
@@ -192,7 +199,7 @@ class Episode(unittest.TestCase):
         self.assertIn("POSTGRES_SERVER=10.40.0.20", app)
         self.assertIn("PYTHONPATH=/iris_modules", app, "IRIS would not find the SOC's module")
         forwarder = self.started(mgr, "soc", "wazuh-iris-integration.sh")
-        self.assertIn("IRIS_URL=https://10.30.0.40", forwarder)
+        self.assertIn("IRIS_URL=https://iris.lab", forwarder)
         self.assertIn(f"IRIS_KEY={secrets['iris_key']}", forwarder)
         with open(os.path.join(self.out, "teams.json")) as f:
             self.assertIn(secrets["blue"], json.load(f)["blue"]["cases"])

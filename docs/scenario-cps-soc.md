@@ -66,7 +66,11 @@ therefore accepts traffic on MGMT only from the hosts that need it:
 - It copies the lab's certificates.
 
 `kathara/wazuh-pki` is the lab's only certificate authority, so the services
-trust each other.
+trust each other. Its certificates name the services, not addresses
+(`wazuh.indexer`, `wazuh.dashboard`, `wazuh.manager`, `iris.lab`). The nodes
+that dial a service find its address in their own `/etc/hosts`, which the
+scenario writes from the lab at start-up, and TLS checks the name. A lab that
+moves the tools therefore needs no new image.
 
 **Startup.** Each tool node starts idle on a shell (`Node.entrypoint`). A
 component then starts its service, once the lab has addressed and configured
@@ -133,17 +137,20 @@ acts on them.
 
 ## 4. How it is built on cps-advisor
 
-`CpsSocScenario` extends `CpsAdvisorScenario` in four places:
+`cps-soc` is the `cps` scenario with two features (`docs/platform.md`):
+`(SocTools(), People(console=False))`. `People` is `cps-advisor`'s, without the
+SOC's console. `SocTools` (`cyberrange/scenarios/cps_soc/feature.py`) does four
+things:
 
-- **`topology`**: puts the SOC on its new image, without its console, and adds
-  the seven tool nodes;
+- **`extras` and `nodes`**: puts the SOC on its new image and adds the seven
+  tool nodes;
 - **`prepare`**: draws the run's secrets;
-- **`operator_api`**: hands the SOC an IRIS desk and a belief feed instead of a
-  console;
-- **`extra_services`**: starts the tools before the advisor's own services.
+- **`operator_api`**: hands the SOC an IRIS desk and a belief feed;
+- **`services`**: starts the tools, before the people's own services, because
+  it is listed first.
 
 Everything else, including the episode, the teams and the scoring, is
-inherited.
+`cps-advisor`'s.
 
 ## 5. Running it
 
@@ -205,5 +212,5 @@ The run's artifacts also include:
   load the key it checks queued data with. The SOC's menu entries are therefore
   registered as synchronous, and IRIS's app runs them within the analyst's
   request.
-- The tools' addresses (10.30.0.21, .22, .40) are baked into the lab's
-  certificates. A lab that moves them needs `make cps-soc-image` again.
+- The tools take host numbers .21, .22 and .40 on the SOC's network. A lab
+  whose own hosts use one of them is refused when the tools are added.

@@ -127,12 +127,13 @@ def observed(phases):
 
 
 class _ExploitDriver(Component):
-    plane = PLANE
-    node = "attacker"
+    """An attack driven from ``node``, the attacker's machine."""
 
-    def __init__(self, target_url, engine_ip, engine_port, interval=0.5):
+    plane = PLANE
+
+    def __init__(self, target_url, engine_ip, engine_port, interval=0.5, node="attacker"):
         self.target_url, self.engine_ip, self.engine_port = target_url, engine_ip, engine_port
-        self.interval = interval
+        self.interval, self.node = interval, node
 
     def artifacts(self):
         return [Artifact(self.node, "/exploit.log", f"{self.node}.exploit.log")]
@@ -143,8 +144,10 @@ class ScriptedChain(_ExploitDriver):
 
     name = "scripted_chain"
 
-    def __init__(self, mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5):
-        super().__init__(target_url, engine_ip, engine_port, interval)
+    def __init__(
+        self, mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5, node="attacker"
+    ):
+        super().__init__(target_url, engine_ip, engine_port, interval, node)
         self.mode, self.repeat = mode, repeat
 
     @property
@@ -189,8 +192,9 @@ class PlannedAttacker(_ExploitDriver):
         max_steps=12,
         interval=0.5,
         tree=None,
+        node="attacker",
     ):
-        super().__init__(target_url, engine_ip, engine_port, interval)
+        super().__init__(target_url, engine_ip, engine_port, interval, node)
         self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
         # ctx -> the attack tree as a document (tree_doc). The scenario supplies
         # it: which tree describes a lab is the scenario's knowledge, and the
@@ -364,13 +368,14 @@ class ReconAttacker(PlannedAttacker):
 
     def __init__(
         self, profile, it_cidr, scan_ports="22,80,502,5020,8080", goal=None, dwell=0.0,
-        max_steps=12, interval=0.5
+        max_steps=12, interval=0.5, node="attacker"
     ):  # fmt: skip
         # target_url / engine are discovered in the lab, not given: the host only
         # launches the agent and reconstructs what it recorded.
         super().__init__(
-            profile, "", "", 0, goal=goal, dwell=dwell, max_steps=max_steps, interval=interval
-        )
+            profile, "", "", 0, goal=goal, dwell=dwell, max_steps=max_steps, interval=interval,
+            node=node,
+        )  # fmt: skip
         self.it_cidr, self.scan_ports = it_cidr, scan_ports
 
     @property

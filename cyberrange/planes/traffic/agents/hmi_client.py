@@ -31,17 +31,18 @@ import ot_registers as reg
 log = logging.getLogger("hmi")
 
 # Plain hostnames an operator would legitimately diagnose: the "normal" web
-# traffic the IT sensor learns, so the attacker's injection stands out.
-DIAG_HOSTS = ("10.20.0.20", "localhost", "10.20.0.10", "127.0.0.1")
+# traffic the IT sensor learns, so the attacker's injection stands out. The
+# plant's own hosts are added by whoever launches the HMI (--diag-targets).
+DIAG_TARGETS = "localhost,127.0.0.1"
 
 
-def diag_loop(base_url, every, jitter, rng, stop):
+def diag_loop(base_url, every, jitter, rng, stop, targets):
     """Periodically run a legitimate diagnostic query against the local app."""
     while not stop.is_set():
         stop.wait(max(0.5, every + rng.uniform(-jitter, jitter)))
         if stop.is_set():
             break
-        host = rng.choice(DIAG_HOSTS)
+        host = rng.choice(targets)
         url = base_url.rstrip("/") + "/diag?target=" + host
         try:
             with urllib.request.urlopen(url, timeout=8) as r:
@@ -102,6 +103,11 @@ def main():
         "periodic diagnostic queries (the IT sensor's 'normal')",
     )
     ap.add_argument("--diag-every", type=float, default=9.0)
+    ap.add_argument(
+        "--diag-targets",
+        default=DIAG_TARGETS,
+        help="comma-separated hosts the operator's diagnostics query",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -117,6 +123,7 @@ def main():
                 2.0,
                 random.Random(None if args.seed is None else args.seed ^ 0x1D1A6),
                 diag_stop,
+                [t for t in args.diag_targets.split(",") if t],
             ),
             daemon=True,
         ).start()

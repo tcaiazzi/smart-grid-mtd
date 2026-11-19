@@ -8,15 +8,20 @@ with --respond off it only watches.
 
 Composition (plane components):
     traffic   PhysicalProcess, PlcController, HmiClient
-    attack    VulnApp, ScriptedChain | PlannedAttacker
+    attack    VulnApp, EwsMaintenance, ScriptedChain | PlannedAttacker
     defense   OtSensor, [ItSensor], WazuhManager, WazuhAgent, SocAnalytics
     monitor   PlantMirror, TelemetryMirror
+
+The lab is a LabSpec (lab.py): the episode finds its hosts by role and their
+addresses in the spec. The scenarios built on this one add Features
+(feature.py) to it rather than overriding it.
 """
 
 import os
 import logging
 import random
 import time
+import types
 
 from cyberrange.planes.attack import components as attack
 from cyberrange.planes.defense import components as defense
@@ -70,10 +75,37 @@ def attack_label(args):
     return args.attack_mode
 
 
+def plant_of(spec):
+    """The hosts and addresses the episode works with, found in ``spec`` by
+    role: the names and numbers the components are started with."""
+    soc, sensor = spec.one("soc").name, spec.one("sensor").name
+    engine, plc, hmi = spec.one("plant").name, spec.one("plc").name, spec.one("hmi").name
+    ews = spec.with_role("engineering")
+    plant_zone = spec.zone_of(engine)
+    return types.SimpleNamespace(
+        soc=soc,
+        soc_ip=spec.ip(soc),
+        sensor=sensor,
+        sensor_iface=spec.iface(sensor, plant_zone),  # its passive NIC on the plant's link
+        engine=engine,
+        engine_ip=spec.ip(engine),
+        modbus_port=spec.service(engine, "modbus").port,
+        plc=plc,
+        plc_ip=spec.ip(plc),
+        hmi=hmi,
+        hmi_ip=spec.ip(hmi),
+        app_port=spec.service(hmi, "diag-http").port,
+        # The boundary writes to the plant from its own foot on the plant's link.
+        responder_ip=spec.ip(spec.boundary, plant_zone),
+        ews=ews[0].name if ews else None,
+    )
+
+
 class CpsScenario(Scenario):
     name = "cps"
     lab_name = T.LAB_NAME
     overhead_s = OVERHEAD_S
+    features = ()
     # Defaults a scenario built on this lab may set differently.
     DEFAULT_OUT_DIR = "output/cps/run-1"
     DEFAULT_RESPOND = "off"
@@ -81,6 +113,10 @@ class CpsScenario(Scenario):
     APPROVAL_HELP = (
         "operator approval for high-impact countermeasures: auto | deny | delay:<seconds>"
     )
+
+    def lab_spec(self, args):
+        """The lab of a run (lab.LabSpec)."""
+        return T.DEFAULT
 
     # ── options ──────────────────────────────────────────────────────────────
     def add_arguments(self, ap):
@@ -161,6 +197,8 @@ class CpsScenario(Scenario):
             help="seconds between the responder's telemetry pulls",
         )
         r.add_argument("--approval", default=self.DEFAULT_APPROVAL, help=self.APPROVAL_HELP)
+        for f in self.features:
+            f.add_arguments(ap)
 
     def validate(self, args):
         """Fail fast on a run whose model would calibrate on attack traffic."""
@@ -183,29 +221,73 @@ class CpsScenario(Scenario):
                 f"--attacker-profile targeted needs --attack-goal ({', '.join(GOALS)})"
             )
         self.check_approval(getattr(args, "approval", "auto") or "auto")
+        for f in self.features:
+            f.validate(args)
+        ports = [int(p or 0) for f in self.features for p in f.host_ports(args)]
+        if getattr(args, "dashboard_port", 0):
+            ports.append(int(args.dashboard_port))
+        if len(set(ports)) != len(ports) or not all(0 < p < 65536 for p in ports):
+            raise SystemExit(
+                f"the host ports a run publishes must be distinct and valid, got {ports}"
+            )
 
     def check_approval(self, spec):
         """A person's verdict needs the SOC's operator API published and a
         console to answer from, which this scenario's lab does not set up: here
-        approval is automatic, denied, or simulated by a delay."""
+        approval is automatic, denied, or simulated by a delay — unless a
+        feature puts a person in the loop and decides it."""
+        if any(f.check_approval(spec) for f in self.features):
+            return
         if spec not in ("auto", "deny") and not (
             spec.startswith("delay:") and spec.split(":", 1)[1].replace(".", "", 1).isdigit()
         ):
             raise SystemExit(f"--approval must be auto, deny or delay:<seconds>, got {spec!r}")
 
-    def operator_api(self, args):
-        """SocAnalytics' operator_* arguments: none, the SOC here decides alone."""
-        return {}
+    def prepare(self, args):
+        super().prepare(args)
+        for f in self.features:
+            f.prepare(args)
 
-    # What a scenario built on this one adds to the episode. Here: nothing.
-    def extra_services(self, ctx):
-        """Components started with the services, before normal operation."""
+    def run_info(self, args):
+        info = dict(
+            mode=attack_label(args),
+            seed=args.seed,
+            attack=bool(args.attack),
+            learn_s=args.learn_seconds,
+            respond=args.respond or "off",
+            it=bool(args.it_telemetry),
+        )
+        for f in self.features:
+            info |= f.run_info(args)
+        return info
 
-    def engage(self, ctx):
-        """Called once the ground truth is open, when an attack may begin."""
-
+    # ── the lab ──────────────────────────────────────────────────────────────
     def topology(self, args):
-        return T.topology(args, name=self.lab_name)
+        spec = self.lab_spec(args)
+        extras = {}
+        for f in self.features:
+            for host, extra in f.extras(spec, args).items():
+                extras[host] = extras[host].merged(extra) if host in extras else extra
+        topo = T.topology(args, name=self.lab_name, extras=extras, spec=spec)
+        for f in self.features:
+            topo.nodes += f.nodes(spec, args)
+        return topo
+
+    def links(self, args):
+        """{team: {what: url}}: what the features hand to each team."""
+        out = {}
+        for f in self.features:
+            for team, links in f.links(args).items():
+                out.setdefault(team, {}).update(links)
+        return out
+
+    def operator_api(self, args):
+        """SocAnalytics' operator arguments. With no feature setting them, the
+        SOC decides alone."""
+        out = {}
+        for f in self.features:
+            out |= f.operator_api(self, args)
+        return out
 
     def episode_phases(self, args):
         ph = [
@@ -219,23 +301,13 @@ class CpsScenario(Scenario):
             ]
         return ph
 
-    def run_info(self, args):
-        return dict(
-            mode=attack_label(args),
-            seed=args.seed,
-            attack=bool(args.attack),
-            learn_s=args.learn_seconds,
-            respond=args.respond or "off",
-            it=bool(args.it_telemetry),
-        )
-
     def write_structure(self, ctx):
         """kg.json / tree.json for the dashboard and the attacker's planner. The
         SOC node builds these itself at run time; here, at deploy, the host runs
         the same tool (soc_tool) on the lab's inventory to lay them down first."""
         from cyberrange.scenarios.cps import soc_tool
 
-        soc_tool.describe(ctx.out_dir, it=bool(ctx.args.it_telemetry), args=ctx.args)
+        soc_tool.describe(ctx.out_dir, it=bool(ctx.args.it_telemetry), spec=self.lab_spec(ctx.args))
 
     def metrics(self, run_dir):
         from cyberrange.scenarios.cps.metrics import compute_metrics
@@ -274,115 +346,126 @@ class CpsScenario(Scenario):
         return self._structure(ctx)["countermeasures"]
 
     def attacker(self, args):
-        target = f"http://{T.HMI_IP}:{T.APP_PORT}"
+        for f in self.features:
+            driver = f.attacker(self, args)
+            if driver is not None:
+                return driver
+        spec = self.lab_spec(args)
+        p = plant_of(spec)
+        node = spec.one("it-host").name
+        target = f"http://{p.hmi_ip}:{p.app_port}"
         if args.attack_driver == "planner":
             return attack.PlannedAttacker(
                 args.attacker_profile,
                 target,
-                T.ENGINE_IP,
-                T.MODBUS_PORT,
+                p.engine_ip,
+                p.modbus_port,
                 goal=args.attack_goal,
                 dwell=args.dwell,
                 max_steps=args.max_steps,
                 interval=args.attack_interval,
                 tree=self._attack_tree,
+                node=node,
             )
         return attack.ScriptedChain(
             args.attack_mode,
             target,
-            T.ENGINE_IP,
-            T.MODBUS_PORT,
+            p.engine_ip,
+            p.modbus_port,
             repeat=args.attack_repeat,
             interval=args.attack_interval,
+            node=node,
         )
 
     def episode(self, ctx):
         a = ctx.args
+        spec = self.lab_spec(a)
+        p = plant_of(spec)
         it = bool(a.it_telemetry)
         # The management plane (Wazuh + SOC analytics) runs in every episode, so
         # a detection-only run (respond=off) carries the same load and is
         # comparable. With respond=off the analytics watches but requests nothing.
         responding = (a.respond or "off") != "off"
+        agents = T.wazuh_agents(spec)
         with ctx.phase("services"):
             # First, and in the background: the agents wait for it, and the
             # normal phase gives both the time to settle before any finding.
-            keys = {name: defense.generate_shared_key() for name in T.WAZUH_AGENTS}
-            ctx.start(
-                defense.WazuhManager(
-                    "soc", {n: (T.WAZUH_AGENTS[n], keys[n]) for n in T.WAZUH_AGENTS}
-                )
-            )
+            keys = {name: defense.generate_shared_key() for name in agents}
+            ctx.start(defense.WazuhManager(p.soc, {n: (agents[n], keys[n]) for n in agents}))
             # DPI sensor first, so the model's calibration window covers the
             # clients' session setup as well as steady state.
             ctx.start(
                 defense.OtSensor(
-                    "sensor",
-                    "eth0",
-                    T.ENGINE_IP,
-                    T.MODBUS_PORT,
-                    T.PLC_IP,
-                    T.HMI_IP,
+                    p.sensor,
+                    p.sensor_iface,
+                    p.engine_ip,
+                    p.modbus_port,
+                    p.plc_ip,
+                    p.hmi_ip,
                     a.detectors,
                     a.learn_seconds,
                     dashboard_port=T.DASHBOARD_GUEST_PORT if a.dashboard_port else None,
                     # Only when a response runs: with none, a write from the
                     # firewall is nobody's and must be reported.
-                    responder_ip=T.FW_OT_IP if responding else None,
+                    responder_ip=p.responder_ip if responding else None,
                 )
             )
             ctx.start(
                 traffic.PhysicalProcess(
-                    "engine", T.MODBUS_PORT, a.step_interval, seed=ctx.role_seed("engine")
+                    p.engine, p.modbus_port, a.step_interval, seed=ctx.role_seed("engine")
                 )
             )
             time.sleep(SERVICE_SETTLE_S)
             ctx.start(
                 traffic.PlcController(
-                    "plc", T.ENGINE_IP, T.MODBUS_PORT, a.step_interval, seed=ctx.role_seed("plc")
+                    p.plc, p.engine_ip, p.modbus_port, a.step_interval, seed=ctx.role_seed("plc")
                 )
             )
             ctx.start(
                 traffic.HmiClient(
-                    "hmi",
-                    T.ENGINE_IP,
-                    T.MODBUS_PORT,
+                    p.hmi,
+                    p.engine_ip,
+                    p.modbus_port,
                     seed=ctx.role_seed("hmi"),
-                    diag_url=f"http://127.0.0.1:{T.APP_PORT}" if it else None,
+                    diag_url=f"http://127.0.0.1:{p.app_port}" if it else None,
+                    diag_targets=(p.engine_ip, "localhost", p.plc_ip, "127.0.0.1"),
                 )
             )
-            ctx.start(attack.VulnApp("hmi", T.APP_PORT, access_log=ACCESS_LOG if it else None))
-            ctx.start(
-                attack.EwsMaintenance(
-                    "ews",
-                    T.MAINT_PORT,
-                    client="hmi",
-                    client_ip=T.HMI_IP,
-                    url=f"http://{T.EWS_IP}:{T.MAINT_PORT}",
-                    token=maint_token(ctx.role_seed("ews-maint")),
+            ctx.start(attack.VulnApp(p.hmi, p.app_port, access_log=ACCESS_LOG if it else None))
+            if p.ews:
+                maint = spec.service(p.ews, "maint-http").port
+                ctx.start(
+                    attack.EwsMaintenance(
+                        p.ews,
+                        maint,
+                        client=p.hmi,
+                        client_ip=p.hmi_ip,
+                        url=f"http://{spec.ip(p.ews, spec.zone_of(p.hmi))}:{maint}",
+                        token=maint_token(ctx.role_seed("ews-maint")),
+                    )
                 )
-            )
             if it:
                 ctx.start(
-                    defense.ItSensor("hmi", T.ENGINE_IP, T.MODBUS_PORT, ACCESS_LOG, a.learn_seconds)
+                    defense.ItSensor(p.hmi, p.engine_ip, p.modbus_port, ACCESS_LOG, a.learn_seconds)
                 )
             # What each agent may run, from the countermeasures the structure
             # recorded at deploy (tree.json): the host provisions the allowlist,
             # it does not decide. The SOC analytics asks for these by id.
-            logs = {"sensor": [defense.OtSensor.TELEMETRY]}
+            logs = {p.sensor: [defense.OtSensor.TELEMETRY]}
             if it:
-                logs["hmi"] = [defense.ItSensor.TELEMETRY]
-            allowed = {name: {} for name in T.WAZUH_AGENTS}
+                logs[p.hmi] = [defense.ItSensor.TELEMETRY]
+            allowed = {name: {} for name in agents}
             for cm in self._countermeasures(ctx):
                 if cm["machine"] in allowed:
                     allowed[cm["machine"]][cm["id"]] = {
                         "apply": cm["apply"],
                         "revert": cm["revert"],
                     }
-            for name, agent_id in T.WAZUH_AGENTS.items():
+            for name, agent_id in agents.items():
                 ctx.start(
                     defense.WazuhAgent(
                         name,
-                        T.SOC_IP,
+                        p.soc_ip,
                         agent_id,
                         keys[name],
                         responses=allowed[name],
@@ -393,8 +476,8 @@ class CpsScenario(Scenario):
             # keeps the attack tree's belief and asks the manager for responses.
             ctx.start(
                 defense.SocAnalytics(
-                    "soc",
-                    inventory.inventory(a),
+                    p.soc,
+                    inventory.inventory(spec),
                     policy=a.respond or "off",
                     approval=a.approval,
                     interval=a.respond_interval,
@@ -402,8 +485,9 @@ class CpsScenario(Scenario):
                     **self.operator_api(a),
                 )
             )
-            self.extra_services(ctx)
-        ctx.start(monitor.PlantMirror("engine"))
+            for f in self.features:
+                f.services(ctx)
+        ctx.start(monitor.PlantMirror(p.engine))
         ctx.start(monitor.TelemetryMirror())
 
         log.info(
@@ -419,17 +503,18 @@ class CpsScenario(Scenario):
             attack=bool(a.attack),
             attack_mode=a.attack_mode,
             attack_driver=a.attack_driver,
-            engine_ip=T.ENGINE_IP,
-            plc_ip=T.PLC_IP,
-            hmi_ip=T.HMI_IP,
-            authorized_writer=T.PLC_IP,
+            engine_ip=p.engine_ip,
+            plc_ip=p.plc_ip,
+            hmi_ip=p.hmi_ip,
+            authorized_writer=p.plc_ip,
             learn_seconds=a.learn_seconds,
             detectors=a.detectors,
             respond=a.respond,
             approval=a.approval,
             it=it,
         )
-        self.engage(ctx)
+        for f in self.features:
+            f.engage(ctx)
         if not a.attack:
             return
         driver = ctx.start(self.attacker(a))

@@ -59,7 +59,7 @@ class TestWazuhDashboardConfig(unittest.TestCase):
 
     def test_points_at_the_soc_manager_api(self):
         text = CONFIG.read_text()
-        self.assertIn('url: "https://10.30.0.20"', text, "the app would not reach the manager")
+        self.assertIn('url: "https://wazuh.manager"', text, "the app would not reach the manager")
         self.assertIn("port: 55000", text, "the app would not reach the manager's API")
 
 

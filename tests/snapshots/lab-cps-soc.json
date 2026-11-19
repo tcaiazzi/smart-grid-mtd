@@ -274,6 +274,10 @@
   },
   "startup": [
    "ip address add 10.30.0.20/24 dev eth0",
+   "echo '10.30.0.21 wazuh.indexer' >> /etc/hosts",
+   "echo '10.30.0.22 wazuh.dashboard' >> /etc/hosts",
+   "echo '10.30.0.20 wazuh.manager' >> /etc/hosts",
+   "echo '10.30.0.40 iris.lab' >> /etc/hosts",
    "iptables -A INPUT -i eth0 -p tcp --dport 8091 -j DROP"
   ]
  },
@@ -296,7 +300,11 @@
   "startup": [
    "ip address add 10.30.0.22/24 dev eth0",
    "iptables -A INPUT -i eth0 -m state --state ESTABLISHED,RELATED -j ACCEPT",
-   "iptables -A INPUT -i eth0 -j DROP"
+   "iptables -A INPUT -i eth0 -j DROP",
+   "echo '10.30.0.21 wazuh.indexer' >> /etc/hosts",
+   "echo '10.30.0.22 wazuh.dashboard' >> /etc/hosts",
+   "echo '10.30.0.20 wazuh.manager' >> /etc/hosts",
+   "echo '10.30.0.40 iris.lab' >> /etc/hosts"
   ]
  }
 }
