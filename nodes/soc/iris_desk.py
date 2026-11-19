@@ -72,7 +72,17 @@ ASSET_FIELDS = (
 )
 # IRIS's event categories are ATT&CK's tactics (manage/event-categories/list):
 # the tactic of each technique the lab's tree names, and the one for the rest.
-TACTICS = {"T1190": "Initial Access", "T1059": "Execution", "T0855": "Impact", "T0831": "Impact"}
+# The ICS techniques take the Enterprise tactic IRIS knows that is nearest to
+# their ICS one (T0856's Evasion is Defense Evasion).
+TACTICS = {
+    "T1190": "Initial Access",
+    "T1059": "Execution",
+    "T0886": "Lateral Movement",
+    "T0830": "Collection",
+    "T0856": "Defense Evasion",
+    "T0855": "Impact",
+    "T0831": "Impact",
+}
 NO_TACTIC = "Unspecified"
 STEP_TAG = "step"  # a timeline event filed for a step of the attack tree
 SUMMARY_S = 10.0  # how often the case's summary is rewritten with the SOC's view

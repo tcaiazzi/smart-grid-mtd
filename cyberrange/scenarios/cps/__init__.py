@@ -26,5 +26,6 @@ GUEST_MANIFESTS = (
     "SENSOR_FILES",
     "SOC_FILES",
     "HMI_FILES",
+    "EWS_FILES",
     "ATTACKER_CPS_FILES",
 )

@@ -35,7 +35,7 @@ network for the security tooling:
            │ eth1          └──────┬──────┘               │ passive tap
            │ 10.30.0.30           │ eth2 10.30.0.1       ▼ sensor eth1 10.30.0.10
   ─────────┴──────────────────────┴──────────────────────┴──────────────
-        MGMT 10.30.0.0/24          soc 10.30.0.20      ews eth2 10.30.0.40
+        MGMT 10.30.0.0/24          soc 10.30.0.20      ews eth2 10.30.0.50
 ```
 
 - **IT zone**: the operator's HMI/SCADA workstation and the attacker.

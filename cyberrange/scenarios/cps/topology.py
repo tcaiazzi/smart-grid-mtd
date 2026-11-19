@@ -9,7 +9,7 @@ management network of the security tooling.
       ews      10.10.0.30 ......................... ews    10.20.0.30
     MGMT 10.30.0.0/24 ---------------------------------------------------
       hmi eth1 10.30.0.30   firewall eth2 10.30.0.1   sensor eth1 10.30.0.10
-      soc      10.30.0.20   ews eth2 10.30.0.40
+      soc      10.30.0.20   ews eth2 10.30.0.50
 
 The attacker cannot reach the engine directly: it must compromise the HMI and
 pivot from it, so its writes come from an allowed host. The sensor has a
@@ -67,7 +67,7 @@ FW_MGMT_IP = "10.30.0.1"
 SENSOR_MGMT_IP = "10.30.0.10"
 SOC_IP = "10.30.0.20"
 HMI_MGMT_IP = "10.30.0.30"
-EWS_MGMT_IP = "10.30.0.40"
+EWS_MGMT_IP = "10.30.0.50"  # .21-.40 belong to the SOC's tooling (cps-soc)
 IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT = 5020
 APP_PORT = 8080

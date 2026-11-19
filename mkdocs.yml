@@ -63,6 +63,7 @@ nav:
       - CPS (OT/Modbus): scenario-cps.md
       - CPS advisor: scenario-cps-advisor.md
       - CPS recon: scenario-cps-recon.md
+      - CPS SOC (Wazuh + IRIS): scenario-cps-soc.md
   - Red vs blue playground: playground-red-vs-blue.md
   - Platform:
       - Architecture: platform.md

@@ -106,6 +106,34 @@ class DeployContractFrozen(unittest.TestCase):
                 )
 
 
+class AddressesAreUnique(unittest.TestCase):
+    """Two NICs with one address on the same collision domain deploy without a
+    word from Kathará, and whichever answers ARP first gets the other's traffic:
+    a scenario that adds nodes to a lab can take an address the lab already
+    uses, and the snapshot freezes the clash instead of flagging it."""
+
+    def test_no_address_is_taken_twice_on_a_link(self):
+        for name in registry.names():
+            scenario = registry.get(name)
+            topo = scenario.topology(cli.default_args(scenario))
+            owners = {}
+            for node in topo.nodes:
+                for i, iface in enumerate(node.ifaces):
+                    for cidr in [iface.cidr, *iface.aliases]:
+                        if not cidr:
+                            continue
+                        key = (iface.link, cidr.split("/")[0])
+                        owners.setdefault(key, []).append(f"{node.name}:eth{i}")
+            clashes = {k: v for k, v in owners.items() if len(v) > 1}
+            with self.subTest(scenario=name):
+                self.assertEqual(
+                    {},
+                    clashes,
+                    f"the {name} lab gives one address to several NICs on the same link; "
+                    f"the lab deploys, and traffic for one goes to the other",
+                )
+
+
 class HostPathsResolve(unittest.TestCase):
     """The other half: where the files come from, which *is* allowed to move.
 

@@ -7,8 +7,11 @@ picks countermeasures from it, and the tree-guided attacker picks its next step
 from the same tree.
 
 [scenario-cps.md §10](scenario-cps.md#10-response-the-soar-prototype) is the
-overview; this document is the detail behind it. Everything described here runs
-on the host. No guest agent imports it, so it may use networkx.
+overview; this document is the detail behind it. The modules under `nodes/soc/`
+are node software: they are copied flat onto the SOC node, whose image
+(`docker/soc/Dockerfile`) installs networkx, and they import each other bare.
+The host runs the same files offline (`cyberrange/scenarios/cps/soc_tool.py`)
+to describe a run's structure and to replay one.
 
 | File | What it holds |
 |---|---|
@@ -311,14 +314,14 @@ two lists keep them apart. The solver depends on the difference (§6.2).
 | Id | Runs on | Prevents | Restores | t (s) | op | energy | Approval | Order |
 |---|---|---|---|---|---|---|---|---|
 | `notify` | — | — | — | 0 | 0 | 0 | | 90 |
-| `block_flow` | firewall | pivot + the 6 impact leaves | — | 0.5 | 0.5 | 0.01 | | 10 |
-| `isolate_hmi` | hmi | it_access, it_exec, pivot + leaves | — | 0.5 | 0.8 | 0.01 | **yes** | 20 |
-| `isolate_ews` | ews | ot_write_unknown, ot_aitm, meas_fdi | — | 0.5 | 0.3 | 0.01 | | 15 |
-| `repair_arp` | firewall | — | ot_aitm, meas_fdi | 1.0 | 0.05 | 0.01 | | 16 |
-| `force_auto` | firewall | — | mode_hijack, setpoint_oor, setpoint_ramp, setpoint_oscillation | 1.0 | 0.1 | 0.02 | | 30 |
-| `restore_breaker` | firewall | — | breaker_open, breaker_chatter | 1.0 | 0.1 | 0.02 | | 40 |
-| `kill_proc_tree` *(IT)* | hmi | it_exec, pivot + leaves | — | 0.3 | 0.15 | 0.01 | | 5 |
-| `block_web_src` *(IT)* | hmi | it_access, it_exec, pivot + leaves | — | 0.4 | 0.2 | 0.01 | | 6 |
+| `block_flow` | firewall | pivot + the 6 impact leaves | — | 0.1 | 0.5 | 0.01 | | 10 |
+| `isolate_hmi` | hmi | it_access, it_exec, pivot + leaves | — | 0.1 | 0.8 | 0.01 | **yes** | 20 |
+| `isolate_ews` | ews | ot_write_unknown, ot_aitm, meas_fdi | — | 0.1 | 0.3 | 0.01 | | 15 |
+| `repair_arp` | firewall | — | ot_aitm, meas_fdi | 2.4 | 0.05 | 0.01 | | 16 |
+| `force_auto` | firewall | — | mode_hijack, setpoint_oor, setpoint_ramp, setpoint_oscillation | 0.45 | 0.1 | 0.02 | | 30 |
+| `restore_breaker` | firewall | — | breaker_open, breaker_chatter | 0.3 | 0.1 | 0.02 | | 40 |
+| `kill_proc_tree` *(IT)* | hmi | it_exec, pivot + leaves | — | 0.1 | 0.15 | 0.01 | | 5 |
+| `block_web_src` *(IT)* | hmi | it_access, it_exec, pivot + leaves | — | 0.1 | 0.2 | 0.01 | | 6 |
 
 Notes on the table:
 

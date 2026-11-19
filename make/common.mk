@@ -62,6 +62,18 @@ selftest:                  ## the whole test suite (no Kathará, no Docker)
 selftest-fast:             ## the suite without the heavy tests (no torch/pandapower/subprocesses)
 	$(PYTHON) -m pytest tests -q -m "not slow"
 
+# A target that no longer expands (a renamed variable, a missing include) is
+# found by the campaign that shells out to it, hours into a run: dry-run them
+# all here. `make` is spelled out, not $(MAKE), so that `make -n check` prints
+# the loop instead of running it.
+check: lint                ## before calling a change done: lint, the whole suite, a dry run of every target
+	$(PYTHON) -m pytest tests -q
+	@broken=0; \
+	for t in $$(grep -hoE '^[a-zA-Z0-9_.-]+:' Makefile make/*.mk | tr -d ':' | sort -u | grep -vx check); do \
+	    make --no-print-directory -n "$$t" >/dev/null 2>&1 || { echo "BROKEN: $$t"; broken=1; }; \
+	done; \
+	test $$broken -eq 0 && echo "every make target expands"
+
 lab-conf:                  ## export SCENARIO's topology as a Kathará lab dir (lab.conf + .startup)
 	$(PYTHON) -m $(M_CORE) export $(SCENARIO) --out $(OUTPUT_ROOT)/labconf/$(SCENARIO)
 
