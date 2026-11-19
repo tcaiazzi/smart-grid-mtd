@@ -31,6 +31,9 @@ Response (only when <out>/response.jsonl exists — the SOAR prototype):
                              the boundary block took effect
   - false_responses        : countermeasures before the attack (or in a normal run)
   - hmi_unavailable_s      : operator HMI cut off by the response
+  - countermeasure_times   : per countermeasure applied — dispatch_s, from the
+                             request to its outcome on the host, and settle_s,
+                             from the last restoring one to the plant back in band
   - operator               : when the SOC advised (approval operator:<s>) —
                              suggestions, how many were approved / rejected /
                              expired, and the median time a person took to answer
@@ -178,12 +181,22 @@ HMI_CUTTING = ("block_flow", "isolate_hmi")
 OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
 
 
+def _plant_acts(gt, ok_only=False):
+    """What the attacker did to the plant: its Modbus writes, and the readings
+    it falsified on their way to the PLC — an act with no write of its own."""
+    return [
+        e for e in gt if e.get("kind") in ("modbus_write", "fdi") and (e.get("ok") or not ok_only)
+    ]
+
+
 def expected_response(gt):
     """Countermeasures the run needs, derived from the registers the attacker
     wrote — robust to both the scripted (per-mode) and planner drivers. Always
     block the flow; restore the breaker if it was opened; force AUTO if control
     mode was taken. A lone out-of-range setpoint needs only the block (the PLC
-    rejects the value and recovers)."""
+    rejects the value and recovers). Falsified readings come from the
+    engineering workstation and write nothing: that host is taken off the link,
+    and the PLC and the engine are told each other's true address again."""
     # Register name, or the number as a fallback (HR_SWITCH_CMD=1, HR_CTRL_MODE=2).
     REG_NAME = {0: "dg_setpoint", 1: "switch_cmd", 2: "ctrl_mode"}
     names = set()
@@ -191,9 +204,11 @@ def expected_response(gt):
         if e.get("kind") != "modbus_write":
             continue
         names.add(e.get("register_name") or REG_NAME.get(e.get("register")))
+    lied = any(e.get("kind") == "fdi" and e.get("ok") for e in gt)
+    fdi = {"isolate_ews", "repair_arp"} if lied else set()
     if not names:
-        return set()
-    want = {"block_flow"}
+        return fdi
+    want = {"block_flow"} | fdi
     if "switch_cmd" in names:
         want.add("restore_breaker")
     if "ctrl_mode" in names:
@@ -229,7 +244,47 @@ def _operator(resp):
     }
 
 
-def _response(resp, gt, findings, attack_start, mode, end_t):
+def _restoring(out_dir):
+    """Ids of the countermeasures that undo an impact, from the run's tree."""
+    path = _find(out_dir, "soc.tree.json", "tree.json")
+    if not path:
+        return set()
+    with open(path) as f:
+        return {c["id"] for c in json.load(f).get("countermeasures", []) if c.get("restores")}
+
+
+def _countermeasure_times(resp, restoring, mitigated_t):
+    """{id: {"dispatch_s", "settle_s"}}: what the solver's time-to-effect is
+    measured from. A replayed action was never run and has no time of its own."""
+    ran = [
+        r
+        for r in resp
+        if r.get("kind") == "action"
+        and r.get("ok")
+        and r.get("op") != "revert"
+        and r.get("id") != "notify"
+        and not r.get("planned")
+        and r.get("issued_t") is not None
+        and r.get("done_t") is not None
+    ]
+    out = {}
+    for a in ran:
+        out.setdefault(
+            a["id"], {"dispatch_s": round(a["done_t"] - a["issued_t"], 3), "settle_s": None}
+        )
+    # The plant comes back once, and the restoring action nearest before that
+    # moment is the one it is owed to: an earlier one had not brought it back.
+    last = max(
+        (a for a in ran if a["id"] in restoring and mitigated_t and a["done_t"] <= mitigated_t),
+        key=lambda a: a["done_t"],
+        default=None,
+    )
+    if last is not None:
+        out[last["id"]]["settle_s"] = round(mitigated_t - last["done_t"], 3)
+    return out
+
+
+def _response(resp, gt, findings, attack_start, mode, end_t, restoring=(), mitigated_t=None):
     up = next((r for r in resp if r.get("kind") == "response_up"), {})
     decisions = [r for r in resp if r.get("kind") == "decision"]
     # A countermeasure taken back is on record as an action too, but it is the
@@ -244,7 +299,7 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
     ]
     real = [a for a in applied if a["id"] != "notify"]
     block_t = min((a["done_t"] for a in applied if a["id"] in HMI_CUTTING), default=None)
-    ok_writes = [e for e in gt if e.get("kind") == "modbus_write" and e.get("ok")]
+    ok_writes = _plant_acts(gt, ok_only=True)
     pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
     # Latency is measured to the first response to the attack: a false response
     # before it would give a negative value and drag the campaign median down.
@@ -285,6 +340,7 @@ def _response(resp, gt, findings, attack_start, mode, end_t):
             else 0.0
         ),
         "operator": _operator(resp),
+        "countermeasure_times": _countermeasure_times(resp, restoring, mitigated_t),
     }
 
 
@@ -308,7 +364,7 @@ def compute_metrics(out_dir: str) -> dict:
 
     attack_start = next((e["t"] for e in gt if e.get("kind") == "attack_start"), None)
     attack_end = next((e["t"] for e in gt if e.get("kind") == "attack_end"), None)
-    writes = [e["t"] for e in gt if e.get("kind") == "modbus_write"]
+    writes = [e["t"] for e in _plant_acts(gt)]
     first_write = min(writes) if writes else attack_start
     mode = next((e.get("mode") for e in gt if e.get("kind") == "attack_start"), None)
     attack_end_ev = next((e for e in gt if e.get("kind") == "attack_end"), {})
@@ -390,7 +446,16 @@ def compute_metrics(out_dir: str) -> dict:
             None,
         )
     response = (
-        _response(resp, gt, findings, attack_start, mode, ts[-1] + dt if ts else None)
+        _response(
+            resp,
+            gt,
+            findings,
+            attack_start,
+            mode,
+            ts[-1] + dt if ts else None,
+            restoring=_restoring(out_dir),
+            mitigated_t=mitigated_t,
+        )
         if resp is not None
         else None
     )
@@ -433,11 +498,7 @@ def compute_metrics(out_dir: str) -> dict:
         "attacker_profile": (mode.split(":", 1)[1] if planner else None),
         "stage_reached": attack_end_ev.get("stage_reached") if planner else None,
         "attack_succeeded": (bool(attack_end_ev.get("success")) if planner else None),
-        "prevented": (
-            not any(e.get("kind") == "modbus_write" and e.get("ok") for e in gt)
-            if planner
-            else None
-        ),
+        "prevented": (not _plant_acts(gt, ok_only=True) if planner else None),
         "plan_steps": [
             {"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")} for e in plan_steps
         ]
@@ -560,14 +621,17 @@ def _rate(k, n):
 def aggregate(rows):
     """Aggregate many runs. `rows`: [{"mode", "seed", "metrics"}].
 
-    Returns {"detection": [...], "impact": [...]}:
+    Returns {"detection": [...], "impact": [...], "response": [...], "countermeasures": [...]}:
       detection — one row per (mode, detector): runs, detection rate, latency
                   from the first malicious write (median/min/max over detected
                   runs), share flagged before the physical impact, false alarms
                   (normal phase; for normal-only runs every finding) and how many
                   fell inside legitimate operator windows;
       impact    — one row per mode: persistence / recovery shares and medians of
-                  time-to-impact, impact duration, max deviation, time in MANUAL.
+                  time-to-impact, impact duration, max deviation, time in MANUAL;
+      response  — one row per mode that ran a response policy;
+      countermeasures — one row per countermeasure applied in any run: the
+                  medians of its dispatch and of the plant's return in band.
     """
     modes = []
     for r in rows:
@@ -652,7 +716,27 @@ def aggregate(rows):
                 "hmi_unavailable_median_s": _median(r.get("hmi_unavailable_s") for r in rs),
             }
         )
-    return {"detection": detection, "impact": impact, "response": response}
+    times = {}
+    for r in rows:
+        measured = (r["metrics"].get("response") or {}).get("countermeasure_times") or {}
+        for cm, t in measured.items():
+            times.setdefault(cm, []).append(t)
+    countermeasures = [
+        {
+            "countermeasure": cm,
+            "runs": len(ts),
+            "dispatch_median_s": _median(t.get("dispatch_s") for t in ts),
+            "settle_runs": sum(1 for t in ts if t.get("settle_s") is not None),
+            "settle_median_s": _median(t.get("settle_s") for t in ts),
+        }
+        for cm, ts in sorted(times.items())
+    ]
+    return {
+        "detection": detection,
+        "impact": impact,
+        "response": response,
+        "countermeasures": countermeasures,
+    }
 
 
 def _fmt(v):
@@ -718,6 +802,19 @@ def format_aggregate(agg) -> str:
                 f"| {_fmt(r['attacker_writes_after_block_median'])} "
                 f"| {r['false_responses']} | {r['failed_action_runs']} "
                 f"| {_fmt(r['hmi_unavailable_median_s'])} |"
+            )
+    if agg.get("countermeasures"):
+        lines += [
+            "",
+            "## Countermeasure times",
+            "",
+            "| countermeasure | runs | dispatch (median s) | plant back in band (median s, runs) |",
+            "|---|---|---|---|",
+        ]
+        for r in agg["countermeasures"]:
+            lines.append(
+                f"| {r['countermeasure']} | {r['runs']} | {_fmt(r['dispatch_median_s'])} "
+                f"| {_fmt(r['settle_median_s'])} ({r['settle_runs']}) |"
             )
     return "\n".join(lines) + "\n"
 

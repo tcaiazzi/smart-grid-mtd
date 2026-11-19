@@ -240,6 +240,8 @@ def describe(suggestion):
         lines.append(f"Undoes: {nodes(x['restores'])}")
     if x.get("rationale"):
         lines.append(f"Why: {x['rationale']}")
+    if cm.get("interrupts"):
+        lines.append("Interrupts while in effect: " + "; ".join(cm["interrupts"]))
     if cm.get("commands"):
         lines.append("Commands: " + " | ".join(cm["commands"]))
     if cm.get("d3fend"):

@@ -41,15 +41,31 @@ class CPSTrees(unittest.TestCase):
         idx = trees.index(self.tree)
         self.assertTrue(trees.feasible(self.tree, self.g))
         self.assertTrue(trees.feasible(idx["via_hmi"], self.g))
-        # No host outside the Modbus roles reaches the plant.
-        self.assertFalse(trees.feasible(idx["direct_ot"], self.g))
+        # The engineering workstation has no Modbus role and stands on the
+        # plant's link: a second way in, which the boundary rules do not close.
+        self.assertTrue(trees.feasible(idx["direct_ot"], self.g))
+        self.assertEqual(
+            trees.prerequisites(self.tree, "meas_fdi"),
+            ["ot_aitm", "ot_foothold"],
+            "falsifying a reading would be planned without the position it needs",
+        )
+
+    def test_without_the_workstation_nothing_reaches_the_plant_directly(self):
+        inv = cps_inv.inventory()
+        inv["hosts"] = [h for h in inv["hosts"] if h["role"] != "engineering"]
+        g2 = kg.build_kg(inv)
+        idx = trees.index(trees.cps_attack_tree(g2))
+        self.assertFalse(trees.feasible(idx["direct_ot"], g2))
+        ids = {c.id for c in trees.cps_countermeasures(g2)}
+        self.assertFalse({"isolate_ews", "repair_arp"} & ids, "a response with no host to act on")
 
     def test_without_allow_rule_the_pivot_is_infeasible(self):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]
         g2 = kg.build_kg(cps_inv.inventory(rules=rules))
         idx = trees.index(self.tree)
         self.assertFalse(trees.feasible(idx["via_hmi"], g2))
-        self.assertFalse(trees.feasible(self.tree, g2))
+        # The workstation's way does not cross the boundary: it stays open.
+        self.assertTrue(trees.feasible(self.tree, g2))
 
     def test_prerequisites(self):
         pre = trees.prerequisites(self.tree, "mode_hijack")
@@ -60,13 +76,22 @@ class CPSTrees(unittest.TestCase):
     def test_countermeasures(self):
         ids = {c.id for c in self.cms}
         self.assertEqual(
-            ids, {"notify", "block_flow", "isolate_hmi", "force_auto", "restore_breaker"}
+            ids,
+            {
+                "notify",
+                "block_flow",
+                "isolate_hmi",
+                "isolate_ews",
+                "repair_arp",
+                "force_auto",
+                "restore_breaker",
+            },
         )
         nodes = trees.index(self.tree)
         for c in self.cms:
             for nid in c.prevents + c.restores:
                 self.assertIn(nid, nodes, f"{c.id} -> {nid}")
-            if c.id in ("block_flow", "isolate_hmi"):
+            if c.id in ("block_flow", "isolate_hmi", "isolate_ews"):
                 self.assertTrue(c.revert, f"{c.id} changes network state: needs a revert")
         by = {c.id: c for c in self.cms}
         # Inserted before the ESTABLISHED accept, with the KG's addresses.
@@ -84,8 +109,35 @@ class CPSTrees(unittest.TestCase):
         leaves = {n.id for n in trees.index(self.tree)["ot_action"].children}
         self.assertEqual(leaves - restorable, set(), "an impact with no way back")
 
+    def test_a_countermeasure_costs_what_it_cuts(self):
+        by = {c.id: c for c in self.cms}
+        cost = {c.id: round(trees.disruption(c.cuts) + c.op_cost, 4) for c in self.cms}
+        self.assertEqual(
+            {f.split(":")[1] for f in by["block_flow"].cuts}, {"hmi"}, "the PLC's control was cut"
+        )
+        self.assertLess(set(by["block_flow"].cuts), set(by["isolate_hmi"].cuts))
+        self.assertEqual(by["isolate_ews"].cuts, ["on:ews:OT"])
+        self.assertLess(cost["block_flow"], cost["isolate_hmi"])
+        for cid in ("force_auto", "restore_breaker", "repair_arp"):
+            self.assertEqual(by[cid].cuts, [], f"{cid} leaves the graph as it is")
+            self.assertGreater(cost[cid], 0.0, f"{cid} would be free to run")
+        # A function both cut is lost once.
+        both = by["block_flow"].cuts + by["isolate_hmi"].cuts
+        self.assertEqual(trees.disruption(both), trees.disruption(by["isolate_hmi"].cuts))
+
+    def test_without_the_allow_rule_the_block_cuts_nothing(self):
+        # The cost follows the graph: where the HMI holds no control of the
+        # plant, blocking its flow takes nothing from anyone.
+        rules = [r for r in cps.firewall_rules() if "--dport" not in r]
+        g2 = kg.build_kg(cps_inv.inventory(rules=rules))
+        by = {c.id: c for c in trees.cps_countermeasures(g2)}
+        self.assertEqual(by["block_flow"].cuts, [])
+        self.assertEqual(by["isolate_hmi"].cuts, ["on:hmi:IT"])
+
     def test_json(self):
         data = json.loads(json.dumps(trees.to_json(self.tree, self.cms)))
+        cut = {c["id"]: c["cuts"] for c in data["countermeasures"]}
+        self.assertTrue(cut["block_flow"], "tree.json does not say what the block costs")
         self.assertEqual(data["attack_tree"]["id"], "impact")
         self.assertIn("force_auto", data["defense"]["mode_hijack"]["restored_by"])
         self.assertIn("block_flow", data["defense"]["pivot"]["prevented_by"])

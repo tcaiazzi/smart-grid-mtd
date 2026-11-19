@@ -50,6 +50,7 @@ ATTACK_MODES = (
     "slow-ramp",
     "setpoint-oscillation",
     "breaker-chatter",
+    "meas-fdi",
 )
 KNOWN_MODES = ("normal",) + ATTACK_MODES
 # Set per run by the campaign, so not taken from the command line.

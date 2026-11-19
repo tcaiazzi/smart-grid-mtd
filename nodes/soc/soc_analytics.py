@@ -130,7 +130,7 @@ class ResponseEngine:
         self.g = g
         self.tree = trees.cps_attack_tree(g)
         self.cms = {c.id: c for c in trees.cps_countermeasures(g, it=it)}
-        mode, _delay = parse_approval(approval)
+        mode, seconds = parse_approval(approval)
         self.policy = (
             None
             if kind == "off"
@@ -139,6 +139,7 @@ class ResponseEngine:
                 list(self.cms.values()),
                 self.tree,
                 approval="deny" if mode == "deny" else "auto",
+                approval_delay_s=seconds if mode == "delay" else 0.0,
             )
         )
         self.state = mapping.CampaignState(self.tree, g)
@@ -242,7 +243,8 @@ class ResponseEngine:
                 "d3fend": cm.d3fend,
                 "machine": cm.machine,
                 "commands": list(cm.apply),
-                "op_cost": cm.op_cost,
+                "op_cost": round(trees.disruption(cm.cuts) + cm.op_cost, 4),
+                "interrupts": [kgmod.function_label(self.g, f) for f in cm.cuts],
                 "energy_cost": cm.energy_cost,
                 "time_to_effect_s": cm.time_to_effect_s,
             },
@@ -572,7 +574,8 @@ class Service:
                     "label": c.label,
                     "machine": c.machine,
                     "d3fend": c.d3fend,
-                    "op_cost": c.op_cost,
+                    "op_cost": round(trees.disruption(c.cuts) + c.op_cost, 4),
+                    "interrupts": [kgmod.function_label(self.engine.g, f) for f in c.cuts],
                     "commands": list(c.apply),
                     "revert": list(c.revert),
                     "prevents": list(c.prevents),

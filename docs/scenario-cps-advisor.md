@@ -104,7 +104,7 @@ Built by `ResponseEngine.explain` from what the policy already knows:
 | `trigger` | the finding that led to it: class, detector, confidence, source |
 | `prevents` / `restores` | the attack-tree nodes the action stops or undoes, each with its label, ATT&CK technique and the SOC's current belief |
 | `rationale` | the policy's own justification (the playbook line, or the solver's cost comparison) |
-| `countermeasure` | label, D3FEND technique, the host it runs on, the exact commands, operational and energy cost, time to effect |
+| `countermeasure` | label, D3FEND technique, the host it runs on, the exact commands, operational and energy cost, what it interrupts while in effect, time to effect |
 | `decided_with` | the other actions of the same decision |
 | `cost_terms`, `alternatives` | solver only: the expected loss of the chosen set and the non-dominated alternatives it weighed |
 

@@ -2,15 +2,16 @@
 
 A cyber range for smart-grid security: scenarios run as emulated labs (Kathará
 containers), attacks and defenses are composed from reusable plane components,
-and every run is seeded, scored and recorded. Four scenarios live here today —
+and every run is seeded, scored and recorded. Five scenarios live here today —
 `mqtt-mtd` (the paper's), `cps` (OT/Modbus), `cps-advisor` (the `cps` lab
-with a SOC that advises an operator instead of acting) and `cps-recon` (the `cps`
-lab with an attacker that derives its own attack tree by reconnaissance).
+with a SOC that advises an operator instead of acting), `cps-recon` (the `cps`
+lab with an attacker that derives its own attack tree by reconnaissance) and
+`cps-soc` (the `cps` lab with a Wazuh SIEM and DFIR-IRIS for the blue team).
 
 ```
 cyberrange/core/       the platform: topology, lifecycle, context, campaigns, ledger, dashboard
 cyberrange/planes/     traffic | attack | defense | monitor — components.py + agents/ (guest code)
-cyberrange/scenarios/  mqtt_mtd/, cps/, cps_advisor/ and cps_recon/ — one directory per experiment, whole
+cyberrange/scenarios/  mqtt_mtd/, cps/, cps_advisor/, cps_recon/ and cps_soc/ — one directory per experiment, whole
 nodes/                 software of the lab's nodes that is not the platform's (Wazuh set-up, rules, responses)
 make/ scripts/ tools/ tests/ docs/
 ```

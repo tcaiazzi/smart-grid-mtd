@@ -25,7 +25,7 @@ class Topology(unittest.TestCase):
     def test_machines_on_cps_image(self):
         self.assertEqual(
             sorted(self.lab.machines),
-            ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"],
+            ["attacker", "engine", "ews", "firewall", "hmi", "plc", "sensor", "soc"],
         )
         for name, mach in self.lab.machines.items():
             # The manager is too heavy for every node: only the SOC carries it.
@@ -44,11 +44,18 @@ class Topology(unittest.TestCase):
     def test_zones(self):
         self.assertEqual(_links(self.m["attacker"]), {0: cps.IT})
         self.assertEqual(_links(self.m["hmi"]), {0: cps.IT, 1: cps.MGMT})
+        self.assertEqual(_links(self.m["ews"]), {0: cps.IT, 1: cps.OT, 2: cps.MGMT})
         self.assertEqual(_links(self.m["firewall"]), {0: cps.IT, 1: cps.OT, 2: cps.MGMT})
         self.assertEqual(_links(self.m["plc"]), {0: cps.OT})
         self.assertEqual(_links(self.m["engine"]), {0: cps.OT})
         self.assertEqual(_links(self.m["sensor"]), {0: cps.OT, 1: cps.MGMT})
         self.assertEqual(_links(self.m["soc"]), {0: cps.MGMT})
+
+    def test_the_workstation_is_on_the_plant_link_and_forwards_nothing(self):
+        # It stands next to the PLC and the engine without crossing the boundary:
+        # were it to forward, IT would reach the plant around the firewall.
+        self.assertIn("iptables -P FORWARD DROP", self.startups["ews"])
+        self.assertNotIn("ews", [n for n in cps.services() if n == "engine"])
 
     def test_plant_is_not_on_the_management_network(self):
         for name in ("engine", "plc", "attacker"):

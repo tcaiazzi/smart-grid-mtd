@@ -10,8 +10,14 @@ Copied flat onto the attacker node (see the scenario's guest_files.py), where
 planner.py, red_agent.py and red_console.py all ``import steps``. Stdlib only.
 """
 
-# Ordered prerequisite steps shared by every "through the HMI" impact.
-PREREQ_ORDER = ["it_access", "it_exec", "pivot"]
+# Prerequisite steps, in the order they build on each other. An impact needs
+# the ones its branch of the tree names: "through the HMI" stops at the pivot,
+# "between the PLC and the plant" goes by the engineering workstation.
+PREREQ_ORDER = ["it_access", "it_exec", "pivot", "ot_foothold", "ot_aitm"]
+
+# What a step needs that the tree does not say, because it is a fact of how the
+# lab realises it: the workstation is reached with code execution on the HMI.
+REQUIRES = {"ot_foothold": ("it_access", "it_exec")}
 
 # Impact leaf -> exploit_client --attack mode (the writes it performs).
 IMPACT_MODE = {
@@ -21,6 +27,7 @@ IMPACT_MODE = {
     "setpoint_ramp": "slow-ramp",
     "setpoint_oscillation": "setpoint-oscillation",
     "breaker_chatter": "breaker-chatter",
+    "meas_fdi": "meas-fdi",
 }
 
 # How likely the sensors flag the step (0..1). The stealthy profile prefers the
@@ -35,9 +42,13 @@ DETECTABILITY = {
     "setpoint_ramp": 0.15,  # in-range and no single jump, quietest
     "setpoint_oscillation": 0.6,  # in-range, but large repeated swings
     "breaker_chatter": 0.9,  # remote breaker writes, over and over
+    "ot_foothold": 0.3,  # a maintenance request, from the host that makes them
+    "ot_aitm": 0.8,  # the PLC and the engine see each other's address move
+    "meas_fdi": 0.5,  # no write of the attacker's, but two versions of a reading
 }
 
-STAGE_INDEX = {"it_access": 0, "it_exec": 1, "pivot": 2, "impact": 3}
+STAGES = PREREQ_ORDER + ["impact"]
+STAGE_INDEX = {stage: i for i, stage in enumerate(STAGES)}
 
 STEP_FILE = "exploit_client.py"
 

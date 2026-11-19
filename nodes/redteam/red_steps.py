@@ -14,6 +14,15 @@ import steps as S
 import tree_doc
 
 
+def needs(tree, node_id):
+    """What must have succeeded before ``node_id``: its prerequisites in the
+    tree, and what those need in the lab (steps.REQUIRES)."""
+    out = list(tree_doc.prerequisites(tree, node_id))
+    for node in [node_id] + list(out):
+        out += [r for r in S.REQUIRES.get(node, ()) if r not in out]
+    return out
+
+
 def build_steps(tree, target_url, engine_ip, engine_port, interval=0.5):
     """The steps a person may run: every executable, feasible node of the attack
     ``tree``, in stage order, each with its command and its prerequisites."""
@@ -34,7 +43,7 @@ def build_steps(tree, target_url, engine_ip, engine_port, interval=0.5):
             "attck_name": n.get("attck_name"),
             "stage": S.stage_of(n["id"]),
             "detectability": S.DETECTABILITY.get(n["id"]),
-            "needs": [p for p in tree_doc.prerequisites(tree, n["id"]) if p in known],
+            "needs": [p for p in needs(tree, n["id"]) if p in known],
             "command": S.step_command(n["id"], ctx),
         }
         for n in nodes

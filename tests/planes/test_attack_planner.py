@@ -95,6 +95,11 @@ class RedSteps(unittest.TestCase):
             ["it_access", "it_exec"],
             "the console would call the pivot ready before its prerequisites succeeded",
         )
+        self.assertEqual(
+            sorted(by_id["meas_fdi"]["needs"]),
+            ["it_access", "it_exec", "ot_aitm", "ot_foothold"],
+            "the console would offer the workstation's branch with no foothold on the HMI",
+        )
         self.assertEqual(by_id["breaker_open"]["stage"], "impact")
         self.assertIn("--step impact --attack breaker-open", by_id["breaker_open"]["command"])
         self.assertIn(f"--target-url {CTX['target_url']}", by_id["it_access"]["command"])
@@ -135,22 +140,36 @@ class Planner(unittest.TestCase):
         s, rec = self.plan(profile="stealthy")
         self.assertEqual(rec.calls[-1], "setpoint_ramp")  # lowest detectability
 
-    def test_blocked_pivot_defends(self):
-        # The responder blocked the flow: the pivot probe fails, every OT leaf
-        # shares it, so the attacker runs out of moves before any write.
+    def test_blocked_pivot_sends_the_attacker_round_by_the_workstation(self):
+        # The responder blocked the flow: the pivot probe fails and every leaf
+        # behind it is lost. The workstation's branch does not use the flow.
         s, rec = self.plan(block={"pivot"})
+        self.assertTrue(s["success"], "blocking the flow alone no longer defends the plant")
+        self.assertEqual(rec.calls.count("pivot"), 1)  # not retried pointlessly
+        self.assertEqual(rec.calls[-3:], ["ot_foothold", "ot_aitm", "meas_fdi"])
+
+    def test_blocked_pivot_and_workstation_defend(self):
+        s, rec = self.plan(block={"pivot", "ot_foothold"})
         self.assertFalse(s["success"])
         self.assertTrue(s["defended"])
         self.assertEqual(s["stage_reached"], "it_exec")
         self.assertEqual(s["writes_ok"], 0)
-        self.assertEqual(rec.calls.count("pivot"), 1)  # not retried pointlessly
+
+    def test_the_workstation_is_reached_through_the_hmi(self):
+        p = AttackPlanner(self.tree, profile="targeted", goal="meas_fdi", seed=1)
+        self.assertEqual(
+            p.sequence_for("meas_fdi"),
+            ["it_access", "it_exec", "ot_foothold", "ot_aitm", "meas_fdi"],
+            "the tree does not name the HMI steps on this branch: the lab needs them",
+        )
 
     def test_blocked_impact_tries_alternative_then_stops(self):
         # The write of the first-choice leaf fails; the planner tries another
         # impact leaf (prereqs already done) and, that failing too, stops.
         s, rec = self.plan(block=set(S.IMPACT_MODE))
         self.assertFalse(s["success"])
-        self.assertEqual(s["stage_reached"], "pivot")
+        # Every impact fails, the one behind the workstation last.
+        self.assertEqual(s["stage_reached"], "ot_aitm")
         self.assertGreaterEqual(len([c for c in rec.calls if c in S.IMPACT_MODE]), 2)
 
     def test_reproducible(self):

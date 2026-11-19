@@ -54,6 +54,8 @@ class AttackPlanner:
         """Ordered executable steps to reach ``leaf``: its prerequisite steps
         (in stage order) then the leaf itself."""
         pre = set(tree_doc.prerequisites(self.tree, leaf))
+        for node in list(pre):
+            pre.update(S.REQUIRES.get(node, ()))
         ordered = [n for n in S.PREREQ_ORDER if n in pre and S.is_step(n)]
         return ordered + [leaf]
 
@@ -130,7 +132,7 @@ class AttackPlanner:
         stage_reached = max(
             (S.STAGE_INDEX[S.stage_of(e["node"])] for e in log if e["ok"]), default=-1
         )
-        stages = ["none", "it_access", "it_exec", "pivot", "impact"]
+        stages = ["none"] + S.STAGES
         return {
             "profile": self.profile,
             "goal": self.goal,

@@ -39,11 +39,12 @@ ATTACK_TARGET = {
         {"register": 0, "name": "dg_setpoint", "value": 5.0},
     ],
     "breaker-chatter": [{"register": 1, "name": "switch_cmd", "value": 1.0}],
+    "meas-fdi": [],  # no write of the attacker's: the PLC's readings are falsified
 }
 REGISTER_NAMES = {t["register"]: t["name"] for ts in ATTACK_TARGET.values() for t in ts}
 # Writes that are in the legitimate envelope and come from an allowed host:
 # invisible to the source/range rules (the point of the stealthy mode).
-STEALTHY_MODES = {"manual-hijack", "slow-ramp", "setpoint-oscillation"}
+STEALTHY_MODES = {"manual-hijack", "slow-ramp", "setpoint-oscillation", "meas-fdi"}
 
 
 def parse_exploit_events(text: str):
@@ -111,6 +112,11 @@ def drive_attack(
     for e in events:
         if e.get("phase") == "rce":
             gt.record("rce", t=e["t"], mode=attack_mode)
+        elif e.get("phase") in ("ot_foothold", "ot_aitm"):
+            gt.record(e["phase"], t=e["t"], mode=attack_mode, ok=e.get("ok"))
+        elif e.get("phase") == "fdi":
+            fdi = {k: e.get(k) for k in ("ok", "t_end", "readings", "sent")}
+            gt.record("fdi", t=e.get("t_start") or e["t"], mode=attack_mode, **fdi)
     for e in writes:
         gt.record(
             "modbus_write",
@@ -124,7 +130,7 @@ def drive_attack(
             source="pivot",
             unauthorized=True,
         )
-    if not writes:  # exploit output lost: keep a coarse record rather than none
+    if not writes:  # exploit output lost (or a mode with no writes): the hint, if any
         for t in targets:
             gt.record(
                 "modbus_write",

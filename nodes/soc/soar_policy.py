@@ -9,10 +9,11 @@ Two policies with the same interface, ``decide(snapshot, t) -> Decision|None``:
 RulesPolicy   the static playbook (the MTM baseline of WP3): a fixed table from
               *confirmed* impact leaves to countermeasures, each fired once.
 SolverPolicy  a first solver: picks the subset of countermeasures that
-              minimises expected loss + weighted operational / time / energy
-              cost, by exhaustive enumeration (5 countermeasures -> <= 32
-              subsets; 7 and 128 with the IT ones). Also returns the Pareto
-              front (risk vs disruption vs energy) for inspection.
+              minimises expected loss (what stays, what is still possible,
+              what is suffered before an action bites) + weighted operational
+              and energy cost, by exhaustive enumeration (5 countermeasures ->
+              <= 32 subsets; 7 and 128 with the IT ones). Also returns the
+              Pareto front (risk vs disruption vs energy) for inspection.
 
 Every Decision carries its justification — the tree nodes each action covers
 and the cost terms — which is what "explainable decision coverage" counts.
@@ -140,8 +141,12 @@ class RulesPolicy(_Base):
         "setpoint_ramp": ["block_flow", "force_auto"],
         "setpoint_oscillation": ["block_flow", "force_auto"],
         "breaker_chatter": ["block_flow", "restore_breaker"],
+        # Between the PLC and the plant: take the host that stands there off the
+        # OT link, at the position already, before a reading is falsified.
+        "ot_aitm": ["isolate_ews", "repair_arp"],
+        "meas_fdi": ["isolate_ews", "repair_arp"],
     }
-    TRIGGERS = ["it_access", "it_exec"] + list(mapping.IMPACT_LEAVES)
+    TRIGGERS = ["it_access", "it_exec", "ot_aitm"] + list(mapping.IMPACT_LEAVES)
 
     def decide(self, snapshot, t=None):
         nodes = snapshot["nodes"]
@@ -182,7 +187,7 @@ class RulesPolicy(_Base):
 @dataclass
 class Weights:
     op: float = 1.0  # operational disruption
-    time: float = 0.05  # per second of time-to-effect (slowest action)
+    time: float = 0.05  # share of a covered loss suffered per second until the action bites
     energy: float = 0.5
 
 
@@ -191,13 +196,44 @@ class SolverPolicy(_Base):
 
     name = "solver"
 
-    def __init__(self, countermeasures, tree, weights=None, allowed=None):
+    def __init__(self, countermeasures, tree, weights=None, allowed=None, approval_delay_s=0.0):
         super().__init__(countermeasures, allowed)
         self.tree = tree
         self.w = weights or Weights()
+        # How long a countermeasure that needs approval waits before it runs.
+        self.approval_delay_s = float(approval_delay_s)
         self.impact = {n.id: n.impact for n in tree.walk() if n.impact > 0}
+        self.gateways = self._gateways(tree)
 
-    # J(A) = residual + future + w.op*op + w.time*time + w.energy*energy
+    @staticmethod
+    def _gateways(tree):
+        """{step: impact leaves behind it}: the last step before each impact,
+        i.e. the sibling just before it (or before the gate that holds it) under
+        the nearest AND. Holding that step is holding the way to those impacts."""
+        parent, out = trees.parents(tree), {}
+        for leaf in mapping.IMPACT_LEAVES:
+            node = trees.index(tree).get(leaf)
+            while node is not None and node.id in parent:
+                up = parent[node.id]
+                at = up.children.index(node)
+                if up.gate == trees.AND and at > 0:
+                    out.setdefault(up.children[at - 1].id, []).append(leaf)
+                    break
+                node = up
+        return out
+
+    def _late(self, actions):
+        """Share of a loss still suffered when the quickest of ``actions``
+        takes effect: its own time, and the wait for its approval. Never more
+        than the whole loss, so that acting late is not worse than not acting."""
+        delay = min(
+            self.cms[a].time_to_effect_s
+            + (self.approval_delay_s if self.cms[a].requires_approval else 0.0)
+            for a in actions
+        )
+        return min(1.0, self.w.time * delay)
+
+    # J(A) = residual + future + time + w.op*op + w.energy*energy
     def cost(self, subset, scores):
         A = set(subset) | self.applied
         restored = {n for a in A for n in self.cms[a].restores}
@@ -208,22 +244,38 @@ class SolverPolicy(_Base):
             for n, imp in self.impact.items()
             if n in mapping.IMPACT_LEAVES and n not in restored
         )
-        # The attacker still holds the path: further manipulation is possible
-        # unless the path or the manipulations themselves are prevented.
-        exposure = max(
-            (
-                imp
-                for n, imp in self.impact.items()
-                if n in mapping.IMPACT_LEAVES and n not in prevented
-            ),
-            default=0.0,
-        )
-        future = 0.0 if "pivot" in prevented else scores.get("pivot", 0.0) * exposure
+        # The attacker still holds a path: further manipulation is possible
+        # unless the path or the manipulations behind it are prevented.
+        future = 0.0
+        for gateway, behind in self.gateways.items():
+            if gateway in prevented:
+                continue
+            exposure = max((self.impact[n] for n in behind if n not in prevented), default=0.0)
+            future += scores.get(gateway, 0.0) * exposure
         new = [a for a in subset if a not in self.applied]
-        op = sum(self.cms[a].op_cost for a in new)
-        time = max((self.cms[a].time_to_effect_s for a in new), default=0.0)
+        # What the new actions take away is taken away only once they bite:
+        # until then the impact they restore stands and the path they cut is
+        # open. Charged where the terms above credit an action in full, on the
+        # impacts restored and on the paths cut.
+        held_r = {n for a in self.applied for n in self.cms[a].restores}
+        held_p = {n for a in self.applied for n in self.cms[a].prevents}
+        time = sum(
+            scores.get(n, 0.0) * imp * self._late([a for a in new if n in self.cms[a].restores])
+            for n, imp in self.impact.items()
+            if n in mapping.IMPACT_LEAVES and n in restored and n not in held_r
+        )
+        for gateway, behind in self.gateways.items():
+            if gateway in prevented and gateway not in held_p:
+                by = [a for a in new if gateway in self.cms[a].prevents]
+                exposure = max(self.impact[n] for n in behind)
+                time += scores.get(gateway, 0.0) * exposure * self._late(by)
+        # A function two actions both cut is lost once: an action costs what it
+        # cuts beyond what is already cut, and what running it disturbs.
+        held = {f for a in self.applied for f in self.cms[a].cuts}
+        cut = held | {f for a in new for f in self.cms[a].cuts}
+        op = trees.disruption(cut) - trees.disruption(held) + sum(self.cms[a].op_cost for a in new)
         energy = sum(self.cms[a].energy_cost for a in new)
-        total = residual + future + self.w.op * op + self.w.time * time + self.w.energy * energy
+        total = residual + future + time + self.w.op * op + self.w.energy * energy
         return {
             "residual": round(residual, 4),
             "future": round(future, 4),
@@ -293,10 +345,12 @@ class SolverPolicy(_Base):
             f"chosen {'+'.join(new)}: J {idle['total']} -> {best_cost['total']} "
             f"(residual {idle['residual']}->{best_cost['residual']}, "
             f"future {idle['future']}->{best_cost['future']}, "
-            f"op +{best_cost['op']}, energy +{best_cost['energy']}); "
+            f"late +{best_cost['time']}, op +{best_cost['op']}, energy +{best_cost['energy']}); "
             "beliefs "
             + ", ".join(
-                f"{n}={scores[n]}" for n in list(mapping.IMPACT_LEAVES) + ["pivot"] if n in scores
+                f"{n}={scores[n]}"
+                for n in list(mapping.IMPACT_LEAVES) + list(self.gateways)
+                if n in scores
             )
         )
         if paired:
@@ -319,9 +373,10 @@ class SolverPolicy(_Base):
 
 
 def pareto_front(evaluated):
-    """Non-dominated subsets on (risk = residual + future, op, energy)."""
+    """Non-dominated subsets on (risk = residual + future + time, op, energy)."""
     pts = [
-        (list(s), round(c["residual"] + c["future"], 4), c["op"], c["energy"]) for s, c in evaluated
+        (list(s), round(c["residual"] + c["future"] + c["time"], 4), c["op"], c["energy"])
+        for s, c in evaluated
     ]
     front = []
     for i, (s, r, o, e) in enumerate(pts):
@@ -335,12 +390,19 @@ def pareto_front(evaluated):
     return sorted(front, key=lambda p: (p["risk"], p["op"]))
 
 
-def make_policy(kind, countermeasures, tree, approval="auto", weights=None):
+def make_policy(kind, countermeasures, tree, approval="auto", weights=None, approval_delay_s=0.0):
     """'rules' | 'solver'. With approval 'deny', countermeasures that need an
-    operator's approval are never proposed."""
+    operator's approval are never proposed. ``approval_delay_s`` is how long
+    the others wait for theirs, which the solver counts against them."""
     allowed = {c.id for c in countermeasures if not (approval == "deny" and c.requires_approval)}
     if kind == "rules":
         return RulesPolicy(countermeasures, allowed=allowed)
     if kind == "solver":
-        return SolverPolicy(countermeasures, tree, weights=weights, allowed=allowed)
+        return SolverPolicy(
+            countermeasures,
+            tree,
+            weights=weights,
+            allowed=allowed,
+            approval_delay_s=approval_delay_s,
+        )
     raise ValueError(f"unknown policy {kind!r}")

@@ -36,6 +36,7 @@ from cyberrange.scenarios.cps.guest_files import (  # noqa: E402
     ATTACKER_CPS_FILES,
     ENGINE_FILES,
     FW_FILES,
+    EWS_FILES,
     HMI_FILES,
     PLC_FILES,
     SENSOR_FILES,
@@ -72,6 +73,7 @@ MACHINES = {
     "sensor": SENSOR_FILES,
     "soc": SOC_FILES + SOC_CONSOLE_FILES + TEAM_FILES,
     "hmi": HMI_FILES + TEAM_FILES,
+    "ews": EWS_FILES,
     "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
     # cps-recon: the attacker on its own red-team image, with the recon agents.
     "attacker_recon": ATTACKER_CPS_FILES + RECON_FILES,
@@ -100,6 +102,7 @@ IMAGE_OF = {
     "sensor": CPS_IMAGE,
     "soc": SOC_IMAGE,
     "hmi": CPS_IMAGE,
+    "ews": CPS_IMAGE,
     "attacker_cps": CPS_IMAGE,
     "attacker_recon": REDTEAM_IMAGE,
     "soc_siem": SOC_SIEM_IMAGE,

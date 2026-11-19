@@ -48,8 +48,9 @@ class ModeTables(unittest.TestCase):
     def test_every_copy_names_the_same_modes(self):
         modes = set(exploit_client.DEFAULT_REPEAT)
         copies = {
-            "exploit_client ATTACKS + SCHEDULES": set(exploit_client.ATTACKS)
-            | set(exploit_client.SCHEDULES),
+            "exploit_client ATTACKS + SCHEDULES + FDI_MODE": set(exploit_client.ATTACKS)
+            | set(exploit_client.SCHEDULES)
+            | {exploit_client.FDI_MODE},
             "active_attack.ATTACK_TARGET": set(active_attack.ATTACK_TARGET),
             "scenario.ATTACK_MODES": set(scenario.ATTACK_MODES),
             "campaign.ATTACK_MODES": set(campaign.ATTACK_MODES),
@@ -79,18 +80,32 @@ class LeafTables(unittest.TestCase):
     def setUp(self):
         self.g = kg.build_kg(cps_inv.inventory())
         self.tree = trees.cps_attack_tree(self.g)
-        self.leaves = {n.id: n for n in trees.index(self.tree)["ot_action"].children}
+        idx = trees.index(self.tree)
+        # The impacts an attacker can aim for: by a write through the HMI, or
+        # by falsifying readings from the engineering workstation.
+        self.written = {n.id: n for n in idx["ot_action"].children}
+        self.leaves = {**self.written, "meas_fdi": idx["meas_fdi"]}
 
     def test_every_copy_names_the_same_leaves(self):
         copies = {
             "steps.IMPACT_MODE": set(steps.IMPACT_MODE),
             "steps.DETECTABILITY": set(steps.DETECTABILITY) - set(steps.PREREQ_ORDER),
-            "belief_tree.IMPACT_META": set(belief_tree.IMPACT_META),
             "soar_mapping.IMPACT_LEAVES": set(mapping.IMPACT_LEAVES),
             "scenario.GOALS": set(scenario.GOALS),
         }
         for name, got in copies.items():
             self.assertEqual(got, set(self.leaves), f"{name} is out of step with the attack tree")
+
+    def test_the_attacker_s_own_tree_knows_the_impacts_it_can_write(self):
+        # Recon does not find the workstation's branch: what it derives is the
+        # written impacts only, and tree fidelity scores the rest as missed.
+        self.assertEqual(set(belief_tree.IMPACT_META), set(self.written))
+
+    def test_every_prerequisite_step_is_a_node_of_the_tree(self):
+        idx = trees.index(self.tree)
+        for step in steps.PREREQ_ORDER:
+            self.assertIn(step, idx, f"{step}: a step the planner could never be asked for")
+            self.assertIn(step, steps.DETECTABILITY, f"{step}: no noise estimate to plan with")
 
     def test_every_leaf_has_a_playbook_row(self):
         missing = set(self.leaves) - set(policy.RulesPolicy.PLAYBOOK)

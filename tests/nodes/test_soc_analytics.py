@@ -285,6 +285,12 @@ class Advising(unittest.TestCase):
         self.assertEqual(why["countermeasure"]["machine"], "firewall")
         self.assertTrue(why["countermeasure"]["commands"])
         self.assertIn("total", why["cost_terms"])
+        self.assertEqual(why["countermeasure"]["op_cost"], 0.5)
+        self.assertEqual(
+            sorted(why["countermeasure"]["interrupts"]),
+            ["hmi's control of ctrl_mode", "hmi's control of dg_setpoint"],
+            "the operator is not told what approving would take from them",
+        )
         self.assertTrue(why["alternatives"])
         self.assertEqual(row["due_t"], 160.0)
         json.dumps(row)  # it travels as JSON, to the ledger and to the console

@@ -35,6 +35,29 @@
    "ip route add default via 10.20.0.1 dev eth0"
   ]
  },
+ "ews": {
+  "guest_files": [
+   "/ews_maint.py",
+   "/ot_mitm.py",
+   "/ot_registers.py",
+   "/wazuh-agent-setup.sh",
+   "/wazuh-agent.conf",
+   "/cps_response.py"
+  ],
+  "settings": {
+   "0": "IT",
+   "1": "OT",
+   "2": "MGMT",
+   "image": "kathara/cps"
+  },
+  "startup": [
+   "ip address add 10.10.0.30/24 dev eth0",
+   "ip address add 10.20.0.30/24 dev eth1",
+   "ip address add 10.30.0.40/24 dev eth2",
+   "ip route add default via 10.10.0.1 dev eth0",
+   "iptables -P FORWARD DROP"
+  ]
+ },
  "firewall": {
   "guest_files": [
    "/ot_write.py",

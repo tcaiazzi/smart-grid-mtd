@@ -62,7 +62,7 @@ def ir_words(v_load, v_dg, abnormal=0):
     return w
 
 
-def build_frame(src_ip, dst_ip, dport, modbus_adu, sport=50000, flags=0x18):
+def build_frame(src_ip, dst_ip, dport, modbus_adu, sport=50000, flags=0x18, src_mac=b"\x11" * 6):
     tcp = struct.pack("!HHLLBBHHH", sport, dport, 0, 0, (5 << 4), flags, 0, 0, 0)
     ihl_ver = (4 << 4) | 5
     total = 20 + len(tcp) + len(modbus_adu)
@@ -79,7 +79,7 @@ def build_frame(src_ip, dst_ip, dport, modbus_adu, sport=50000, flags=0x18):
         bytes(map(int, src_ip.split("."))),
         bytes(map(int, dst_ip.split("."))),
     )
-    eth = b"\x00" * 6 + b"\x11" * 6 + struct.pack("!H", s.ETHERTYPE_IPV4)
+    eth = b"\x00" * 6 + src_mac + struct.pack("!H", s.ETHERTYPE_IPV4)
     return eth + ip + tcp + modbus_adu
 
 
@@ -444,6 +444,70 @@ class WireProcess(unittest.TestCase):
             [reg.HR_SWITCH_CMD],
             "a breaker command hidden behind a legal setpoint write went unnoticed",
         )
+
+    # ── somebody between the PLC and the engine ─────────────────────────────
+    EWS_IP, EWS_MAC = "10.20.0.30", b"\x22" * 6
+
+    def relayed_read(self, t, words_again):
+        """A PLC poll carried across a third host: each frame is seen twice on
+        a flooding link, the second time from the relay's MAC."""
+        self.txn += 1
+        read = modbus_read(0x04, 0, reg.SENSOR_COUNT, txn=self.txn)
+        sport = 40001
+        self._req(t, PLC_IP, read, sport)
+        self.sensor._handle_frame(
+            build_frame(PLC_IP, ENGINE_IP, reg.MODBUS_PORT, read, sport, src_mac=self.EWS_MAC),
+            now=t + 0.001,
+        )
+        true = modbus_read_response(0x04, ir_words(1.01, 1.06, 1), txn=self.txn)
+        self._resp(t + 0.01, PLC_IP, true, sport)
+        again = modbus_read_response(0x04, words_again, txn=self.txn)
+        self.sensor._handle_frame(
+            build_frame(
+                ENGINE_IP, PLC_IP, sport, again, sport=reg.MODBUS_PORT, src_mac=self.EWS_MAC
+            ),
+            now=t + 0.011,
+        )
+
+    def announce(self, t, ip, mac):
+        arp = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 1) + mac + bytes(map(int, ip.split(".")))
+        frame = b"\xff" * 6 + mac + struct.pack("!H", s.ETHERTYPE_ARP) + arp + b"\x00" * 10
+        self.sensor._handle_frame(frame, now=t)
+
+    def test_an_address_spoken_for_by_another_mac_is_reported_and_named(self):
+        self.poll(1.0, PLC_IP, 0.99, 1.01, 0, 20.0)
+        self.announce(1.5, self.EWS_IP, self.EWS_MAC)
+        self.relayed_read(2.0, ir_words(1.01, 1.06, 1))
+        self.relayed_read(3.0, ir_words(1.01, 1.06, 1))
+        spoof = self.findings("address_spoofing")
+        self.assertEqual(
+            sorted(f["evidence"]["address"] for f in spoof),
+            [PLC_IP, ENGINE_IP],
+            "one report per address taken, not one per relayed frame",
+        )
+        self.assertEqual(
+            {f["entities"]["src"] for f in spoof},
+            {self.EWS_IP},
+            "the SOC could not tell which host stands in the middle",
+        )
+        self.assertEqual(self.findings("conflicting_reading"), [], "a relay changes nothing")
+
+    def test_a_reading_given_twice_with_different_values_is_reported(self):
+        self.poll(1.0, PLC_IP, 0.99, 1.01, 0, 20.0)
+        self.relayed_read(2.0, ir_words(0.96, 0.96, 0))
+        conflict = self.findings("conflicting_reading")
+        self.assertEqual(len(conflict), 1)
+        ev = conflict[0]["evidence"]
+        self.assertEqual((ev["first"]["v_dg"], ev["second"]["v_dg"]), (1.06, 0.96))
+        # The process rules keep judging the plant on what the engine sent.
+        self.assertEqual(self.sensor.rules.out_of_band({"v_dg": ev["first"]["v_dg"]}), True)
+
+    def test_a_standing_conflict_is_repeated_but_not_flooded(self):
+        self.poll(1.0, PLC_IP, 0.99, 1.01, 0, 20.0)
+        for i in range(12):
+            self.relayed_read(2.0 + i, ir_words(1.01, 1.06, 1))
+        told = [f for f in self.findings("address_spoofing") if f["evidence"]["address"] == PLC_IP]
+        self.assertEqual(len(told), 3, "once at first, then every SPOOF_REPEAT_S")
 
     def test_write_alert_clears_after_quiet(self):
         self.write(1.0, OTHER_IP, reg.HR_DG_SETPOINT, reg.encode(200.0, 10.0))

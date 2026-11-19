@@ -38,6 +38,11 @@ SCENARIOS = {
         finding("policy_violation", 1.0, HMI, "switch_cmd", value=1.0),
         finding("policy_violation", 3.0, HMI, "switch_cmd", value=0.0),
     ],
+    # No write of the attacker's: only the position and the two readings show.
+    "meas-fdi": [
+        finding("address_spoofing", 1.0, "10.20.0.30", None, conf=0.95, address=HMI),
+        finding("conflicting_reading", 3.0, None, None, conf=0.95),
+    ],
 }
 EXPECTED = {
     "setpoint-overvoltage": {"block_flow"},
@@ -46,6 +51,7 @@ EXPECTED = {
     "slow-ramp": {"block_flow", "force_auto"},
     "setpoint-oscillation": {"block_flow", "force_auto"},
     "breaker-chatter": {"block_flow", "restore_breaker"},
+    "meas-fdi": {"isolate_ews", "repair_arp"},
 }
 
 
@@ -169,6 +175,53 @@ class Policies(unittest.TestCase):
         d = p.decide(st.snapshot(3.0), 3.0)
         self.assertIn("force_auto", d.actions)  # restoring is still worth it
         self.assertNotIn("causal pairing", d.rationale)
+
+    def believed(self, mode):
+        st = mapping.CampaignState(self.tree, self.g)
+        for f in SCENARIOS[mode]:
+            st.update(f)
+        return {n: v["score"] for n, v in st.snapshot(9.0)["nodes"].items()}
+
+    def test_a_function_already_cut_is_not_charged_again(self):
+        p = policy.SolverPolicy(self.cms, self.tree)
+        scores = self.believed("breaker-open")
+        alone = p.cost(("isolate_hmi",), scores)["op"]
+        block = p.cost(("block_flow",), scores)["op"]
+        self.assertEqual(
+            p.cost(("block_flow", "isolate_hmi"), scores)["op"],
+            alone,
+            "the HMI's control of the plant was charged to both actions that cut it",
+        )
+        p.mark_applied(["block_flow"])
+        self.assertAlmostEqual(p.cost(("isolate_hmi",), scores)["op"], alone - block)
+
+    def test_an_action_that_bites_late_is_worth_less(self):
+        scores = self.believed("breaker-open")
+        now = policy.SolverPolicy(self.cms, self.tree)
+        waits = policy.SolverPolicy(self.cms, self.tree, approval_delay_s=10.0)
+        never = policy.SolverPolicy(self.cms, self.tree, approval_delay_s=3600.0)
+        # isolate_hmi needs approval, block_flow does not: only the first waits.
+        self.assertEqual(now.cost(("block_flow",), scores), waits.cost(("block_flow",), scores))
+        late = [p.cost(("isolate_hmi",), scores) for p in (now, waits, never)]
+        self.assertLess(late[0]["time"], late[1]["time"])
+        self.assertLess(late[1]["time"], late[2]["time"])
+        # However late, acting loses no more than the path it would have cut.
+        idle = never.cost((), scores)
+        self.assertAlmostEqual(late[2]["future"] + late[2]["time"], idle["future"], places=3)
+
+    def test_an_approval_too_slow_to_matter_is_not_asked_for(self):
+        cms = [c for c in self.cms if c.id != "block_flow"]
+        st = mapping.CampaignState(self.tree, self.g)
+        for f in SCENARIOS["breaker-open"]:
+            st.update(f)
+        fast = policy.make_policy("solver", cms, self.tree, approval_delay_s=2.0)
+        slow = policy.make_policy("solver", cms, self.tree, approval_delay_s=3600.0)
+        self.assertIn("isolate_hmi", fast.decide(st.snapshot(1.0), 1.0).actions)
+        self.assertNotIn(
+            "isolate_hmi",
+            slow.decide(st.snapshot(1.0), 1.0).actions,
+            "the operator's work was cut for a path the attacker keeps for an hour",
+        )
 
     def it_finding(self, klass, node, t, conf=0.9):
         return {

@@ -71,14 +71,48 @@ class Countermeasure:
     revert: list
     prevents: list = field(default_factory=list)
     restores: list = field(default_factory=list)
-    time_to_effect_s: float = 1.0  # nominal; replaced by measured values later
-    op_cost: float = 0.0  # operational disruption, 0..1
+    time_to_effect_s: float = 1.0  # from the request to its effect
+    op_cost: float = 0.0  # disturbance of running it once, 0..1 (what it cuts is in ``cuts``)
     energy_cost: float = 0.0  # relative energy cost, 0..1
     requires_approval: bool = False
     order: int = 50  # execution order: preventive first
+    effect: list = field(
+        default_factory=list
+    )  # the graph while it is in effect (soar_kg.with_effects)
+    cuts: list = field(
+        default_factory=list
+    )  # functions of the lab lost meanwhile (soar_kg.functions)
 
     def to_dict(self):
         return asdict(self)
+
+
+# From the SOC's request to its outcome on the host: the manager's active
+# response to the agent, the same way for every countermeasure. A round figure
+# for what the lab measures (a campaign's summary, table "Countermeasure
+# times": median 0.07 s, three quarters under 0.26 s).
+DISPATCH_S = 0.1
+
+# What a function of the lab weighs when a response cuts it, by kind (the
+# prefix of its id, soar_kg.functions): the operator's control of one register,
+# a host's presence on one network.
+FUNCTION_WEIGHTS = {kgmod.WRITE: 0.25, kgmod.PRESENCE: 0.3}
+
+
+def disruption(functions):
+    """Operational cost of losing ``functions``. Over a set: a function two
+    responses both cut is lost once, and is charged once."""
+    return sum(FUNCTION_WEIGHTS[f.split(":", 1)[0]] for f in set(functions))
+
+
+def _charged(g, cms):
+    """``cms`` with what each cuts on ``g``: the functions the graph has, and
+    no longer has while the countermeasure is in effect."""
+    before = kgmod.functions(g)
+    for cm in cms:
+        if cm.effect:
+            cm.cuts = sorted(before - kgmod.functions(kgmod.with_effects(g, cm.effect)))
+    return cms
 
 
 # ── Tree helpers ─────────────────────────────────────────────────────────────
@@ -177,6 +211,10 @@ def cps_context(g):
     it_hosts = [g.nodes[h]["name"] for h in kgmod.hosts(g) if g.nodes[h]["role"] == "it-host"]
     attacker = it_hosts[0] if it_hosts else None
     attacker_ip = kgmod.addresses(g, attacker)[0][0] if attacker else None
+    # The engineering workstation, if the lab has one, and its NIC on the
+    # plant's link: what a response takes down to put it off that link.
+    ews = (_hosts_by_role(g, "engineering") or [None])[0]
+    ews_ot = [a for a, z in kgmod.addresses(g, ews) if z == plant_zone] if ews else []
     return {
         "hmi": hmi,
         "engine": engine,
@@ -191,6 +229,10 @@ def cps_context(g):
         "hmi_port": g.nodes[http]["port"],
         "attacker": attacker,
         "attacker_ip": attacker_ip,
+        "ews": ews if ews_ot else None,
+        "plc_ip": next((kgmod.addresses(g, h)[0][0] for h in _hosts_by_role(g, "plc")), None),
+        "responder_iface": g.nodes[f"ip:{fw_on_plant_zone}"]["iface"],
+        "ews_ot_iface": g.nodes[f"ip:{ews_ot[0]}"]["iface"] if ews_ot else None,
     }
 
 
@@ -204,7 +246,7 @@ def cps_attack_tree(g):
 
     def unknown_ot_writer(gg):
         # Any host outside the Modbus roles (and not the boundary device) that
-        # can reach the plant: none in the lab as built.
+        # can reach the plant: one that stands on the plant's own link.
         for h in kgmod.hosts(gg):
             d = gg.nodes[h]
             if d["role"] in _MODBUS_ROLES | {kgmod.BOUNDARY_ROLE, "plant"}:
@@ -311,17 +353,48 @@ def cps_attack_tree(g):
             Node(
                 "ot_foothold",
                 "Foothold on a host that reaches the plant",
+                attck="T0886",
+                attck_name="Remote Services",
                 observable=False,
                 precondition=unknown_ot_writer,
-                review="no such host in the lab as built; kept for unauthorized_* findings",
+                review="T0859 (Valid Accounts) also plausible: the way in is a credential",
             ),
             Node(
-                "ot_write_unknown",
-                "Unauthorized Modbus access from that host",
-                attck="T0855",
-                attck_name="Unauthorized Command Message",
-                targets=[c["modbus_svc"]],
-                impact=0.6,
+                "ot_direct_action",
+                "Act on the plant from that host",
+                OR,
+                children=[
+                    Node(
+                        "ot_write_unknown",
+                        "Unauthorized Modbus access from that host",
+                        attck="T0855",
+                        attck_name="Unauthorized Command Message",
+                        targets=[c["modbus_svc"]],
+                        impact=0.6,
+                    ),
+                    Node(
+                        "via_aitm",
+                        "Between the PLC and the plant",
+                        AND,
+                        children=[
+                            Node(
+                                "ot_aitm",
+                                "Adversary in the middle of the PLC's Modbus session",
+                                attck="T0830",
+                                attck_name="Adversary-in-the-Middle",
+                                targets=[c["modbus_svc"]],
+                            ),
+                            Node(
+                                "meas_fdi",
+                                "Measurements falsified on their way to the PLC",
+                                attck="T0856",
+                                attck_name="Spoof Reporting Message",
+                                targets=[f"reg:ir:{reg.IR_V_LOAD}", f"reg:ir:{reg.IR_V_DG}"],
+                                impact=0.9,
+                            ),
+                        ],
+                    ),
+                ],
             ),
         ],
     )
@@ -333,7 +406,12 @@ def cps_countermeasures(g, it=False):
     """Countermeasures executable in the lab, with their commands. The IT-side
     ones (kill_proc_tree, block_web_src) are available only when ``it`` is set,
     i.e. when the IT sensor runs — otherwise the early steps they answer are not
-    observed and the response has no justification to use them."""
+    observed and the response has no justification to use them.
+
+    ``time_to_effect_s`` is DISPATCH_S plus what the countermeasure itself
+    takes, where that was measured to be more than the dispatch hides: the
+    plant coming back in band after a write to it, the seconds repair_arp
+    spends resolving and sending."""
     c = cps_context(g)
     flow = f"-s {c['hmi_ip']} -d {c['engine_ip']} -p tcp --dport {c['modbus_port']}"
     port = c["modbus_port"]
@@ -364,9 +442,9 @@ def cps_countermeasures(g, it=False):
             ],
             revert=[f"iptables -D FORWARD {flow} -j DROP"],
             # Costly: it also cuts the operator's legitimate HMI control.
+            effect=[[kgmod.DROP, c["firewall"], c["hmi_ip"], c["engine_ip"], port]],
             prevents=["pivot"] + ot_leaves,
-            time_to_effect_s=0.5,
-            op_cost=0.5,
+            time_to_effect_s=DISPATCH_S,
             energy_cost=0.01,
             order=10,
         ),
@@ -377,9 +455,9 @@ def cps_countermeasures(g, it=False):
             c["hmi"],
             apply=["ip link set eth0 down"],
             revert=["ip link set eth0 up", f"ip route add default via {c['gateway_hmi']} dev eth0"],
+            effect=[[kgmod.DETACH, c["hmi"], "eth0"]],
             prevents=["it_access", "it_exec", "pivot"] + ot_leaves,
-            time_to_effect_s=0.5,
-            op_cost=0.8,
+            time_to_effect_s=DISPATCH_S,
             energy_cost=0.01,
             requires_approval=True,
             order=20,
@@ -402,7 +480,7 @@ def cps_countermeasures(g, it=False):
             ],
             revert=[],
             restores=["mode_hijack", "setpoint_oor", "setpoint_ramp", "setpoint_oscillation"],
-            time_to_effect_s=1.0,
+            time_to_effect_s=DISPATCH_S + 0.35,
             op_cost=0.1,
             energy_cost=0.02,
             order=30,
@@ -415,14 +493,62 @@ def cps_countermeasures(g, it=False):
             apply=[f"python3 ot_write.py {c['engine_ip']} {port} {reg.HR_SWITCH_CMD}=0"],
             revert=[],
             restores=["breaker_open", "breaker_chatter"],
-            time_to_effect_s=1.0,
+            time_to_effect_s=DISPATCH_S + 0.2,
             op_cost=0.1,
             energy_cost=0.02,
             order=40,
         ),
     ]
+    if c["ews"]:
+        nic = c["ews_ot_iface"]
+        cms.append(
+            Countermeasure(
+                "isolate_ews",
+                "Take the engineering workstation off the OT link",
+                "Network Isolation",
+                c["ews"],
+                apply=[f"ip link set {nic} down"],
+                revert=[f"ip link set {nic} up"],
+                effect=[[kgmod.DETACH, c["ews"], nic]],
+                prevents=["ot_write_unknown", "ot_aitm", "meas_fdi"],
+                restores=[],
+                time_to_effect_s=DISPATCH_S,
+                energy_cost=0.01,
+                order=15,
+            )
+        )
+    if c["ews"] and c["plc_ip"]:
+        # scapy comes with the node image. The boundary device was never lied
+        # to, so the addresses it resolves are the true ones.
+        heal = (
+            "from scapy.all import ARP, Ether, conf, getmacbyip, sendp; conf.verb = 0; "
+            f"a, b = '{c['plc_ip']}', '{c['engine_ip']}'; ma, mb = getmacbyip(a), getmacbyip(b); "
+            "p = [Ether(dst=ma) / ARP(op=2, psrc=b, hwsrc=mb, pdst=a, hwdst=ma), "
+            "Ether(dst=mb) / ARP(op=2, psrc=a, hwsrc=ma, pdst=b, hwdst=mb)]; "
+            f"sendp(p, iface='{c['responder_iface']}', count=3, inter=0.2)"
+        )
+        cms.append(
+            Countermeasure(
+                "repair_arp",
+                "Tell the PLC and the plant each other's true address again "
+                "(sent by the boundary device)",
+                "Restore Configuration",
+                c["firewall"],
+                # After the isolation (order): while the host in the middle is
+                # on the link it renews its claim every second. Without this the
+                # two keep sending to a host that is gone until their caches
+                # expire, and the PLC regulates nothing for most of a minute.
+                apply=[f'python3 -c "{heal}"'],
+                revert=[],
+                restores=["ot_aitm", "meas_fdi"],
+                time_to_effect_s=DISPATCH_S + 2.3,
+                op_cost=0.05,
+                energy_cost=0.01,
+                order=16,
+            )
+        )
     if not it:
-        return cms
+        return _charged(g, cms)
     # IT-side countermeasures (need the IT sensor to observe the early steps).
     cms += [
         Countermeasure(
@@ -438,7 +564,7 @@ def cps_countermeasures(g, it=False):
             ],
             revert=[],  # killing the foothold changes no persistent state
             prevents=["it_exec", "pivot"] + ot_leaves,
-            time_to_effect_s=0.3,
+            time_to_effect_s=DISPATCH_S,
             op_cost=0.15,
             energy_cost=0.01,
             order=5,
@@ -462,10 +588,10 @@ def cps_countermeasures(g, it=False):
                 else []
             ),
             prevents=["it_access", "it_exec", "pivot"] + ot_leaves,
-            time_to_effect_s=0.4,
+            time_to_effect_s=DISPATCH_S,
             op_cost=0.2,
             energy_cost=0.01,
             order=6,
         ),
     ]
-    return cms
+    return _charged(g, cms)

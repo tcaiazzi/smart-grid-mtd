@@ -83,6 +83,7 @@ the run's `--seed` (unseeded when the run is).
 | `BackgroundReplay` | traffic | guest | router · `kathara/mqtt` | mqtt-mtd |
 | `ScmcPublisher` | traffic | guest | scmc · `kathara/mqtt` | mqtt-mtd |
 | `VulnApp` | attack | guest | hmi · `kathara/cps` | cps |
+| `EwsMaintenance` | attack | guest | ews · `kathara/cps` | cps |
 | `ScriptedChain` | attack | host → guest | attacker · `kathara/cps` | cps |
 | `PlannedAttacker` | attack | guest + host | attacker · `kathara/cps` | cps |
 | `RedConsole` | attack | guest + host | attacker · `kathara/cps` | cps-advisor (`--teams`) |
@@ -218,6 +219,20 @@ a command injection. It is the attacker's foothold in the CPS scenario. With
 | **Starts** | `python3 vuln_app.py --host 0.0.0.0 --port P [--access-log PATH]` |
 | **Artifacts** | `<node>.vuln_app.log`; `<node>.<basename(access_log)>` when logging |
 
+### `EwsMaintenance(node, port, client, client_ip, url, token)`
+
+The engineering workstation's remote-maintenance service: an HTTP endpoint that
+runs a command for whoever presents `token`, and serves `client_ip` only. On
+start it also writes the credential (`url`, `token`) to `/etc/ews-maint.conf`
+on `client`, the host its operators work from. Nothing is wrong with the
+service: its credential lives on a host that can be taken, and that is the way
+from the HMI onto the workstation, which stands on the OT link.
+
+| | |
+|---|---|
+| **Starts** | `python3 ews_maint.py --port P --token T --allow CLIENT_IP --access-log /ews_maint.access.jsonl` |
+| **Artifacts** | `<node>.ews_maint.log`, `<node>.ews_maint.access.jsonl`; `<node>.ot_mitm.jsonl` when an attack stood between the PLC and the engine (what the engine said, what the PLC was given) |
+
 ### `ScriptedChain(mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5)`
 
 The fixed chain of one attack mode: RCE on the web app, then a pivot from the
@@ -232,6 +247,7 @@ runs on the attacker node.
 | `slow-ramp` | control mode MANUAL, then the setpoint from nominal to 60 kW in 1 kW steps | The hijack's impact, reached with no single jump |
 | `setpoint-oscillation` | control mode MANUAL, then the setpoint swung between 55 and 5 kW | The feeder voltage swings while the attacker writes |
 | `breaker-chatter` | feeder breaker opened and re-closed repeatedly, ending open | Load de-energized and re-energized over and over |
+| `meas-fdi` | none: from the engineering workstation, the voltages the PLC reads are falsified (`ot_mitm.py`) | The PLC overvolts the feeder with its own writes, for as long as it is lied to |
 
 | | |
 |---|---|
@@ -256,7 +272,7 @@ closes its path, it tries another branch, or stops.
 | `profile` | Chooses |
 |---|---|
 | `opportunistic` | the reachable impact with the highest impact first |
-| `targeted` | only `goal` (`setpoint_oor`, `breaker_open`, `mode_hijack`, `setpoint_ramp`, `setpoint_oscillation` or `breaker_chatter`; required) |
+| `targeted` | only `goal` (`setpoint_oor`, `breaker_open`, `mode_hijack`, `setpoint_ramp`, `setpoint_oscillation`, `breaker_chatter` or `meas_fdi`; required) |
 | `stealthy` | the least detectable reachable impact first |
 
 | | |
@@ -483,7 +499,8 @@ voltage chart draws.
 
 ```
 services     WazuhManager → OtSensor → PhysicalProcess → (2 s) → PlcController → HmiClient
-             → VulnApp [→ ItSensor] → WazuhAgent × 3 (sensor, hmi, firewall)
+             → VulnApp → EwsMaintenance [→ ItSensor]
+             → WazuhAgent × 4 (sensor, hmi, firewall, ews)
              → SocAnalytics(inventory, policy, it=…)        always; acts with --respond
 monitor      PlantMirror, TelemetryMirror
 normal       ctx.observe(normal_duration)                   the model calibrates here

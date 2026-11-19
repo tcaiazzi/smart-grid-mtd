@@ -6,19 +6,26 @@ management network of the security tooling.
       hmi      10.10.0.20       (FORWARD DROP,      engine 10.20.0.20
         |                         HMI->engine Modbus  sensor eth0 (passive)
         |                         allowed)              |
+      ews      10.10.0.30 ......................... ews    10.20.0.30
     MGMT 10.30.0.0/24 ---------------------------------------------------
       hmi eth1 10.30.0.30   firewall eth2 10.30.0.1   sensor eth1 10.30.0.10
-      soc      10.30.0.20
+      soc      10.30.0.20   ews eth2 10.30.0.40
 
 The attacker cannot reach the engine directly: it must compromise the HMI and
 pivot from it, so its writes come from an allowed host. The sensor has a
 passive NIC on the OT link (it sees the Modbus traffic) and no address there.
 
+The engineering workstation (ews) stands on both IT and OT, as the machine that
+programs a PLC does. It forwards nothing and speaks no Modbus of its own, so the
+boundary holds and the plant's traffic is the same with it; but whoever takes it
+is on the OT link, next to the PLC and the engine, without crossing the firewall.
+
 MGMT is the in-band management network: the hosts that report findings or
-enforce countermeasures sit on it next to the SOC. The HMI is dual-homed, which
-makes it the one way in for an attacker — the firewall forwards nothing to or
-from MGMT. The engine and the PLC are deliberately not on it: a host sharing a
-network with the engine could write to it without crossing the boundary.
+enforce countermeasures sit on it next to the SOC. The HMI and the workstation
+are on it as well as on IT, which makes them the ways in for an attacker — the
+firewall forwards nothing to or from MGMT. The engine and the PLC are
+deliberately not on it: a host sharing a network with the engine could write to
+it without crossing the boundary — which is what the workstation, on OT, can do.
 
 What the experiment itself reads (ledger, dashboard, artifacts) never travels
 on a lab network: it goes through the container runtime, so no node can see it.
@@ -34,6 +41,7 @@ from cyberrange.scenarios.cps.guest_files import (
     ENGINE_FILES,
     FW_FILES,
     HMI_FILES,
+    EWS_FILES,
     PLC_FILES,
     SENSOR_FILES,
     SOC_FILES,
@@ -47,19 +55,23 @@ IT, OT, MGMT = "IT", "OT", "MGMT"
 # Addresses
 ATTACKER_IP = "10.10.0.10"
 HMI_IP = "10.10.0.20"
+EWS_IP = "10.10.0.30"
 FW_IT_IP = "10.10.0.1"
 FW_OT_IP = "10.20.0.1"
 PLC_IP = "10.20.0.10"
 ENGINE_IP = "10.20.0.20"
+EWS_OT_IP = "10.20.0.30"
 # MGMT stays numerically above IT and OT: the knowledge graph lists a host's
 # addresses in string order and takes the first as its primary one.
 FW_MGMT_IP = "10.30.0.1"
 SENSOR_MGMT_IP = "10.30.0.10"
 SOC_IP = "10.30.0.20"
 HMI_MGMT_IP = "10.30.0.30"
+EWS_MGMT_IP = "10.30.0.40"
 IT_NET, OT_NET, MGMT_NET = "10.10.0.0/24", "10.20.0.0/24", "10.30.0.0/24"
 MODBUS_PORT = 5020
 APP_PORT = 8080
+MAINT_PORT = 8081  # the workstation's remote-maintenance service
 DASHBOARD_GUEST_PORT = 8080
 # What a team's node serves to the people of the team, when a scenario puts
 # people in the lab: its console and its web terminal.
@@ -70,6 +82,7 @@ TERMINAL_GUEST_PORT = 8091
 ADDRESSES = {
     "attacker": {"eth0": f"{ATTACKER_IP}/24"},
     "hmi": {"eth0": f"{HMI_IP}/24", "eth1": f"{HMI_MGMT_IP}/24"},
+    "ews": {"eth0": f"{EWS_IP}/24", "eth1": f"{EWS_OT_IP}/24", "eth2": f"{EWS_MGMT_IP}/24"},
     "firewall": {"eth0": f"{FW_IT_IP}/24", "eth1": f"{FW_OT_IP}/24", "eth2": f"{FW_MGMT_IP}/24"},
     "plc": {"eth0": f"{PLC_IP}/24"},
     "engine": {"eth0": f"{ENGINE_IP}/24"},
@@ -81,7 +94,7 @@ ADDRESSES = {
 # Hosts that run a Wazuh agent, with the id the manager knows each by. The
 # engine and the PLC have none: the plant is watched from the wire and acted on
 # from the boundary.
-WAZUH_AGENTS = {"sensor": "001", "hmi": "002", "firewall": "003"}
+WAZUH_AGENTS = {"sensor": "001", "hmi": "002", "firewall": "003", "ews": "004"}
 
 
 def sensor_rules():
@@ -127,6 +140,12 @@ def firewall_rules():
         "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
         f"iptables -A FORWARD -s {HMI_IP} -d {ENGINE_IP} -p tcp --dport {MODBUS_PORT} -j ACCEPT",
     ]
+
+
+def ews_rules():
+    """The workstation is no router. Every container forwards by default, and
+    with two feet it would carry IT straight onto OT, around the boundary."""
+    return ["iptables -P FORWARD DROP"]
 
 
 def topology(args, name=LAB_NAME, extras=None) -> Topology:
@@ -179,6 +198,14 @@ def _nodes(dashboard, extras):
             files=HMI_FILES,
         ),
         Node(
+            "ews",
+            [Iface(IT, addr("ews", 0)), Iface(OT, addr("ews", 1)), Iface(MGMT, addr("ews", 2))],
+            role="engineering",
+            routes=gw(FW_IT_IP),
+            startup=ews_rules(),
+            files=EWS_FILES,
+        ),
+        Node(
             "firewall",
             [
                 Iface(IT, addr("firewall", 0)),
@@ -228,5 +255,6 @@ def services():
     """Exposed services per machine: (name, proto, port, app)."""
     return {
         "hmi": [("diag-http", "tcp", APP_PORT, "http")],
+        "ews": [("maint-http", "tcp", MAINT_PORT, "http")],
         "engine": [("modbus", "tcp", MODBUS_PORT, "modbus")],
     }

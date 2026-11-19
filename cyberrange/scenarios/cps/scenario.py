@@ -15,6 +15,7 @@ Composition (plane components):
 
 import os
 import logging
+import random
 import time
 
 from cyberrange.planes.attack import components as attack
@@ -34,6 +35,7 @@ ATTACK_MODES = (
     "slow-ramp",
     "setpoint-oscillation",
     "breaker-chatter",
+    "meas-fdi",
 )
 PROFILES = ("opportunistic", "targeted", "stealthy")
 GOALS = (
@@ -43,6 +45,7 @@ GOALS = (
     "setpoint_ramp",
     "setpoint_oscillation",
     "breaker_chatter",
+    "meas_fdi",
 )
 RESPONSE_POLICIES = ("off", "rules", "solver")
 LEARN_MARGIN_S = 5.0  # the model's calibration must end this long before the attack
@@ -51,6 +54,12 @@ ACCESS_LOG = "/vuln_app.access.jsonl"
 # with the durations it observed in earlier runs of the same ledger).
 OVERHEAD_S = {"deploy": 3.0, "services": 2.1, "attack": 4.0, "download": 0.5, "undeploy": 1.0}
 SERVICE_SETTLE_S = 2.0  # engine up before its Modbus clients connect
+
+
+def maint_token(seed):
+    """The workstation's maintenance credential: the same in every run of a
+    seed, so a seeded run replays; random in an unseeded one."""
+    return random.Random(seed).getrandbits(128).to_bytes(16, "big").hex()
 
 
 def attack_label(args):
@@ -342,6 +351,16 @@ class CpsScenario(Scenario):
                 )
             )
             ctx.start(attack.VulnApp("hmi", T.APP_PORT, access_log=ACCESS_LOG if it else None))
+            ctx.start(
+                attack.EwsMaintenance(
+                    "ews",
+                    T.MAINT_PORT,
+                    client="hmi",
+                    client_ip=T.HMI_IP,
+                    url=f"http://{T.EWS_IP}:{T.MAINT_PORT}",
+                    token=maint_token(ctx.role_seed("ews-maint")),
+                )
+            )
             if it:
                 ctx.start(
                     defense.ItSensor("hmi", T.ENGINE_IP, T.MODBUS_PORT, ACCESS_LOG, a.learn_seconds)

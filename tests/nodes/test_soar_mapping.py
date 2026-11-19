@@ -135,6 +135,17 @@ class Mapping(unittest.TestCase):
         )
         self.assertEqual(self.confirmed_leaves(snap), ["breaker_chatter", "breaker_open"])
 
+    def test_spoofing_is_the_position_and_conflict_the_falsification(self):
+        snap = self.run_findings(
+            [finding("address_spoofing", 1.0, "10.20.0.30", None, conf=0.95, address=PLC)]
+        )
+        self.assertEqual(snap["nodes"]["ot_aitm"]["state"], mapping.CONFIRMED)
+        self.assertEqual(snap["nodes"]["ot_foothold"]["state"], mapping.INFERRED)
+        self.assertEqual(self.confirmed_leaves(snap), [], "a position is not yet an impact")
+        self.assertEqual(snap["hosts_implicated"], ["ews"])
+        snap = self.run_findings([finding("conflicting_reading", 2.0, None, None, conf=0.95)])
+        self.assertEqual(self.confirmed_leaves(snap), ["meas_fdi"])
+
     def test_prerequisites_inferred(self):
         snap = self.run_findings(
             [finding("out_of_range_command", 1.0, HMI, "dg_setpoint", value=200.0)]

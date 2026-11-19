@@ -42,6 +42,7 @@ IMPACT_LEAVES = (
     "setpoint_ramp",
     "setpoint_oscillation",
     "breaker_chatter",
+    "meas_fdi",
 )
 # An unsafe in-range setpoint write, read by how far it moved the setpoint: a
 # step this small is a ramp, a drop this large is the falling half of a swing.
@@ -112,6 +113,10 @@ def evidence_from_finding(f, g):
         return [("ot_write_unknown", conf, COMMAND)]
     if klass == "unauthorized_read":
         return [("ot_write_unknown", 0.5 * conf, COMMAND)]
+    if klass == "address_spoofing":
+        return [("ot_aitm", conf, COMMAND)]
+    if klass == "conflicting_reading":
+        return [("meas_fdi", conf, COMMAND)]
     if klass == "out_of_range_command":
         leaf = "breaker_open" if name == "switch_cmd" else "setpoint_oor"
         return [(leaf, conf, COMMAND)]

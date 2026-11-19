@@ -3,6 +3,7 @@
 Every attack records what it really did in the run's ground truth (host-only):
 
     VulnApp              the deliberately vulnerable diagnostics web app (CPS foothold)
+    EwsMaintenance       the workstation's maintenance service, its credential on the HMI
     ScriptedChain        fixed per-mode chain: RCE -> pivot -> unauthorized Modbus writes
     PlannedAttacker      reactive, tree-guided attacker, run in the lab (red_agent.py)
     RedConsole           the same steps, run by a person from a console on the attacker
@@ -49,6 +50,38 @@ class VulnApp(GuestAgent):
             name="vuln_app",
             artifacts=arts,
         )
+
+
+class EwsMaintenance(GuestAgent):
+    """The engineering workstation's remote-maintenance service, and the
+    credential for it in a configuration file on ``client`` — the host its
+    operators work from. Whoever executes code on the client can read it: that
+    is the way onto the workstation, and from there onto the OT link."""
+
+    SCRIPT = "ews_maint.py"
+    CONF = "/etc/ews-maint.conf"  # exploit_client.MAINT_CONF reads it
+    ACCESS_LOG = "/ews_maint.access.jsonl"
+    MITM_LOG = "/ot_mitm.jsonl"  # left by ot_mitm.py when the attack stands in the middle
+
+    def __init__(self, node, port, client, client_ip, url, token):
+        self.client, self.url, self.token = client, url, token
+        super().__init__(
+            node,
+            f"python3 {self.SCRIPT} --port {port} --token {token} --allow {client_ip} "
+            f"--access-log {self.ACCESS_LOG}",
+            "ews_maint.log",
+            plane=PLANE,
+            name="ews_maint",
+            artifacts=[
+                Artifact(node, self.ACCESS_LOG, f"{node}.{os.path.basename(self.ACCESS_LOG)}"),
+                Artifact(node, self.MITM_LOG, f"{node}.{os.path.basename(self.MITM_LOG)}"),
+            ],
+        )
+
+    def start(self, ctx):
+        conf = f"url={self.url}\\ntoken={self.token}\\n"
+        ctx.run(self.client, f"sh -c \"printf '{conf}' > {self.CONF}\"", wait=True)
+        super().start(ctx)
 
 
 def emit_attack_writes(ctx):

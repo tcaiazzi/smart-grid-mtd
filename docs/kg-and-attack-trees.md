@@ -208,7 +208,7 @@ A tree is made of `trees.Node` objects:
 
 ### 3.2 The CPS tree
 
-`cps_attack_tree(g)` returns 15 nodes, 11 of them leaves:
+`cps_attack_tree(g)` returns 19 nodes, 13 of them leaves:
 
 ```
 impact  OR  Physical impact on the feeder
@@ -225,18 +225,32 @@ impact  OR  Physical impact on the feeder
 │       ├── setpoint_oscillation  T0831  impact 0.7   → reg:hr:2, reg:hr:0   MANUAL taken, setpoint swung between levels
 │       └── breaker_chatter  T0855  impact 0.85  → reg:hr:1   feeder breaker opened and re-closed repeatedly
 └── direct_ot  AND  From a host without a Modbus role
-    ├── ot_foothold        precondition: a host outside the Modbus roles reaches engine:5020
+    ├── ot_foothold        T0886 Remote Services
+    │                      precondition: a host outside the Modbus roles reaches engine:5020
+    └── ot_direct_action  OR  Act on the plant from that host
+        ├── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
+        └── via_aitm  AND  Between the PLC and the plant
+            ├── ot_aitm    T0830 Adversary-in-the-Middle             → svc:engine/modbus
+            └── meas_fdi   T0856  impact 0.9   → reg:ir:0, reg:ir:1   measurements falsified on their way to the PLC
     └── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
 ```
 
 The tree has two branches:
 - `via_hmi` is the chain the lab's attacks follow: exploit the HMI's web app,
   execute on it, use the one flow the firewall allows, then write to the plant.
-- `direct_ot` is **infeasible in the lab as built**, because no host outside
-  the Modbus roles reaches the plant. It is kept because the sensor's
-  `unauthorized_*` findings need a node to land on, and because it becomes
-  feasible as soon as the graph says so (for example if a rule lets the
-  attacker through).
+- `direct_ot` is the way that does not cross the boundary: a host with no
+  Modbus role that reaches the plant. In the lab that host is the engineering
+  workstation, on IT and on OT, reached from the HMI with the maintenance
+  credential kept there. From it the attacker can write to the plant as an
+  unknown client (`ot_write_unknown`, where the sensor's `unauthorized_*`
+  findings land), or stand between the PLC and the engine (`ot_aitm`) and
+  falsify what the PLC reads (`meas_fdi`). Without such a host on the graph the
+  branch is infeasible.
+
+The tree does not say that the workstation is reached *through the HMI*: a tree
+cannot share `it_access` and `it_exec` between two branches. That dependency is
+a fact of how the lab realises the step, and lives with the steps
+(`nodes/redteam/steps.py`, `REQUIRES`).
 
 ### 3.3 Grounding on the graph
 
@@ -261,8 +275,9 @@ The tree is hand-written but **graph-grounded**:
   - an OR node when any of its children is.
 
   If you drop the allow rule from `firewall_rules()`, `pivot` becomes
-  infeasible, `via_hmi` with it, and with `direct_ot` already infeasible so does
-  the root. `test_rule_removal_cuts_the_path` and
+  infeasible and `via_hmi` with it; the root stays feasible through
+  `direct_ot`, which the boundary rules do not close. Take the workstation out
+  of the inventory as well and nothing reaches the plant. `test_rule_removal_cuts_the_path` and
   `test_without_allow_rule_the_pivot_is_infeasible` check exactly this.
 
 ### 3.4 Operations on a tree
@@ -298,6 +313,8 @@ two lists keep them apart. The solver depends on the difference (§6.2).
 | `notify` | — | — | — | 0 | 0 | 0 | | 90 |
 | `block_flow` | firewall | pivot + the 6 impact leaves | — | 0.5 | 0.5 | 0.01 | | 10 |
 | `isolate_hmi` | hmi | it_access, it_exec, pivot + leaves | — | 0.5 | 0.8 | 0.01 | **yes** | 20 |
+| `isolate_ews` | ews | ot_write_unknown, ot_aitm, meas_fdi | — | 0.5 | 0.3 | 0.01 | | 15 |
+| `repair_arp` | firewall | — | ot_aitm, meas_fdi | 1.0 | 0.05 | 0.01 | | 16 |
 | `force_auto` | firewall | — | mode_hijack, setpoint_oor, setpoint_ramp, setpoint_oscillation | 1.0 | 0.1 | 0.02 | | 30 |
 | `restore_breaker` | firewall | — | breaker_open, breaker_chatter | 1.0 | 0.1 | 0.02 | | 40 |
 | `kill_proc_tree` *(IT)* | hmi | it_exec, pivot + leaves | — | 0.3 | 0.15 | 0.01 | | 5 |
@@ -316,9 +333,28 @@ Notes on the table:
   of its features. Modbus has no authentication, so the role is an address:
   whoever controls the firewall writes to the plant unseen. From IT that address
   cannot be used — the FORWARD chain passes the HMI's source only.
-- **Costs.** `time_to_effect_s`, `op_cost` (operational disruption, 0..1) and
-  `energy_cost` are nominal values that the solver weighs. `block_flow` costs
-  0.5 because it also cuts the operator's legitimate HMI control.
+- **Operational cost.** What a countermeasure takes from the people who run
+  the plant is read off the graph, not written by hand. `kg.functions(g)` lists
+  what the lab legitimately does: a role's control of a register (a `may_write`
+  edge, held while the host reaches the plant) and a host's presence on a
+  network. A countermeasure declares its `effect` on the graph
+  (`["drop", …]`, a DROP at the boundary; `["detach", host, iface]`, an
+  interface down), and its `cuts` are the functions that `kg.with_effects`
+  removes. A cut control weighs 0.25 per register and a cut presence 0.3
+  (`FUNCTION_WEIGHTS`): `block_flow` costs 0.5 because it takes the operator's
+  control of the mode and of the setpoint, `isolate_hmi` 0.8 because it takes
+  the same two and the HMI's place on IT, `isolate_ews` 0.3. `op_cost` is what
+  remains for the others: the disturbance of running, once, an action that
+  cuts nothing (0.05 to 0.2).
+- **Time.** `time_to_effect_s` is measured in the lab. Every countermeasure
+  takes `DISPATCH_S` = 0.1 s from the SOC's request to its outcome on the host,
+  a round figure for what 60 applications measured (median 0.07 s, quartiles
+  0.05 and 0.26 s). Three take longer:
+  `force_auto` 0.35 s more, the plant's return in band (16 runs);
+  `restore_breaker` 0.2 s more (2 runs); `repair_arp` 2.3 s more, its own
+  resolving and sending (1 run). A campaign's `summary.md` reports both times
+  per countermeasure ("Countermeasure times").
+- **Energy.** `energy_cost` is still a hand-set value.
 - **IT-side actions.** They exist only with `it=True`, that is with the IT
   sensor running. Without it the early steps are never observed, so nothing
   could justify acting on them.
@@ -395,6 +431,8 @@ of evidence:
 | `out_of_range_command` | rules | `breaker_open` if the register is `switch_cmd`, else `setpoint_oor`; command |
 | `policy_violation` on `switch_cmd` | rules | `breaker_open` when it opens, `breaker_chatter` when it re-closes; command (other registers: `ot_action`) |
 | `unauthorized_write*` / `unauthorized_read` | rules | `ot_write_unknown`, command (reads at half weight) |
+| `address_spoofing` | rules | `ot_aitm`, command |
+| `conflicting_reading` | rules | `meas_fdi`, command |
 | `unsafe_command` from the PLC | rules | **nothing**: the regulator reacting to an excursion is a symptom, not a step |
 | `unsafe_command` on `dg_setpoint` | rules | outside the envelope → `setpoint_oor`; inside it, by how far the write moved the setpoint (`evidence.prev`): at most `RAMP_STEP_MAX_KW` → `setpoint_ramp`, a drop of `SWING_MIN_KW` or more → `setpoint_oscillation`, anything else → `mode_hijack`; consequence |
 | `unsafe_command` on `switch_cmd` / `ctrl_mode` | rules | `breaker_open` / `mode_hijack`; consequence |
@@ -518,6 +556,13 @@ A fixed playbook keyed on **confirmed** nodes:
 | `setpoint_ramp` | `block_flow`, `force_auto` |
 | `setpoint_oscillation` | `block_flow`, `force_auto` |
 | `breaker_chatter` | `block_flow`, `restore_breaker` |
+| `ot_aitm` | `isolate_ews`, `repair_arp` (at the position already, before a reading is falsified) |
+| `meas_fdi` | `isolate_ews`, `repair_arp` |
+
+`repair_arp` runs after the isolation: the boundary device, which was never
+lied to, sends the PLC and the engine each other's true address. Without it the
+two keep sending to a host that is gone until their caches expire, and the PLC
+regulates nothing in the meantime (48 s in a measured run).
 
 If nothing is confirmed and nothing has been applied yet, the policy notifies
 the operator once and does nothing else.
@@ -529,16 +574,27 @@ The solver tries every subset of the allowed, not-yet-applied countermeasures
 one with the lowest cost:
 
 ```
-J(A) = residual + future + 1.0·op + 0.05·time + 0.5·energy
+J(A) = residual + future + time + 1.0·op + 0.5·energy
 
 residual = Σ over impact leaves NOT restored by A        score(leaf) · impact(leaf)
 future   = 0 if A prevents pivot, else score(pivot) · max impact of the leaves A does not prevent
-op, energy = sums over the new actions;  time = the slowest new action's time_to_effect_s
+time     = Σ over what the new actions restore or cut    its loss · min(1, 0.05 · delay)
+op       = weight of the functions cut by A and not cut already + Σ op_cost of the new actions
+energy   = Σ energy_cost of the new actions
+
+delay    = time_to_effect_s of the quickest new action covering it,
+           plus the approval delay if that action waits for one (§6.3)
 ```
 
 - **What it trades off.** `residual` is the damage under way that nothing
   undoes. `future` is what the attacker can still do while holding the path.
-  The other terms are the price of acting. Ties go to the smaller subset.
+  `time` is the part of a loss still suffered before the action that removes
+  it bites: 5% of it per second, never more than all of it, so that acting
+  late is never worse than not acting. `op` and `energy` are the price of
+  acting. Ties go to the smaller subset.
+- **A function is lost once.** `block_flow` and `isolate_hmi` both take the
+  operator's control of the plant. Together they cost 0.8, not 1.3, and with
+  `block_flow` in effect `isolate_hmi` costs the 0.3 it adds.
 - **Causal pairing.** A subset that restores a believed impact leaf must also
   prevent that leaf or one of its prerequisites, whenever some allowed action
   could. Restoring alone repairs the effect and leaves the attacker in place.
@@ -550,9 +606,9 @@ op, energy = sums over the new actions;  time = the slowest new action's time_to
 In the example above, the solver's first decision does the following:
 - **No action:** J = 1.158. `residual` = 0.463·0.6 + 0.463·0.9 = 0.695, and
   `future` = 0.463·1.0 = 0.463.
-- **`force_auto` alone** would be cheapest, at J = 0.623, but it is excluded by
+- **`force_auto` alone** would be cheapest, at J = 0.589, but it is excluded by
   causal pairing.
-- **Chosen:** `block_flow` + `force_auto`, J = 0.665 (op 0.6, time 1.0 s,
+- **Chosen:** `block_flow` + `force_auto`, J = 0.633 (time 0.018, op 0.6,
   energy 0.03).
 
 ### 6.3 Approval
@@ -561,7 +617,9 @@ In the example above, the solver's first decision does the following:
 `--approval` controls it:
 - `auto` applies it;
 - `deny` removes it from what the policies may choose;
-- `delay:<s>` queues it, and the SOC requests it after the delay.
+- `delay:<s>` queues it, and the SOC requests it after the delay. The solver
+  counts the wait against it: with 20 s or more, what it would prevent is
+  taken as already lost, and it is no longer proposed.
 
 `operator:<s>` is a different regime, the one of the `cps-advisor` scenario
 (`docs/scenario-cps-advisor.md`): **every** countermeasure, not only
@@ -691,7 +749,9 @@ changing a constant. To see the effect on real data, replay recorded runs with
   true of the OT sensor but not with the IT sensor running. Nothing reads it
   except the dashboard.
 - **The graph and the tree are fixed for the whole run.** Applied
-  countermeasures are not reflected in `reachable` or `feasible` (§4).
+  countermeasures are not reflected in `reachable` or `feasible` (§4):
+  `kg.with_effects` builds the graph a countermeasure would leave, and only
+  the cost of the countermeasure is read from it.
 - **`reachable` sees only the boundary.** It ignores host firewalls and
   connection state, and only crosses zones through a host whose role is
   `boundary` (§2.4).
@@ -699,6 +759,11 @@ changing a constant. To see the effect on real data, replay recorded runs with
   `kg.from_json` have no caller.
 - **The ATT&CK mapping is a first pass.** `pivot` has no technique id yet, and
   `breaker_open` carries a review note (T0813/T0831 are also plausible).
-- **Costs are nominal.** `time_to_effect_s`, `op_cost` and `energy_cost` are
-  hand-set, not measured. The `action` records in `response.jsonl` (issued and
-  done times) are where measured values would come from.
+- **What the costs do not see.** The operational cost is the same whether the
+  operator is using the HMI or not, and does not grow with the time a
+  countermeasure stays in effect. Functions cut only by two countermeasures
+  together are not charged: the cost of a set is the union of what each cuts
+  alone. The wait for a person in `operator:<s>` is not counted: every action
+  shares it. The times of `restore_breaker`, `repair_arp` and the IT-side
+  actions rest on one or two runs. `energy_cost` and the two function weights
+  are hand-set.

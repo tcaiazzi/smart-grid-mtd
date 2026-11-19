@@ -82,6 +82,16 @@ HMI_FILES = [
     ("cyberrange/planes/defense/agents/mtd_telemetry.py", "/mtd_telemetry.py"),
 ] + WAZUH_AGENT_FILES
 
+# Engineering workstation, on IT and on OT. It carries the plant contract, as
+# the machine that programs the PLC would; the maintenance service the HMI's
+# operators reach it through; and the tool that an attacker who takes it uses
+# to stand between the PLC and the engine.
+EWS_FILES = [
+    ("cyberrange/planes/attack/agents/ews_maint.py", "/ews_maint.py"),
+    ("cyberrange/planes/attack/agents/ot_mitm.py", "/ot_mitm.py"),
+    ("cyberrange/planes/defense/ot_registers.py", "/ot_registers.py"),
+] + WAZUH_AGENT_FILES
+
 # Attacker node: drives the exploit over HTTP against the HMI host. The
 # autonomous attacker's brain runs here too (red_agent.py with the planner):
 # the exploit primitives it drives are already on this node, and the oracle

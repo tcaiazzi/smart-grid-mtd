@@ -26,7 +26,7 @@ class CPSKnowledgeGraph(unittest.TestCase):
             kg.hosts(self.g),
             [
                 f"host:{h}"
-                for h in ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"]
+                for h in ["attacker", "engine", "ews", "firewall", "hmi", "plc", "sensor", "soc"]
             ],
         )
         zones = sorted(n for n, d in self.g.nodes(data=True) if d["type"] == "zone")
@@ -78,6 +78,40 @@ class CPSKnowledgeGraph(unittest.TestCase):
         dst = [v for _, v, k in self.g.out_edges(r["id"], keys=True) if k == "dst"]
         self.assertEqual(dst, ["svc:engine/modbus"])
 
+    def test_functions_are_what_the_lab_does(self):
+        fs = kg.functions(self.g)
+        mode, setpoint = f"reg:hr:{reg.HR_CTRL_MODE}", f"reg:hr:{reg.HR_DG_SETPOINT}"
+        self.assertEqual(
+            {f for f in fs if f.startswith("write:")},
+            {f"write:hmi:{mode}", f"write:hmi:{setpoint}", f"write:plc:{setpoint}"},
+        )
+        self.assertIn("on:hmi:IT", fs)
+        self.assertNotIn("on:sensor:OT", fs, "a passive NIC is no presence to lose")
+        self.assertEqual(
+            kg.function_label(self.g, f"write:hmi:{mode}"), "hmi's control of ctrl_mode"
+        )
+
+    def test_a_drop_at_the_boundary_takes_the_hmi_control_only(self):
+        g2 = kg.with_effects(
+            self.g, [[kg.DROP, "firewall", cps.HMI_IP, cps.ENGINE_IP, cps.MODBUS_PORT]]
+        )
+        self.assertFalse(kg.reachable(g2, "hmi", "engine", cps.MODBUS_PORT))
+        lost = kg.functions(self.g) - kg.functions(g2)
+        self.assertEqual({f.split(":")[1] for f in lost}, {"hmi"}, lost)
+        self.assertTrue(all(f.startswith("write:") for f in lost), lost)
+        # The graph the SOC reasons on is the lab as it stands, not as a
+        # response it only weighed would leave it.
+        self.assertTrue(kg.reachable(self.g, "hmi", "engine", cps.MODBUS_PORT))
+
+    def test_an_interface_down_takes_the_presence_and_what_went_through_it(self):
+        g2 = kg.with_effects(self.g, [[kg.DETACH, "hmi", "eth0"]])
+        self.assertEqual(kg.addresses(g2, "hmi"), [(cps.HMI_MGMT_IP, "MGMT")])
+        lost = kg.functions(self.g) - kg.functions(g2)
+        self.assertIn("on:hmi:IT", lost)
+        self.assertEqual(len([f for f in lost if f.startswith("write:hmi:")]), 2, lost)
+        with self.assertRaises(ValueError):
+            kg.with_effects(self.g, [["reboot", "hmi"]])
+
     def test_reachability(self):
         P, A = cps.MODBUS_PORT, cps.APP_PORT
         self.assertTrue(kg.reachable(self.g, "hmi", "engine", P))  # sanctioned flow
@@ -94,16 +128,17 @@ class CPSKnowledgeGraph(unittest.TestCase):
             for h in kg.hosts(self.g)
             if "MGMT" in {z for _, z in kg.addresses(self.g, self.g.nodes[h]["name"])}
         )
-        self.assertEqual(on_mgmt, ["firewall", "hmi", "sensor", "soc"])
-        # The HMI is the only host with one foot in IT and one in MGMT besides
-        # the boundary device, which forwards nothing between them.
+        self.assertEqual(on_mgmt, ["ews", "firewall", "hmi", "sensor", "soc"])
+        # Besides the boundary device, which forwards nothing between them, the
+        # hosts with one foot in IT and one in MGMT are those an attacker can
+        # take that also report to the SOC: the HMI and the workstation.
         it_and_mgmt = [
             h
             for h in on_mgmt
             if "IT" in {z for _, z in kg.addresses(self.g, h)}
             and self.g.nodes[f"host:{h}"]["role"] != kg.BOUNDARY_ROLE
         ]
-        self.assertEqual(it_and_mgmt, ["hmi"])
+        self.assertEqual(it_and_mgmt, ["ews", "hmi"])
 
     def test_rule_removal_cuts_the_path(self):
         rules = [r for r in cps.firewall_rules() if "--dport" not in r]

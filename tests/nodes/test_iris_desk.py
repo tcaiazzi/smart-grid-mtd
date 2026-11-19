@@ -453,7 +453,9 @@ class TheLabInTheCase(unittest.TestCase):
         self.desk.publish(self.view())
         self.desk.publish(self.view())
         names = sorted(a["asset_name"] for a in self.iris.assets.values())
-        self.assertEqual(names, ["attacker", "engine", "firewall", "hmi", "plc", "sensor", "soc"])
+        self.assertEqual(
+            names, ["attacker", "engine", "ews", "firewall", "hmi", "plc", "sensor", "soc"]
+        )
         self.assertEqual(self.asset("firewall")["asset_type_id"], ASSET_TYPES["Firewall"])
         hmi = self.asset("hmi")
         self.assertEqual(hmi["asset_type_id"], ASSET_TYPES["Linux - Server"])

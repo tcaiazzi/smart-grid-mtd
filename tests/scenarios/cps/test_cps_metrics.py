@@ -11,7 +11,12 @@ import unittest
 from pathlib import Path
 
 
-from cyberrange.scenarios.cps.metrics import compute_metrics, format_report  # noqa: E402
+from cyberrange.scenarios.cps.metrics import (  # noqa: E402
+    _countermeasure_times,
+    aggregate,
+    compute_metrics,
+    format_report,
+)
 
 
 def _write(p, rows):
@@ -330,6 +335,53 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertAlmostEqual(r["decision_latency_s"], 0.4, places=3)
         self.assertAlmostEqual(r["hmi_unavailable_s"], end_t - (self.write_t + 1.0), places=3)
         self.assertIn("## Response (policy: rules", format_report(compute_metrics(str(self.d))))
+        # What the solver's time-to-effect is measured from. The impact lasts to
+        # the end of this run: nothing brought the plant back, so nothing settled.
+        self.assertEqual(
+            r["countermeasure_times"],
+            {
+                "block_flow": {"dispatch_s": 0.05, "settle_s": None},
+                "force_auto": {"dispatch_s": 0.1, "settle_s": None},
+            },
+        )
+
+    def test_the_plant_coming_back_is_owed_to_the_last_restore(self):
+        ran = [
+            {"kind": "action", "id": "block_flow", "ok": True, "issued_t": 10.0, "done_t": 10.1},
+            {
+                "kind": "action",
+                "id": "restore_breaker",
+                "ok": True,
+                "issued_t": 10.0,
+                "done_t": 10.2,
+            },
+            {"kind": "action", "id": "force_auto", "ok": True, "issued_t": 11.0, "done_t": 11.3},
+            {"kind": "action", "id": "notify", "ok": True, "issued_t": 9.0, "done_t": 9.0},
+            # Decided by a replay, never run: it has no time of its own.
+            {
+                "kind": "action",
+                "id": "isolate_ews",
+                "ok": True,
+                "planned": True,
+                "issued_t": 1.0,
+                "done_t": 1.0,
+            },
+            {"kind": "action", "id": "repair_arp", "ok": False, "issued_t": 12.0, "done_t": 42.0},
+        ]
+        times = _countermeasure_times(ran, {"restore_breaker", "force_auto"}, 12.0)
+        self.assertEqual(set(times), {"block_flow", "restore_breaker", "force_auto"})
+        self.assertEqual(times["force_auto"], {"dispatch_s": 0.3, "settle_s": 0.7})
+        self.assertIsNone(times["restore_breaker"]["settle_s"])
+        self.assertIsNone(times["block_flow"]["settle_s"], "a block restores nothing")
+        rows = [
+            {"mode": "m", "seed": s, "metrics": {"response": {"countermeasure_times": times}}}
+            for s in (1, 2)
+        ]
+        table = {r["countermeasure"]: r for r in aggregate(rows)["countermeasures"]}
+        self.assertEqual(
+            (table["force_auto"]["runs"], table["force_auto"]["settle_median_s"]), (2, 0.7)
+        )
+        self.assertEqual(table["block_flow"]["settle_runs"], 0)
 
     def test_operator_metrics_when_the_soc_advised(self):
         t = self.write_t

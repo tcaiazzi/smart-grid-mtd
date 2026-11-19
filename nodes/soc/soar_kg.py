@@ -288,6 +288,91 @@ def reachable(g, src, dst, port, proto="tcp"):
     return False
 
 
+# ── What the lab does, and what a response takes from it ─────────────────────
+
+WRITE, PRESENCE = "write", "on"  # the kinds of function, an id's prefix
+DROP, DETACH = "drop", "detach"  # the kinds of effect
+
+
+def plant_service(g):
+    """The service that exposes the plant's registers (its node data), or None."""
+    for sid, d in sorted(g.nodes(data=True)):
+        if d["type"] == "service" and _out(g, sid, "exposes"):
+            return d
+    return None
+
+
+def functions(g):
+    """What the lab legitimately does on graph ``g``, as ids:
+
+        write:<host>:<register id>   a role's authority on a register (may_write),
+                                     held while the host reaches the plant's service
+        on:<host>:<zone>             a host's presence in a zone it has an address in
+
+    The set a response is charged against: what is here before it and gone
+    after it (``with_effects``) is what it costs the people who run the plant."""
+    out, plant = set(), plant_service(g)
+    for hid in hosts(g):
+        name = g.nodes[hid]["name"]
+        out.update(f"{PRESENCE}:{name}:{zone}" for _addr, zone in addresses(g, name))
+        writes = _out(g, hid, "may_write")
+        if writes and plant and reachable(g, name, plant["host"], plant["port"], plant["proto"]):
+            out.update(f"{WRITE}:{name}:{r}" for r in writes)
+    return out
+
+
+def function_label(g, function):
+    """A function id as a person reads it."""
+    kind, host, what = function.split(":", 2)
+    if kind == WRITE:
+        return f"{host}'s control of {g.nodes[what]['name']}"
+    return f"{host} on the {what} network"
+
+
+def with_effects(g, effects):
+    """A copy of ``g`` as it is while a response is in effect. An effect is data,
+    so that it can be written next to the commands that produce it:
+
+        ["drop", boundary, src, dst, port]   a DROP at the top of the boundary's
+                                             FORWARD chain (addresses, tcp)
+        ["detach", host, iface]              the host's interface taken down
+    """
+    g2 = g.copy()
+    for kind, *args in effects:
+        if kind == DROP:
+            boundary, src, dst, port = args
+            first = min((r["order"] for r in flow_rules(g2, boundary)), default=0)
+            rid = f"rule:{boundary}:{DROP}:{first - 1}"
+            g2.add_node(
+                rid,
+                type="flow_rule",
+                order=first - 1,
+                action="DROP",
+                src=src,
+                dst=dst,
+                proto="tcp",
+                dport=int(port),
+            )
+            _edge(g2, f"host:{boundary}", rid, "enforces")
+        elif kind == DETACH:
+            host, iface = args
+            hid = f"host:{host}"
+            g2.remove_nodes_from(
+                [i for i in _out(g2, hid, "has_ip") if g2.nodes[i]["iface"] == iface]
+            )
+            g2.remove_edges_from(
+                [
+                    (u, v, k)
+                    for u, v, k, d in g2.out_edges(hid, keys=True, data=True)
+                    if k == "in_zone" and d.get("iface") == iface
+                ]
+            )
+        else:
+            # An effect nobody models would be charged as if it cost nothing.
+            raise ValueError(f"unknown effect {kind!r}")
+    return g2
+
+
 # ── Serialization ────────────────────────────────────────────────────────────
 
 

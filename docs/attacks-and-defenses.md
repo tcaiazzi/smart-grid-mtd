@@ -26,7 +26,10 @@ line breaker (loud, stays open until reclosed), and taking manual control then
 writing a high-but-legal setpoint (quiet, the PLC does not correct it). Three more
 vary their writes over time: ramping the setpoint up in small steps (the quietest),
 swinging it between two legal levels, and opening and re-closing the breaker over
-and over. The
+and over. One writes nothing at all: from the engineering workstation, which
+stands on the plant's own link, the attacker gets between the PLC and the engine
+and falsifies the voltages the PLC reads, so that the PLC overvolts the feeder
+itself. The
 [playground guide](playground-red-vs-blue.md) lays them out for players.
 
 ### MQTT smart grid

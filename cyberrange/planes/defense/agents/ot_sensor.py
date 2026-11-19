@@ -53,7 +53,9 @@ except Exception:  # dashboard is optional
     DashboardServer = None
 
 ETH_P_ALL = 0x0003
-ETHERTYPE_IPV4 = 0x0800
+ETHERTYPE_IPV4, ETHERTYPE_ARP = 0x0800, 0x0806
+SPOOF_REPEAT_S = 5.0  # a standing address conflict is reported again this often
+ANSWERED_KEEP_S = 5.0  # how long a reading is remembered, to meet its second version
 IPPROTO_TCP = 6
 TCP_SYN, TCP_ACK = 0x02, 0x10
 
@@ -445,6 +447,9 @@ class OTSensor:
         self.detectors = set(detectors)
         self.rules = ProcessRules()
         self._pending = {}  # (client_ip, client_port, txn) -> (fc, address, t)
+        self._answered = {}  # same key -> (fc, address, words, t) of the reading served
+        self._mac_of = {}  # ip -> the MAC that first spoke for it
+        self._spoof_told = {}  # (ip, mac) -> when the conflict was last reported
         self._alerts = {}  # key -> {"klass","last_t","detector"}
         self.learn_seconds = float(learn_seconds)
         self._t0 = None
@@ -508,12 +513,21 @@ class OTSensor:
         if self._t0 is None:
             self._t0 = now
         eth = parse_ethernet(frame)
-        if not eth or eth[0] != ETHERTYPE_IPV4:
+        if not eth:
+            return
+        if eth[0] == ETHERTYPE_ARP and len(eth[1]) >= 28:
+            # An ARP sender states its own address: how a host that has sent no
+            # IP frame yet is known, and so named when it speaks for another.
+            self._mac_of.setdefault(socket.inet_ntoa(eth[1][14:18]), frame[6:12])
+            return
+        if eth[0] != ETHERTYPE_IPV4:
             return
         ip = parse_ipv4(eth[1])
         if not ip or ip[0] != IPPROTO_TCP:
             return
         _proto, src, dst, l4 = ip
+        if "rules" in self.detectors:
+            self._check_speaker(now, src, dst, frame[6:12])
         tcp = parse_tcp(l4)
         if not tcp:
             return
@@ -530,6 +544,28 @@ class OTSensor:
                 self._on_request(now, src, dst, sport, adu)
             else:
                 self._on_response(now, src, dst, dport, adu)
+
+    def _check_speaker(self, t, src, dst, mac):
+        """An address is spoken for by one MAC. Frames carrying it from another
+        are somebody relaying, or posing as, that host."""
+        known = self._mac_of.setdefault(src, mac)
+        if known == mac:
+            return
+        if t - self._spoof_told.get((src, mac), float("-inf")) < SPOOF_REPEAT_S:
+            return
+        self._spoof_told[(src, mac)] = t
+        owner = next((ip for ip, m in self._mac_of.items() if m == mac and ip != src), None)
+        f = _finding(
+            "address_spoofing",
+            ["address_spoofing"],
+            0.95,
+            owner,
+            dst,
+            None,
+            None,
+            {"address": src, "expected_mac": known.hex(":"), "seen_mac": mac.hex(":"), "ts": t},
+        )
+        self._emit(f, t, key=("rules", "address_spoofing", src))
 
     def _on_request(self, t, src, dst, sport, adu):
         fc, unit = adu["fc"], adu["unit"]
@@ -583,13 +619,17 @@ class OTSensor:
             self._emit(f, t)
 
     def _on_response(self, t, src, dst, dport, adu):
-        pend = self._pending.pop((dst, dport, adu["txn"]), None)
+        key = (dst, dport, adu["txn"])
+        pend = self._pending.pop(key, None)
         if pend is None:
+            self._second_reading(t, src, dst, key, adu)
             return
         fc, address, _t_req = pend
         words = decode_read_response(adu)
         if words is None:
             return
+        self._answered = {k: v for k, v in self._answered.items() if t - v[3] <= ANSWERED_KEEP_S}
+        self._answered[key] = (fc, address, words, t)
         state = registers_to_state(fc, address, words)
         if not state:
             return
@@ -602,6 +642,34 @@ class OTSensor:
                 self._emit(f, t, key=key)
             if active is not None and ("manual_mode_excursion",) not in active:
                 self._clear(("rules", "manual_mode_excursion"), t)
+
+    def _second_reading(self, t, src, dst, key, adu):
+        """A response to a request already answered. The same words again is a
+        relay; different ones mean the client is being given a reading the
+        engine did not send. The first is taken as the engine's: it is the one
+        that came from the engine's own MAC."""
+        first = self._answered.get(key)
+        words = decode_read_response(adu)
+        if first is None or words is None or "rules" not in self.detectors:
+            return
+        fc, address, served, _t = first
+        if words == served:
+            return
+        f = _finding(
+            "conflicting_reading",
+            ["conflicting_reading"],
+            0.95,
+            None,
+            dst,
+            adu["unit"],
+            None,
+            {
+                "first": registers_to_state(fc, address, served),
+                "second": registers_to_state(fc, address, words),
+                "ts": round(t, 3),
+            },
+        )
+        self._emit(f, t, key=("rules", "conflicting_reading", dst))
 
     # ── model ────────────────────────────────────────────────────────────────
     def _model_finding(self, w_start, score, z, partial):

@@ -30,22 +30,29 @@ network for the security tooling:
   │ hmi       .0.20  │────▶│ FORWARD:    │───▶│ engine     10.20.0.20│
   │  (+ vulnerable   │     │ DROP except │    │  (digital twin +     │
   │   diagnostics)   │     │ HMI→engine  │    │   Modbus server)     │
+  │ ews       .0.30 ─┼─────┼─────────────┼────┼─ ews       10.20.0.30│
   └────────┬─────────┘     │ Modbus/TCP  │    └──────────┬───────────┘
            │ eth1          └──────┬──────┘               │ passive tap
            │ 10.30.0.30           │ eth2 10.30.0.1       ▼ sensor eth1 10.30.0.10
   ─────────┴──────────────────────┴──────────────────────┴──────────────
-        MGMT 10.30.0.0/24                       soc 10.30.0.20
+        MGMT 10.30.0.0/24          soc 10.30.0.20      ews eth2 10.30.0.40
 ```
 
 - **IT zone**: the operator's HMI/SCADA workstation and the attacker.
+- **Engineering workstation (`ews`)**: on IT and on OT at once, as the machine
+  that programs a PLC is. It forwards nothing (`FORWARD DROP`) and speaks no
+  Modbus of its own, so the boundary holds and the plant's traffic is the same
+  with it. It runs a remote-maintenance service for the HMI's operators, whose
+  credential sits in a configuration file on the HMI. Whoever takes the
+  workstation is on the OT link, next to the PLC and the engine.
 - **OT zone**: the PLC and the physical engine — the plant's digital twin,
   exposed over Modbus/TCP. The sensor listens here on a passive interface with
   no address, without transmitting.
 - **Management network (MGMT)**: the in-band network of the security tooling.
   On it sit the hosts that report findings or enforce countermeasures (sensor,
-  HMI, firewall) and the SOC node. The firewall forwards nothing to or from it.
-  The **HMI is dual-homed**, so it is the one way in: an attacker who
-  compromises the HMI is on the management network. The engine and the PLC are
+  HMI, workstation, firewall) and the SOC node. The firewall forwards nothing
+  to or from it. The **HMI and the workstation are on IT as well**, so they are
+  the ways in: an attacker who compromises either is on the management network. The engine and the PLC are
   not on it — a host sharing a network with the engine could write to it
   without crossing the boundary.
 - **Boundary firewall**: drops all IT→OT traffic except one authorised flow,
@@ -69,7 +76,7 @@ traffic (a countermeasure is requested only when `CPS_RESPOND` is other than
 `off`):
 
 - the `soc` node runs the Wazuh **manager** (image `kathara/soc`);
-- sensor, HMI and firewall each run a Wazuh **agent**, registered with a
+- sensor, HMI, workstation and firewall each run a Wazuh **agent**, registered with a
   pre-shared key so that it reports as soon as the manager listens (about 8 s
   after the services start);
 - the sensor's agent ships every finding to the manager, which turns it into an
@@ -155,8 +162,12 @@ the action on the plant (`CPS_ATTACK_MODE`):
 | `setpoint-oscillation` | Takes MANUAL authority, then swings the DG setpoint between 55 and 5 kW | The feeder voltage swings with it for as long as the attacker writes | Medium: legal values from the HMI, but large repeated swings |
 | `breaker-chatter` | Opens and re-closes the feeder breaker over and over, ending open | The downstream section loses and regains supply repeatedly | Low: every write is a role-policy violation |
 
-The last three change their writes from one round to the next, on a schedule
-(`exploit_client.schedule`); the first three repeat one fixed sequence.
+| `meas-fdi` | From the HMI, reads the workstation's maintenance credential and takes the workstation; from there stands between the PLC and the engine (ARP poisoning, `ot_mitm.py`) and reports every voltage the PLC reads as 0.96 pu | The PLC, believing the voltage low, raises the DG setpoint cycle after cycle and overvolts the feeder **itself**. The effect ends when the falsification does | **No write of the attacker's**: the source, range and policy rules have nothing to judge. Seen only by the two rules below on addresses and readings |
+
+`slow-ramp`, `setpoint-oscillation` and `breaker-chatter` change their writes
+from one round to the next, on a schedule (`exploit_client.schedule`); the first
+three repeat one fixed sequence. `meas-fdi` does not use the HMI→engine flow at
+all, so blocking that flow does not stop it.
 
 Every attacker write is recorded with the instant it was issued (*ground
 truth*), and the detection metrics are computed against it.
@@ -175,7 +186,14 @@ run in parallel, and every finding says which one produced it.
 - role-policy violation — a write to the breaker, for instance;
 - *unsafe command*: a sensitive write followed by the observed voltage leaving
   the normal band;
-- *manual mode excursion*: the plant in MANUAL while out of band.
+- *manual mode excursion*: the plant in MANUAL while out of band;
+- *address spoofing*: an address seen from a MAC other than the one that first
+  spoke for it — somebody relaying, or posing as, that host. The finding names
+  the host the MAC belongs to;
+- *conflicting reading*: a second response to a request already answered, with
+  different values. The OT link floods, so the sensor sees a reading both before
+  and after a host in the middle rewrote it, and keeps judging the plant on the
+  first, which came from the engine's own MAC.
 
 **Behavioural model:**
 
@@ -385,7 +403,10 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
   the sanctioned HMI→plant flow → one of six impacts: setpoint out of range
   (T0855), breaker open (T0855), MANUAL hijack (T0831), setpoint ramp (T0831),
-  setpoint oscillation (T0831), breaker chatter (T0855). Preconditions are
+  setpoint oscillation (T0831), breaker chatter (T0855). A second branch goes
+  by a host on the plant's own link (the engineering workstation, T0886): an
+  unauthorized write from it (T0855), or the position between the PLC and the
+  engine (T0830) and the falsified measurements (T0856). Preconditions are
   checked on the graph, so removing the allow rule makes a branch infeasible.
   The ATT&CK mapping still has open review notes.
 - **Countermeasures**, the defence tree; each one *prevents* or *restores* tree

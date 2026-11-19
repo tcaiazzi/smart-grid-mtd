@@ -231,6 +231,7 @@ function suggestion(a) {
       ...row("why", x.rationale),
       ...row("cost", [cm.op_cost != null ? `operational ${num(cm.op_cost)}` : null, cm.energy_cost ? `energy ${num(cm.energy_cost)}` : null,
         cm.time_to_effect_s != null ? `effective in ${num(cm.time_to_effect_s, 1)} s` : null].filter(Boolean).join(" · ")),
+      ...row("interrupts", (cm.interrupts || []).join("; ")),
       ...row("proposed with", (x.decided_with || []).join(", "))),
     h("details", {}, h("summary", {}, "What it runs, and what else was considered"),
       ...(cm.commands || []).map(c => h("div", {}, h("code", {}, c))),

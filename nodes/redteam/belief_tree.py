@@ -14,7 +14,6 @@ scenario's guest_files.py). Stdlib only; reads the attacker's own vocabulary
 """
 
 import ot_registers as reg
-import steps as S
 
 AND, OR, LEAF = "AND", "OR", "LEAF"
 
@@ -83,13 +82,13 @@ def build(findings):
         discovered = set(reg.ACTUATOR_REGISTERS)
 
     prereqs = []
-    for node_id in S.PREREQ_ORDER:
+    for node_id in PREREQ_META:
         label, attck, attck_name = PREREQ_META[node_id]
         feasible = foothold if node_id in ("it_access", "it_exec") else pivot_ok
         prereqs.append(_node(node_id, label, attck=attck, attck_name=attck_name, feasible=feasible))
 
     impacts = []
-    for node_id in S.IMPACT_MODE:
+    for node_id in IMPACT_META:
         label, attck, attck_name, impact, register = IMPACT_META[node_id]
         impacts.append(
             _node(
