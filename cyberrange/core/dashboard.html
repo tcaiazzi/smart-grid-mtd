@@ -324,11 +324,19 @@ function apply(ev) {
       break;
     }
     case "plant": r.plant.push({ t: ev.frame_t || ev.t, v_load: ev.v_load, v_dg: ev.v_dg, abnormal: ev.abnormal,
-      ctrl_mode: ev.ctrl_mode, dg_setpoint: ev.dg_setpoint, switch_cmd: ev.switch_cmd, energy: ev.energy_kwh }); break;
-    case "finding": r.findings.push({ t: ev.guest_t || ev.t, detector: ev.detector, klass: ev.klass, src: ev.src, register: ev.register }); break;
+      ctrl_mode: ev.ctrl_mode, dg_setpoint: ev.dg_setpoint, switch_cmd: ev.switch_cmd, energy: ev.energy_kwh,
+      units: ev.units || null }); break;
+    case "finding": r.findings.push({ t: ev.guest_t || ev.t, detector: ev.detector, klass: ev.klass, src: ev.src, unit: ev.unit, register: ev.register }); break;
     case "alert": r.alerts.push(ev); break;
-    case "model_fitted": r.threshold = ev.threshold; break;
-    case "attack_write": r.writes.push({ t: ev.write_t || ev.t, register: ev.register_name || ev.register, value: ev.value }); break;
+    case "model_fitted": {
+      // One model per feeder: the thresholds side by side, named by unit when there are several.
+      const by = (r.thresholds = r.thresholds || {});
+      by[ev.unit ?? ""] = ev.threshold;
+      const units = Object.keys(by);
+      r.threshold = units.length > 1 ? units.map(u => `u${u} ${by[u]}`).join(" · ") : by[units[0]];
+      break;
+    }
+    case "attack_write": r.writes.push({ t: ev.write_t || ev.t, unit: ev.unit, register: ev.register_name || ev.register, value: ev.value }); break;
     case "tree_state": r.states.push({ t: ev.guest_t || ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
     case "decision": r.decisions.push({ t: ev.guest_t || ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
     case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine });

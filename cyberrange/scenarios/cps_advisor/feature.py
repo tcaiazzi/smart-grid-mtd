@@ -24,6 +24,7 @@ import sys
 
 from cyberrange.planes.attack import components as attack
 from cyberrange.planes.defense import components as defense
+from cyberrange.planes.defense import ot_registers as reg
 from cyberrange.planes.monitor import components as monitor
 from cyberrange.scenarios.cps import topology as T
 from cyberrange.scenarios.cps.feature import Feature
@@ -244,6 +245,8 @@ class People(Feature):
                 p.modbus_port,
                 interval=a.attack_interval,
                 terminal=links["terminal"],
+                ways=p.ways,
+                plant_b64=reg.plant_b64(ctx.scenario.plant_spec(a)),
             )
         )
         hand_over(RED, links)

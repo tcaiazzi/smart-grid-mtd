@@ -523,32 +523,73 @@
     return out;
   }
 
+  // ── the plant's feeders ───────────────────────────────────────────────────
+  // A plant of several feeders is shown one at a time: each is a Modbus unit,
+  // every reading, write, finding and alert names its own, and a run with one
+  // feeder reads as it always did (no selector, no unit named anywhere).
+  const unitsOf = r => r.info?.units?.length ? r.info.units.map(String)
+    : Object.keys((r.plant.find(p => p.units) || {}).units || {});
+  const several = r => unitsOf(r).length > 1;
+  // The feeder the attack acted on: where it wrote, or where it was aimed.
+  const attackedUnit = r => { const u = r.writes.find(w => w.unit != null)?.unit ?? r.info?.attack_unit; return u == null ? null : String(u); };
+  // The feeder on show: the one chosen, else the attacked one, else the first.
+  const shownUnit = r => several(r) ? String(r.x.unit ?? attackedUnit(r) ?? unitsOf(r)[0]) : null;
+  // One feeder's readings in a plant sample; the sample's own are the first feeder's.
+  const feederOf = (p, unit) => (unit != null && p.units && p.units[unit]) || p;
+  const plantOf = (r, unit) => unit == null ? r.plant : r.plant.map(p => ({ t: p.t, ...feederOf(p, unit) }));
+  // What concerns a feeder: its own, and what names none (an IT finding, a spoofed address).
+  const onUnit = unit => e => unit == null || e.unit == null || String(e.unit) === unit;
+  const where = (r, e) => several(r) && e.unit != null ? ` on unit ${e.unit}` : "";
+  // [unit, its plant samples, how to name it] for every feeder; one nameless entry for a plant of one.
+  const feeders = r => several(r) ? unitsOf(r).map(u => [u, plantOf(r, u), ` (unit ${u})`]) : [[null, r.plant, ""]];
+
+  function unitTabs(r) {
+    if (!several(r)) return null;
+    const shown = shownUnit(r), hit = attackedUnit(r);
+    return h("div", { class: "tabs", role: "group", "aria-label": "Feeder shown", style: "margin-bottom:0;align-items:center" },
+      ...unitsOf(r).map(u => {
+        const last = r.plant.length ? feederOf(r.plant[r.plant.length - 1], u) : null;
+        const dot = last?.abnormal ? "var(--critical)" : last?.ctrl_mode === 1 ? "var(--warning)" : null;
+        return h("button", { type: "button", "aria-pressed": String(u === shown),
+          title: `Show feeder ${u}: its voltages, control and findings${u === hit ? " — the feeder the attack acted on" : ""}`,
+          onclick: () => { r.x.unit = u; chartKey = null; UI.render(); } },
+          dot ? h("span", { class: "dot", style: `background:${dot};margin-right:5px` }) : null,
+          `unit ${u}${u === hit ? " · attacked" : ""}`);
+      }));
+  }
+
   // The selected run: live plant state and score as chips, the voltage chart,
   // and the sensor findings by detector and class. The page has drawn the phases.
   function detail(r) {
     if (r.threshold != null) $("d-sub").textContent += ` · model threshold ${r.threshold}`;
     $("f-title").textContent = "Findings";
     $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
-    const last = r.plant[r.plant.length - 1];
-    const byDet = d => r.findings.filter(f => f.detector === d);
-    const firstAfter = d => { const w0 = r.writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
+    const unit = shownUnit(r), mine = onUnit(unit);
+    const last = r.plant.length ? feederOf(r.plant[r.plant.length - 1], unit) : undefined;
+    const writes = r.writes.filter(mine);
+    const byDet = d => r.findings.filter(f => f.detector === d && mine(f));
+    const firstAfter = d => { const w0 = writes[0]?.t; const f = byDet(d).find(f => w0 == null || f.t >= w0 - 1); return f && w0 != null ? `${num(f.t - w0, 2)} s` : (byDet(d).length ? "yes" : "—"); };
     $("d-chips").replaceChildren(
+      ...(several(r) ? [unitTabs(r)] : []),
       chip("control", last ? (last.ctrl_mode === 1 ? "MANUAL" : "auto") : "—", last?.ctrl_mode === 1 ? "var(--warning)" : null),
       chip("DG setpoint", last?.dg_setpoint != null ? `${num(last.dg_setpoint, 1)} kW` : "—"),
       chip("breaker", last ? (last.switch_cmd ? "OPEN" : "closed") : "—", last?.switch_cmd ? "var(--critical)" : null),
       chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
-      chip("rules fired", r.writes.length ? firstAfter("rules") : String(byDet("rules").length)),
-      chip("model fired", r.writes.length ? firstAfter("model") : String(byDet("model").length)),
+      chip("rules fired", writes.length ? firstAfter("rules") : String(byDet("rules").length)),
+      chip("model fired", writes.length ? firstAfter("model") : String(byDet("model").length)),
       ...scoreChips(r.metrics),
     );
     drawChart(r);
     const agg = {};
-    for (const f of r.findings) { const k = `${f.detector}|${f.klass}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, n: 0, first: f.t }).n++; }
+    // Every feeder's findings, each feeder on its own rows: the table is the whole run's.
+    const many = several(r);
+    for (const f of r.findings) { const k = `${f.detector}|${f.klass}|${many ? f.unit ?? "" : ""}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, u: f.unit, n: 0, first: f.t }).n++; }
     const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
-      h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), h("td", { class: "num" }, String(a.n)),
+      h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), many ? h("td", {}, a.u != null ? `unit ${a.u}` : "—") : null,
+        h("td", { class: "num" }, String(a.n)),
         h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
-    $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
-      h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 4, class: "empty" }, "No findings"))));
+    $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), many ? h("th", {}, "feeder") : null, h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
+      h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: many ? 5 : 4, class: "empty" }, "No findings"))));
   }
 
   // The campaign aggregate (metrics.write_aggregate): detection per mode and
@@ -583,8 +624,9 @@
   let chartKey = null;
   function drawChart(r) {
     const box = $("d-chart"), tip = $("tip");
+    const unit = r ? shownUnit(r) : null;
     const key = r ? [r.id, r.start_t, r.plant.length, r.findings.length, r.writes.length, box.clientWidth,
-      document.documentElement.dataset.theme || ""].join("|") : "none";
+      document.documentElement.dataset.theme || "", unit ?? ""].join("|") : "none";
     if (key === chartKey) return;            // unchanged: keep the frame (and a live tooltip)
     chartKey = key;
     box.querySelector("svg")?.remove();
@@ -598,11 +640,14 @@
     // The plant's normal band, from the run; a run recorded without one had the default plant's.
     const band = r.info?.v_band || [0.95, 1.05];
     legend.append(
+      ...(unit != null ? [h("span", {}, h("b", {}, `feeder unit ${unit}`))] : []),
       h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
       h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
       h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), `normal band ${band[0]}–${band[1]} pu`));
     const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
-    const t0 = r.start_t, pts = r.plant;
+    // The feeder on show: its samples, and the writes and findings that concern it.
+    const t0 = r.start_t, pts = plantOf(r, unit);
+    const writes = r.writes.filter(onUnit(unit)), findings = r.findings.filter(onUnit(unit));
     const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
     const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
     // A live run is drawn on its whole planned timeline (stable axis, fills up);
@@ -611,7 +656,7 @@
     const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
     const clampV = v => Math.min(Y_HI, Math.max(Y_LO, v));
     const Y = v => m.t + (H - m.t - m.b) * (1 - (clampV(v) - Y_LO) / (Y_HI - Y_LO));
-    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}` });
+    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}${unit != null ? `, feeder unit ${unit}` : ""}` });
     // calibration window
     const np = r.phases.find(p => p.name === "normal");
     if (np?.start_t && r.learn_s) {
@@ -631,10 +676,10 @@
     svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }));
     // events: attack + first finding per detector
     const marks = [];
-    if (r.writes.length) marks.push({ t: r.writes[0].t, label: "attack", dash: "4 3", shape: null });
+    if (writes.length) marks.push({ t: writes[0].t, label: "attack", dash: "4 3", shape: null });
     for (const [d, shape] of [["rules", "tri"], ["model", "dia"]]) {
-      const w0 = r.writes[0]?.t;
-      const f = r.findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
+      const w0 = writes[0]?.t;
+      const f = findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
       if (f) marks.push({ t: f.t, label: d, dash: null, shape });
     }
     let lastX = -1e9, row = 0;
@@ -712,7 +757,7 @@
         engine_ip: ev.engine_ip, modbus_port: ev.modbus_port, modbus_ok: ev.modbus_ok, registers: ev.registers || null }); break;
       case "attacker_belief": x.red.belief = { t, tree: ev.tree }; break;
       case "attack_end": x.red.end = { t, success: !!ev.success, stage_reached: ev.stage_reached, writes_ok: ev.writes_ok }; break;
-      case "alert": x.blue.alerts.push({ t, state: ev.state, detector: ev.detector, klass: ev.klass }); break;
+      case "alert": x.blue.alerts.push({ t, state: ev.state, detector: ev.detector, klass: ev.klass, unit: ev.unit }); break;
       case "response_write": x.blue.respWrites.push({ t, register: ev.register, value: ev.value }); break;
     }
   }
@@ -738,7 +783,7 @@
       : writes.length ? `a fixed script (${r.mode || "scripted"}): no plan, no feedback` : null;
     const states = r.states.filter(u), st = last(states);
     const open = {};
-    for (const a of x.blue.alerts.filter(u)) { const k = `${a.detector}: ${a.klass}`; if (a.state === "cleared") delete open[k]; else open[k] = a; }
+    for (const a of x.blue.alerts.filter(u)) { const k = `${a.detector}: ${a.klass}${where(r, a)}`; if (a.state === "cleared") delete open[k]; else open[k] = a; }
     const approvals = Object.values(r.approvals).filter(a => u({ t: a.asked_t }))
       .map(a => ({ ...a, state: a.t != null && u({ t: a.t }) ? a.state : "requested" }));
     return {
@@ -871,7 +916,7 @@
       .sort((a, b) => STATE_RANK[a[1][0]] - STATE_RANK[b[1][0]] || b[1][1] - a[1][1]);
     return B.findings.length || nodes.length ? kv([
       ["findings", Object.entries(byDet).map(([k, n]) => `${k} ×${n}`).join(" · ")],
-      ["latest", lf ? `${lf.klass}${lf.src ? ` from ${lf.src}` : ""}${lf.maps_to ? ` → ${lf.maps_to}` : ""}` : null],
+      ["latest", lf ? `${lf.klass}${lf.src ? ` from ${lf.src}` : ""}${lf.unit != null ? ` on unit ${lf.unit}` : ""}${lf.maps_to ? ` → ${lf.maps_to}` : ""}` : null],
       ["alerts open", B.open.length ? B.open.join(" · ") : null],
       ["attack tree", nodes.length ? h("span", {}, ...nodes.map(([id, s]) => h("span", {
         style: `margin-right:10px;white-space:nowrap;color:${STATE_STYLE[s[0]].stroke}` }, `${id} ${s[0]} ${num(s[1], 2)}`))) : null],
@@ -917,7 +962,7 @@
     };
     if (row("attacker") >= 0) {
       const y = Yc(row("attacker"));
-      for (const w of r.writes) put(s("line", { x1: X(w.t), x2: X(w.t), y1: y - 9, y2: y + 9, stroke: "var(--critical)", opacity: 0.5, "stroke-width": 2 }), w.t, `write ${w.register} = ${w.value}`);
+      for (const w of r.writes) put(s("line", { x1: X(w.t), x2: X(w.t), y1: y - 9, y2: y + 9, stroke: "var(--critical)", opacity: 0.5, "stroke-width": 2 }), w.t, `write ${w.register} = ${w.value}${where(r, w)}`);
       for (const st of red.steps) {
         const cx = X(st.t);
         put(st.ok ? s("circle", { cx, cy: y, r: 5, fill: "var(--critical)" })
@@ -928,7 +973,7 @@
     if (row("defender") >= 0) {
       const y = Yc(row("defender"));
       for (const f of r.findings) { const cx = X(f.t), cy = y - 3;
-        put(s("path", { d: `M${cx - 4},${cy + 6} L${cx + 4},${cy + 6} L${cx},${cy - 2}Z`, fill: "var(--s1)", opacity: 0.6 }), f.t, `${f.detector}: ${f.klass}`); }
+        put(s("path", { d: `M${cx - 4},${cy + 6} L${cx + 4},${cy + 6} L${cx},${cy - 2}Z`, fill: "var(--s1)", opacity: 0.6 }), f.t, `${f.detector}: ${f.klass}${where(r, f)}`); }
       for (const d of r.decisions) { const cx = X(d.t);
         put(s("path", { d: `M${cx},${y - 6} L${cx + 6},${y} L${cx},${y + 6} L${cx - 6},${y}Z`, fill: "var(--surface)", stroke: "var(--s1)", "stroke-width": 2 }), d.t, `decision: ${d.actions.join(", ") || "no action"}`); }
       for (const a of r.actions) if (a.id !== "notify")
@@ -936,8 +981,11 @@
     }
     if (row("plant") >= 0) {
       const y = Yc(row("plant"));
-      for (const [a, b] of spans(r.plant, p => p.abnormal)) put(s("rect", { x: X(a), y: y - 6, width: Math.max(2, X(b) - X(a)), height: 12, fill: "var(--critical)", opacity: 0.45 }), a, "plant out of its band");
-      for (const [a, b] of spans(r.plant, p => p.ctrl_mode === 1)) put(s("line", { x1: X(a), x2: X(b), y1: y - 10, y2: y - 10, stroke: "var(--warning)", "stroke-width": 2, "stroke-dasharray": "4 3" }), a, "control in MANUAL");
+      // Every feeder's spans on the one lane: each says which feeder it is.
+      for (const [, plant, name] of feeders(r)) {
+        for (const [a, b] of spans(plant, p => p.abnormal)) put(s("rect", { x: X(a), y: y - 6, width: Math.max(2, X(b) - X(a)), height: 12, fill: "var(--critical)", opacity: 0.45 }), a, `plant out of its band${name}`);
+        for (const [a, b] of spans(plant, p => p.ctrl_mode === 1)) put(s("line", { x1: X(a), x2: X(b), y1: y - 10, y2: y - 10, stroke: "var(--warning)", "stroke-width": 2, "stroke-dasharray": "4 3" }), a, `control in MANUAL${name}`);
+      }
     }
     const step = tickStep(xMax);
     for (let v = 0; v <= xMax; v += step) g.append(s("text", { x: X(t0 + v), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, tickLabel(v)));
@@ -1100,7 +1148,7 @@
     // Alerts as intervals: raised, then cleared.
     const open = {}, alerts = [];
     for (const a of sides(r).blue.alerts.filter(uptoT(t))) {
-      const k = `${a.detector}: ${a.klass}`;
+      const k = `${a.detector}: ${a.klass}${where(r, a)}`;
       if (a.state === "cleared") { if (open[k]) { open[k].cleared = a.t; delete open[k]; } }
       else if (!open[k]) { open[k] = { k, raised: a.t, cleared: null }; alerts.push(open[k]); }
     }
@@ -1147,19 +1195,20 @@
     for (const s of red.steps) add(s.t, "attacker", `${s.node} ${s.ok ? "done" : "failed"}${s.by !== "agent" ? ` (by ${s.by})` : ""}${s.observed?.whoami ? ` — runs as ${s.observed.whoami}` : ""}`);
     let w = null;
     for (const x2 of r.writes) {
-      if (w && w.reg === x2.register && x2.t - w.last < 5) { w.n++; w.last = x2.t; w.item.text = `writes ${w.reg} = ${x2.value} ×${w.n}`; continue; }
-      w = { reg: x2.register, n: 1, last: x2.t, item: { t: x2.t, side: "attacker", text: `writes ${x2.register} = ${x2.value}` } };
+      const reg = `${x2.register}${where(r, x2)}`;   // the same register of another feeder is another write
+      if (w && w.reg === reg && x2.t - w.last < 5) { w.n++; w.last = x2.t; w.item.text = `writes ${x2.register} = ${x2.value}${where(r, x2)} ×${w.n}`; continue; }
+      w = { reg, n: 1, last: x2.t, item: { t: x2.t, side: "attacker", text: `writes ${x2.register} = ${x2.value}${where(r, x2)}` } };
       out.push(w.item);
     }
     if (red.end) add(red.end.t, "attacker", red.end.success ? "attack ends: impact reached" : `attack ends: stopped at ${red.end.stage_reached || "nothing"}`);
     let f = null;
     for (const x2 of r.findings) {
-      const k = `${x2.detector}: ${x2.klass}`;
+      const k = `${x2.detector}: ${x2.klass}${where(r, x2)}`;
       if (f && f.k === k && x2.t - f.last < 5) { f.n++; f.last = x2.t; f.item.text = `finding ${k} ×${f.n}`; continue; }
       f = { k, n: 1, last: x2.t, item: { t: x2.t, side: "defender", text: `finding ${k}${x2.src ? ` from ${x2.src}` : ""}${x2.maps_to ? ` → ${x2.maps_to}` : ""}` } };
       out.push(f.item);
     }
-    for (const a of x.blue.alerts) add(a.t, "defender", `alert ${a.state}: ${a.detector}: ${a.klass}`);
+    for (const a of x.blue.alerts) add(a.t, "defender", `alert ${a.state}: ${a.detector}: ${a.klass}${where(r, a)}`);
     let prev = {};
     for (const st of r.states) {
       const changes = Object.entries(st.nodes || {}).filter(([n, s2]) => s2[0] in STATE_RANK && prev[n] !== s2[0]).map(([n, s2]) => `${n} ${s2[0]}`);
@@ -1172,9 +1221,11 @@
       add(a.asked_t, "defender", `asks the operator: ${a.action}`);
       if (a.state && a.state !== "requested" && a.t !== a.asked_t) add(a.t, "defender", `operator: ${a.action} ${a.state}${a.operator ? ` by ${a.operator}` : ""}`);
     }
-    for (const [a, b] of spans(r.plant, p => p.abnormal)) { add(a, "plant", "voltages leave the normal band"); add(b, "plant", "voltages back in band"); }
-    for (const [a, b] of spans(r.plant, p => p.ctrl_mode === 1)) { add(a, "plant", "control switches to MANUAL"); add(b, "plant", "control back to auto"); }
-    for (const [a, b] of spans(r.plant, p => !!p.switch_cmd)) { add(a, "plant", "feeder breaker opens"); add(b, "plant", "feeder breaker closes"); }
+    for (const [, plant, name] of feeders(r)) {
+      for (const [a, b] of spans(plant, p => p.abnormal)) { add(a, "plant", `voltages leave the normal band${name}`); add(b, "plant", `voltages back in band${name}`); }
+      for (const [a, b] of spans(plant, p => p.ctrl_mode === 1)) { add(a, "plant", `control switches to MANUAL${name}`); add(b, "plant", `control back to auto${name}`); }
+      for (const [a, b] of spans(plant, p => !!p.switch_cmd)) { add(a, "plant", `feeder breaker opens${name}`); add(b, "plant", `feeder breaker closes${name}`); }
+    }
     return out.sort((a, b) => a.t - b.t);
   }
   function renderJournal(box, r, t) {

@@ -109,7 +109,7 @@ IMAGE_OF = {
     "wazuh_dashboard": WAZUH_DASHBOARD_IMAGE,
 }
 # Distributions whose import name is not their own.
-IMPORT_NAME = {"paho-mqtt": "paho"}
+IMPORT_NAME = {"paho-mqtt": "paho", "scikit-learn": "sklearn"}
 # The guest scapy captures packets, the host scapy only reads pcaps for the
 # classifier: the two are not the same code path and are pinned apart.
 PINNED_APART = {"scapy"}

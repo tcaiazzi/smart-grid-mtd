@@ -144,8 +144,11 @@ and the SOC through its inventory.
 - **Engine.** It solves the whole plant in one power flow.
 - **PLCs and HMIs.** Each is bound to one feeder (`Host.unit` in the lab spec).
 - **OT sensor.** It keeps each feeder's state apart, and reports a controller
-  that commands a feeder that is not its own. Its behavioural model learns
-  the first feeder only.
+  that commands a feeder that is not its own. It keeps one behavioural model
+  per feeder, each learning its own feeder's traffic and physics.
+- **Attacker.** Every HMI that serves the application is a way in. An attack
+  goes through one (`--attack-via`) and acts on one feeder (`--attack-unit`),
+  with that feeder's values: its full rating is what a quiet attack writes.
 - **Frames.** A frame carries the first feeder's readings at its top level, and
   each feeder's under `units` when there are several.
 
@@ -216,8 +219,9 @@ run in parallel, and every finding says which one produced it.
 
 - computes per-second features, among them session turnover, setpoint jump
   size, time in MANUAL and observed voltages;
-- scores them with a robust model (median/MAD) calibrated online over the first
-  seconds of the normal phase;
+- scales them robustly and scores each window by its distance from the nearest
+  windows seen in the first seconds of the normal phase (scikit-learn's
+  `RobustScaler` and `NearestNeighbors`), one model per feeder;
 - evaluates the current window immediately on every write, so it can flag an
   anomaly before the physical effect appears.
 
@@ -304,6 +308,13 @@ every ledger under `output/`; `make cps-dashboard` is the same dashboard with
 `--scenario cps`, which filters on what each run recorded rather than on where
 it was written. It can be
 started before, during or after a campaign.
+
+On a plant of several feeders the run's detail shows one feeder at a time: a
+row of buttons above the chart, one per Modbus unit, opening on the feeder the
+attack acted on. The voltage chart, the plant's state and "rules fired" /
+"model fired" are the selected feeder's; the findings table, the alerts and the
+journal are the whole run's and name the feeder of every row. A run on a plant
+of one feeder shows none of this.
 
 The panel composes the page into three views, chosen in the header; the run and
 the time shown stay the same across them, so one moment can be compared from both
@@ -548,9 +559,10 @@ internal plan `docs/internal/piano-wp2-wp3.md`). Still to do:
   postconditions, and the probability and time of each step, are still to come
   ([kg-and-attack-trees.md](kg-and-attack-trees.md) §10);
 - a scenario on a larger lab and plant: the description is there (`LabSpec`,
-  `ot_registers.plant()`), but the attacker executes only the first way in and
-  the first feeder, the sensor's model learns only the first feeder, and zones
-  OT apart behind their own RTUs are not modelled;
+  `ot_registers.plant()`), the attacker and the sensor's model follow it to
+  every way in and every feeder, but no scenario declares one yet, `meas-fdi`
+  acts on one PLC only, and zones OT apart behind their own RTUs are not
+  modelled;
 - the stochastic game model;
 - real energy measurement of the countermeasures;
 - the management network in the attack tree (reaching the manager's API from

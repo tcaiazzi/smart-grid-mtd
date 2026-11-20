@@ -365,7 +365,7 @@ class WireProcess(unittest.TestCase):
             ],
         )
         # The restore is tracked as state: authority is back with the PLC.
-        self.assertEqual(self.sensor.rules.ctrl_mode, reg.CTRL_AUTO)
+        self.assertEqual(self.sensor.rules_for(reg.UNIT_ID).ctrl_mode, reg.CTRL_AUTO)
 
     def test_same_writes_without_the_role_are_reported(self):
         # Without --responder-ip the firewall is nobody: the very same frames
@@ -500,7 +500,9 @@ class WireProcess(unittest.TestCase):
         ev = conflict[0]["evidence"]
         self.assertEqual((ev["first"]["v_dg"], ev["second"]["v_dg"]), (1.06, 0.96))
         # The process rules keep judging the plant on what the engine sent.
-        self.assertEqual(self.sensor.rules.out_of_band({"v_dg": ev["first"]["v_dg"]}), True)
+        self.assertEqual(
+            self.sensor.rules_for(reg.UNIT_ID).out_of_band({"v_dg": ev["first"]["v_dg"]}), True
+        )
 
     def test_a_standing_conflict_is_repeated_but_not_flooded(self):
         self.poll(1.0, PLC_IP, 0.99, 1.01, 0, 20.0)

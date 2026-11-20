@@ -467,8 +467,9 @@ parallel:
   reading* (two different answers to the same request, which points at
   falsified measurements).
 - **Behavioural model**: per-second features (session turnover, setpoint jump
-  size, time in MANUAL, voltages) scored with a robust median/MAD model. The
-  model calibrates on the first 45 s of normal operation, and it re-scores the
+  size, time in MANUAL, voltages), robustly scaled and scored by their distance
+  from the nearest windows of normal operation (scikit-learn). There is one
+  model per feeder; each calibrates on the first 45 s, and it re-scores the
   current window on every write. That is what lets it flag an attack **before**
   the physical effect appears.
 
@@ -659,9 +660,11 @@ make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5
 - The attack tree is generated, but from a fixed template of ways in and
   actions: chaining arbitrary techniques by their pre- and postconditions, and
   the probability and time of each step, are still to come.
-- The lab and the plant can be larger than today's, but the attacker executes
-  only the first way in and the first feeder, and the sensor's behavioural model
-  learns only the first feeder.
+- The lab and the plant can be larger than today's — the attacker takes any
+  way in and acts on any feeder, the sensor keeps a behavioural model per
+  feeder — but no scenario runs such a lab yet, the falsified-measurement
+  branch (`meas-fdi`) acts on one PLC only, and the attacker of `cps-recon`
+  discovers one way in and one feeder.
 - The stochastic game model between attacker and defender is still to come; the
   tree-guided planner is its baseline adversary.
 - The energy cost of the countermeasures is estimated, not measured.

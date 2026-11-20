@@ -3,7 +3,7 @@
 Feeds the WindowFeaturizer a synthetic but protocol-faithful normal phase — the
 PLC polling and regulating every second, the HMI polling every 2 s and doing a
 legitimate MANUAL dispatch (15-35 kW for 5 s) every ~12 s — calibrates the
-RobustAnomalyModel on it, then checks:
+AnomalyModel on it, then checks:
   - fresh normal traffic (incl. operator dispatches) stays under the threshold;
   - a manual-hijack (new pivot session from the HMI's IP, MANUAL + a 60 kW
     in-range setpoint) is flagged at write time, before any voltage moves;
@@ -24,7 +24,7 @@ sys.path.insert(0, str(guest_paths.DEFENSE))
 sys.path.insert(0, str(guest_paths.DEFENSE_AGENTS))
 
 import ot_registers as reg  # noqa: E402
-from ot_model import FEATURES, RobustAnomalyModel, WindowFeaturizer  # noqa: E402
+from ot_model import FEATURES, AnomalyModel, WindowFeaturizer  # noqa: E402
 
 PLC, HMI = "10.20.0.10", "10.10.0.20"
 RESPONDER = "10.20.0.1"
@@ -119,7 +119,7 @@ class Model(unittest.TestCase):
     def setUp(self):
         self.p = Plant(seed=1)
         self.p.run(0, 45)  # calibration (normal + operator)
-        self.model = RobustAnomalyModel()
+        self.model = AnomalyModel()
         for _ws, vec in self.p.windows:
             self.model.add_calibration(vec)
         self.model.fit()
@@ -130,7 +130,7 @@ class Model(unittest.TestCase):
         self.assertGreaterEqual(self.model.threshold, self.model.k)
 
     def test_needs_calibration(self):
-        m = RobustAnomalyModel(min_calibration=10)
+        m = AnomalyModel(min_calibration=10)
         with self.assertRaises(ValueError):
             m.fit()
 
@@ -172,7 +172,7 @@ class ResponderRole(unittest.TestCase):
     def _after_restore(self, responder_ip):
         p = Plant(seed=1, responder_ip=responder_ip)
         p.run(0, 45)
-        model = RobustAnomalyModel()
+        model = AnomalyModel()
         for _ws, vec in p.windows:
             model.add_calibration(vec)
         model.fit()

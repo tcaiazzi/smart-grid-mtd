@@ -22,7 +22,10 @@ import ot_sensor as s  # noqa: E402
 import ot_write  # noqa: E402
 import plc_controller as plc  # noqa: E402
 
+from tests.planes import test_ot_sensor as wire  # noqa: E402  (its frame builders)
+
 PLC_A, PLC_B, ENGINE = "10.20.0.10", "10.20.0.11", "10.20.0.20"
+HMI_A, HMI_B, STRANGER = "10.10.0.20", "10.10.0.21", "10.20.0.99"
 
 
 def two_feeders():
@@ -149,11 +152,87 @@ class Sensor(unittest.TestCase):
         b.on_state(1.0, {"ctrl_mode": reg.CTRL_MANUAL, "v_load": 1.0, "v_dg": 1.0})
         self.assertEqual(b.ctrl_mode, reg.CTRL_MANUAL)
         self.assertEqual(a.ctrl_mode, reg.CTRL_AUTO, "a feeder taken to MANUAL moved the other")
-        self.assertIs(self.sensor.rules, a, "the model's feeder is the plant's first")
 
     def test_clients_are_bound_from_the_command_line(self):
         got = s.bound_clients(f"{PLC_A},{PLC_B}@2", "plc", two_feeders())
         self.assertEqual(got, [(PLC_A, "plc", 1), (PLC_B, "plc", 2)])
+
+
+class FeederModels(unittest.TestCase):
+    """The behavioural model, one per feeder: each learns its own feeder, so a
+    quiet attack on any of them is the model's to see."""
+
+    T0, LEARN_S = 1000.0, 20.0
+
+    def setUp(self):
+        self.tel = Telemetry()
+        self.sensor = s.OTSensor(
+            "eth0",
+            ENGINE,
+            reg.MODBUS_PORT,
+            PLC_A,
+            self.tel,
+            hmi_ip=HMI_A,
+            detectors=("model",),
+            learn_seconds=self.LEARN_S,
+            plant=two_feeders(),
+            clients=[(PLC_B, "plc", 2), (HMI_B, "hmi", 2)],
+        )
+        self.txn = 0
+        for sec in range(30):
+            self.second(self.T0 + sec)
+
+    def frame(self, t, src, adu, **kw):
+        self.sensor._handle_frame(wire.build_frame(src, ENGINE, reg.MODBUS_PORT, adu, **kw), now=t)
+
+    def second(self, t):
+        """Both controllers poll and regulate their own feeder."""
+        for plc_ip, unit, kw in ((PLC_A, 1, 20.0), (PLC_B, 2, 30.0)):
+            self.txn += 1
+            read = wire.modbus_read(0x04, 0, reg.SENSOR_COUNT, unit=unit, txn=self.txn)
+            self.frame(t, plc_ip, read)
+            hold = wire.modbus_write_single(
+                reg.HR_DG_SETPOINT, reg.encode(kw, 10.0), unit=unit, txn=self.txn
+            )
+            self.frame(t + 0.1, plc_ip, hold)
+
+    def hijack(self, t, src, unit, kw):
+        """A new session taking MANUAL, then an in-range setpoint."""
+        self.frame(t, src, b"", sport=41000, flags=s.TCP_SYN)
+        mode = wire.modbus_write_single(reg.HR_CTRL_MODE, reg.CTRL_MANUAL, unit=unit)
+        self.frame(t + 0.01, src, mode, sport=41000)
+        setpoint = wire.modbus_write_single(reg.HR_DG_SETPOINT, reg.encode(kw, 10.0), unit=unit)
+        self.frame(t + 0.02, src, setpoint, sport=41000)
+
+    def rows(self, kind):
+        return [r for r in self.tel.rows if r["kind"] == kind]
+
+    def test_every_feeder_calibrates_its_own_model(self):
+        fitted = {r["unit"]: r for r in self.rows("model_fitted")}
+        self.assertEqual(sorted(fitted), [1, 2], "a feeder was left without a model")
+        self.assertEqual(self.rows("ot_finding"), [], "normal traffic of two feeders alarmed")
+
+    def test_a_quiet_attack_on_the_second_feeder_is_seen_there(self):
+        # 80 kW is feeder 2's full rating: in range, from its own HMI.
+        self.hijack(self.T0 + 30.3, HMI_B, 2, 80.0)
+        self.sensor._tick(self.T0 + 33.0)
+        units = {f["entities"]["unit"] for f in self.rows("ot_finding")}
+        self.assertEqual(units, {2}, "the hijack of feeder 2 must be feeder 2's finding only")
+        raised = [a["entities"]["unit"] for a in self.rows("ot_alert") if a["state"] == "raised"]
+        self.assertEqual(raised, [2])
+
+    def test_each_feeder_raises_its_own_alert(self):
+        self.hijack(self.T0 + 30.3, HMI_A, 1, 60.0)
+        self.hijack(self.T0 + 30.4, HMI_B, 2, 80.0)
+        raised = {a["entities"]["unit"] for a in self.rows("ot_alert") if a["state"] == "raised"}
+        self.assertEqual(raised, {1, 2}, "one alert per feeder, not one for the plant")
+
+    def test_a_stranger_s_session_counts_for_every_feeder(self):
+        for i in range(5):
+            self.frame(self.T0 + 30.3 + 0.01 * i, STRANGER, b"", sport=42000 + i, flags=s.TCP_SYN)
+        self.sensor._tick(self.T0 + 33.0)
+        units = {f["entities"]["unit"] for f in self.rows("ot_finding")}
+        self.assertEqual(units, {1, 2}, "a client bound to no feeder is nobody's normal")
 
 
 if __name__ == "__main__":

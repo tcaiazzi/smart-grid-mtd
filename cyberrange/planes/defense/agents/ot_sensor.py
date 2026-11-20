@@ -19,7 +19,8 @@ rules (detector="rules") — the plant contract, deterministic and explainable:
   - manual_mode_excursion    : control authority is MANUAL while the observed
                                voltage stays out of band.
 model (detector="model") — ot_model.py: per-window behavioural features scored
-  by a robust anomaly model calibrated online on the first --learn-seconds.
+  by an anomaly model calibrated online on the first --learn-seconds, one model
+  per feeder of the plant: each learns its own feeder's traffic and physics.
 
 The PLC's regulation and the HMI operator's safe manual dispatches raise
 nothing. Neither do the writes of the automated response (--responder-ip): they
@@ -29,7 +30,8 @@ whoever can write from it is not seen. Alerts are edge-triggered (raised once
 per key) and cleared when the condition goes away, so recovery is measurable.
 
 Copied flat onto the sensor machine (see the scenario's guest_files.py).
-Stdlib + numpy only: Ethernet/IPv4/TCP/Modbus are parsed by hand (no scapy).
+Stdlib, and numpy + scikit-learn for the model: Ethernet/IPv4/TCP/Modbus are
+parsed by hand (no scapy).
 Findings ride the existing event bus (mtd_telemetry.Telemetry).
 See ot_registers for the register map / envelopes / policy this reasons over.
 """
@@ -43,9 +45,9 @@ import ot_registers as reg
 from mtd_telemetry import Telemetry
 
 try:
-    from ot_model import RobustAnomalyModel, WindowFeaturizer
-except Exception:  # model is optional (numpy missing)
-    RobustAnomalyModel = WindowFeaturizer = None
+    from ot_model import AnomalyModel, WindowFeaturizer
+except Exception:  # model is optional (numpy or scikit-learn missing)
+    AnomalyModel = WindowFeaturizer = None
 
 try:
     from mtd_dashboard import DashboardServer
@@ -431,6 +433,16 @@ class ProcessRules:
         return findings, active
 
 
+class FeederModel:
+    """One feeder's learned behaviour: its window featurizer, its anomaly model
+    and how long the model has been quiet."""
+
+    def __init__(self, unit, featurizer, model):
+        self.unit, self.featurizer, self.model = unit, featurizer, model
+        self.quiet = 0  # consecutive windows under the threshold
+        self.early_win = None  # the open window already flagged before it closed
+
+
 # ── live sensor ──────────────────────────────────────────────────────────────
 class OTSensor:
     def __init__(
@@ -444,7 +456,7 @@ class OTSensor:
         detectors=("rules", "model"),
         learn_seconds=45.0,
         window_s=1.0,
-        model_k=6.0,
+        model_k=4.0,
         responder_ip=None,
         plant=None,
         clients=(),
@@ -469,8 +481,6 @@ class OTSensor:
         if responder_ip:
             self.policy[responder_ip] = "responder"
         self.detectors = set(detectors)
-        # The behavioural model learns one feeder: the authorized writer's.
-        self.model_unit = first
         self._rules = {}
         self._pending = {}  # (client_ip, client_port, txn) -> (fc, address, t)
         self._answered = {}  # same key -> (fc, address, words, t) of the reading served
@@ -479,19 +489,28 @@ class OTSensor:
         self._alerts = {}  # key -> {"klass","last_t","detector"}
         self.learn_seconds = float(learn_seconds)
         self._t0 = None
-        self.featurizer = self.model = None
+        # One model per feeder, all made now: every one calibrates on the same
+        # first seconds, and a feeder first heard after them would have none.
+        self._models = {}
         if "model" in self.detectors and WindowFeaturizer is not None:
-            self.featurizer = WindowFeaturizer(
-                authorized_writer,
-                window_s=window_s,
-                setpoint_register=reg.HR_DG_SETPOINT,
-                mode_register=reg.HR_CTRL_MODE,
-                manual_value=reg.CTRL_MANUAL,
-                responder_ip=responder_ip,
-            )
-            self.model = RobustAnomalyModel(k=model_k)
-        self._model_quiet = 0
-        self._early_win = None
+            for unit in reg.units(self.plant):
+                plc = next(
+                    (
+                        ip
+                        for ip, role in self.policy.items()
+                        if role == "plc" and self.unit_of.get(ip) == unit
+                    ),
+                    None,
+                )
+                featurizer = WindowFeaturizer(
+                    plc,
+                    window_s=window_s,
+                    setpoint_register=reg.HR_DG_SETPOINT,
+                    mode_register=reg.HR_CTRL_MODE,
+                    manual_value=reg.CTRL_MANUAL,
+                    responder_ip=responder_ip,
+                )
+                self._models[unit] = FeederModel(unit, featurizer, AnomalyModel(k=model_k))
 
     def rules_for(self, unit):
         """The process rules of one feeder, made when it is first seen."""
@@ -499,10 +518,12 @@ class OTSensor:
             self._rules[unit] = ProcessRules(unit, self.plant["limits"]["v_band"])
         return self._rules[unit]
 
-    @property
-    def rules(self):
-        """The process rules of the model's feeder (the plant's first)."""
-        return self.rules_for(self.model_unit)
+    def models_for(self, unit):
+        """The models an observation counts for: its feeder's. One that belongs
+        to no feeder (a client bound to none, a unit the plant does not have)
+        counts for all: a stranger on the link is nobody's normal."""
+        m = self._models.get(unit)
+        return [m] if m else list(self._models.values())
 
     def envelope(self, unit):
         try:
@@ -580,8 +601,10 @@ class OTSensor:
         if not (to_engine or from_engine):
             return
         self._tick(now)
-        if to_engine and (tcp_flags(l4) & (TCP_SYN | TCP_ACK)) == TCP_SYN and self.featurizer:
-            self._model_windows(self.featurizer.observe_syn(now, src))
+        if to_engine and (tcp_flags(l4) & (TCP_SYN | TCP_ACK)) == TCP_SYN:
+            # A SYN names no unit: the session is its client's feeder's.
+            for m in self.models_for(self.unit_of.get(src)):
+                self._model_windows(m, m.featurizer.observe_syn(now, src))
         for adu in parse_modbus_adus(payload):
             if to_engine:
                 self._on_request(now, src, dst, sport, adu)
@@ -616,8 +639,8 @@ class OTSensor:
         if fc in reg.READ_FUNCTION_CODES:
             if req is not None:
                 self._pending[(src, sport, adu["txn"])] = (fc, req["address"], t)
-            if self.featurizer:
-                self._model_windows(self.featurizer.observe_read(t, src, fc))
+            for m in self.models_for(unit):
+                self._model_windows(m, m.featurizer.observe_read(t, src, fc))
             if "rules" in self.detectors:
                 f = classify_read(src, dst, fc, unit, self.policy)
                 if f:
@@ -634,10 +657,10 @@ class OTSensor:
                 self.rules_for(unit).note_write(
                     t, src, dst, unit, address, value, suspect=not responder
                 )
-                if self.featurizer and unit == self.model_unit:
-                    self._model_windows(self.featurizer.observe_write(t, src, address, value))
+                for m in self.models_for(unit):
+                    self._model_windows(m, m.featurizer.observe_write(t, src, address, value))
                     if not responder:
-                        self._model_early(t)
+                        self._model_early(m, t)
                 if responder:
                     # The response seen on the wire: when the plant actually
                     # received it, on the same clock as the findings.
@@ -687,8 +710,8 @@ class OTSensor:
         if not state:
             return
         unit = adu["unit"]
-        if self.featurizer and unit == self.model_unit:
-            self._model_windows(self.featurizer.observe_state(t, state))
+        for m in self.models_for(unit):
+            self._model_windows(m, m.featurizer.observe_state(t, state))
         if "rules" in self.detectors:
             findings, active = self.rules_for(unit).on_state(t, state)
             excursion = ("rules", "manual_mode_excursion", unit)
@@ -727,81 +750,86 @@ class OTSensor:
         self._emit(f, t, key=("rules", "conflicting_reading", dst))
 
     # ── model ────────────────────────────────────────────────────────────────
-    def _model_finding(self, w_start, score, z, partial):
+    def _model_finding(self, m, w_start, score, z, partial):
         return _finding(
             "behavioral_anomaly",
             ["behavioral_anomaly"],
             min(0.99, 0.5 + 0.05 * score),
             None,
             self.engine_ip,
-            self.model_unit,
+            m.unit,
             None,
             {
                 "score": round(score, 2),
-                "threshold": round(self.model.threshold, 2),
+                "threshold": round(m.model.threshold, 2),
                 "window_start": round(w_start, 3),
                 "partial": partial,
-                "top": self.model.explain(z),
+                "top": m.model.explain(z),
                 "ts": round(w_start, 3),
             },
             detector="model",
         )
 
-    def _model_early(self, t):
-        """Score the still-open window right after a write. Counts and maxima only
-        grow inside a window, so a partial window that is already anomalous flags
-        the write immediately instead of up to one window later."""
-        if not self.model or not self.model.fitted:
+    def _model_early(self, m, t):
+        """Score feeder model ``m``'s still-open window right after a write.
+        Counts and maxima only grow inside a window, so a partial window that
+        is already anomalous flags the write immediately instead of up to one
+        window later."""
+        if not m.model or not m.model.fitted:
             return
-        win = self.featurizer.current_window
-        if win is None or win == self._early_win:
+        win = m.featurizer.current_window
+        if win is None or win == m.early_win:
             return
-        anomalous, score, z = self.model.is_anomalous(self.featurizer.peek(t))
+        anomalous, score, z = m.model.is_anomalous(m.featurizer.peek(t))
         if anomalous:
-            self._early_win = win
-            self._model_quiet = 0
-            f = self._model_finding(win * self.featurizer.window_s, score, z, partial=True)
+            m.early_win = win
+            m.quiet = 0
+            f = self._model_finding(m, win * m.featurizer.window_s, score, z, partial=True)
             self.telemetry.emit("ot_finding", **f)
-            self._raise(("model",), f, t)
+            self._raise(("model", m.unit), f, t)
 
-    def _model_windows(self, closed):
-        if not self.model:
+    def _model_windows(self, m, closed):
+        """Calibrate or score the windows feeder model ``m`` just closed."""
+        if not m.model:
             return
         for w_start, vec in closed:
-            if not self.model.fitted:
+            if not m.model.fitted:
                 if (
                     self._t0 is not None
-                    and w_start + self.featurizer.window_s <= self._t0 + self.learn_seconds
+                    and w_start + m.featurizer.window_s <= self._t0 + self.learn_seconds
                 ):
-                    self.model.add_calibration(vec)
+                    m.model.add_calibration(vec)
                     continue
                 try:
-                    self.model.fit()
+                    m.model.fit()
                     self.telemetry.emit(
                         "model_fitted",
-                        threshold=round(self.model.threshold, 3),
-                        windows=len(self.model._calib),
+                        unit=m.unit,
+                        threshold=round(m.model.threshold, 3),
+                        windows=len(m.model._calib),
                     )
                 except ValueError as e:
-                    self.telemetry.emit("model_error", error=str(e))
-                    self.model = None
+                    # This feeder goes unwatched by the model; the others, and
+                    # the rules on every feeder, carry on.
+                    self.telemetry.emit("model_error", unit=m.unit, error=str(e))
+                    m.model = None
                     return
-            anomalous, score, z = self.model.is_anomalous(vec)
+            anomalous, score, z = m.model.is_anomalous(vec)
             if anomalous:
-                self._model_quiet = 0
-                f = self._model_finding(w_start, score, z, partial=False)
+                m.quiet = 0
+                f = self._model_finding(m, w_start, score, z, partial=False)
                 self.telemetry.emit("ot_finding", **f)
-                self._raise(("model",), f, w_start)
+                self._raise(("model", m.unit), f, w_start)
             else:
-                self._model_quiet += 1
-                if self._model_quiet >= 3:
-                    self._clear(("model",), w_start)
+                m.quiet += 1
+                if m.quiet >= 3:
+                    self._clear(("model", m.unit), w_start)
 
     def _tick(self, now):
         """Housekeeping: close model windows, expire stale requests, clear
         write-time alerts that went quiet."""
-        if self.featurizer:
-            self._model_windows(self.featurizer.flush(now))
+        for m in self._models.values():
+            self._model_windows(m, m.featurizer.flush(now))
         for k in [k for k, v in self._pending.items() if now - v[2] > PENDING_TTL_S]:
             del self._pending[k]
         for k, a in list(self._alerts.items()):
@@ -863,7 +891,7 @@ def main():
         dest="plc_ip",
         default=None,
         help="the PLC's IP (role 'plc' in the access policy); IP@UNIT,... for a plant's "
-        "several feeders, the first being the model's",
+        "several feeders",
     )
     ap.add_argument("--hmi-ip", default=None, help="the HMI's IP (role 'hmi'), or IP@UNIT,...")
     ap.add_argument("--plant-b64", default=None, help="the plant (default: the default plant)")
@@ -882,7 +910,7 @@ def main():
         help="model calibration period (assumed attack-free)",
     )
     ap.add_argument("--window", type=float, default=1.0, help="model window (s)")
-    ap.add_argument("--model-k", type=float, default=6.0, help="model z threshold floor")
+    ap.add_argument("--model-k", type=float, default=4.0, help="model threshold floor")
     ap.add_argument("--telemetry-file", default="telemetry.jsonl")
     ap.add_argument("--dashboard-port", type=int, default=0)
     ap.add_argument("--duration", type=float, default=0.0)

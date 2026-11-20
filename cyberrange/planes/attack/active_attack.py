@@ -28,24 +28,27 @@ def _write(addr, value):
 
 
 _MANUAL = _write(reg.HR_CTRL_MODE, float(reg.CTRL_MANUAL))
-_RATED = reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][3]
-# Attack mode -> the actuator writes it performs: the values mirror
-# exploit_client.ATTACKS (a guest module this host module does not import), the
-# registers are the plant contract's.
-ATTACK_TARGET = {
-    "setpoint-overvoltage": [_write(reg.HR_DG_SETPOINT, 200.0)],
-    "breaker-open": [_write(reg.HR_SWITCH_CMD, 1.0)],
-    "manual-hijack": [_MANUAL, _write(reg.HR_DG_SETPOINT, _RATED)],
-    "slow-ramp": [_MANUAL, _write(reg.HR_DG_SETPOINT, _RATED)],  # where the ramp ends
-    "setpoint-oscillation": [
-        _MANUAL,
-        _write(reg.HR_DG_SETPOINT, 55.0),
-        _write(reg.HR_DG_SETPOINT, 5.0),
-    ],
-    "breaker-chatter": [_write(reg.HR_SWITCH_CMD, 1.0)],
-    "meas-fdi": [],  # no write of the attacker's: the PLC's readings are falsified
-}
-REGISTER_NAMES = {t["register"]: t["name"] for ts in ATTACK_TARGET.values() for t in ts}
+
+
+def attack_targets(feeder=None):
+    """Attack mode -> the actuator writes it performs on ``feeder`` (its
+    description in the plant; default: the default plant's): the values mirror
+    exploit_client's (a guest module this host module does not import), the
+    registers are the plant contract's."""
+    rated = float((feeder or reg.feeder(reg.plant()))["dg_rating_kw"])
+    setpoint = reg.HR_DG_SETPOINT
+    return {
+        "setpoint-overvoltage": [_write(setpoint, round(rated * 10 / 3, 1))],
+        "breaker-open": [_write(reg.HR_SWITCH_CMD, 1.0)],
+        "manual-hijack": [_MANUAL, _write(setpoint, rated)],
+        "slow-ramp": [_MANUAL, _write(setpoint, rated)],  # where the ramp ends
+        "setpoint-oscillation": [_MANUAL, _write(setpoint, rated - 5.0), _write(setpoint, 5.0)],
+        "breaker-chatter": [_write(reg.HR_SWITCH_CMD, 1.0)],
+        "meas-fdi": [],  # no write of the attacker's: the PLC's readings are falsified
+    }
+
+
+REGISTER_NAMES = {addr: spec[0] for addr, spec in reg.ACTUATOR_REGISTERS.items()}
 # Writes that are in the legitimate envelope and come from an allowed host:
 # invisible to the source/range rules (the point of the stealthy mode).
 STEALTHY_MODES = {"manual-hijack", "slow-ramp", "setpoint-oscillation", "meas-fdi"}
@@ -77,17 +80,25 @@ def drive_attack(
     attack_mode="setpoint-overvoltage",
     repeat=None,
     interval=0.5,
+    unit=None,
+    plant=None,
+    via=None,
 ):
     """Run the exploit chain on the attacker container and record ground truth.
 
-    Each Modbus write is recorded with the time the attacker actually issued it
-    (from exploit_client's JSON lines), not when the exec returned.
+    ``target_url`` is the way in (the application of host ``via``), ``unit`` the
+    feeder of ``plant`` the writes go to (default: its first). Each Modbus write
+    is recorded with the time the attacker actually issued it (from
+    exploit_client's JSON lines), not when the exec returned.
     Returns the exploit_client return code (0 on success)."""
-    targets = ATTACK_TARGET.get(attack_mode, [])
+    plant = reg.plant(plant)
+    unit = reg.units(plant)[0] if unit is None else unit
+    targets = attack_targets(reg.feeder(plant, unit)).get(attack_mode, [])
     rep = f" --repeat {repeat}" if repeat is not None else ""
     cmd = (
         f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 exploit_client.py '
         f"--target-url {target_url} --engine-ip {engine_ip} --engine-port {engine_port} "
+        f"--unit-id {unit} --plant-b64 {reg.plant_b64(plant)} "
         f'--attack {attack_mode}{rep} --interval {interval} 2>&1 | tee exploit.log"'
     )
 
@@ -95,13 +106,21 @@ def drive_attack(
         "attack_start",
         mode=attack_mode,
         target_url=target_url,
+        via=via,
+        unit=unit,
         engine_ip=engine_ip,
         engine_port=engine_port,
         writes=targets,
         stealthy=attack_mode in STEALTHY_MODES,
         repeat=repeat,
     )
-    log.info("Driving active attack (%s) against %s via %s", attack_mode, engine_ip, target_url)
+    log.info(
+        "Driving active attack (%s) against %s unit %s via %s",
+        attack_mode,
+        engine_ip,
+        unit,
+        target_url,
+    )
 
     t0 = time.time()
     rc, out = 0, b""
@@ -126,6 +145,7 @@ def drive_attack(
             "modbus_write",
             t=e.get("t_send", e["t"]),
             mode=attack_mode,
+            unit=e.get("unit", unit),
             register=e.get("register"),
             register_name=REGISTER_NAMES.get(e.get("register")),
             value=e.get("value"),
@@ -139,6 +159,7 @@ def drive_attack(
             gt.record(
                 "modbus_write",
                 mode=attack_mode,
+                unit=unit,
                 register=t["register"],
                 register_name=t["name"],
                 value=t["value"],

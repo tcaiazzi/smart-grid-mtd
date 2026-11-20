@@ -53,7 +53,7 @@ class ModeTables(unittest.TestCase):
             "exploit_client ATTACKS + SCHEDULES + FDI_MODE": set(exploit_client.ATTACKS)
             | set(exploit_client.SCHEDULES)
             | {exploit_client.FDI_MODE},
-            "active_attack.ATTACK_TARGET": set(active_attack.ATTACK_TARGET),
+            "active_attack.attack_targets": set(active_attack.attack_targets()),
             "scenario.ATTACK_MODES": set(scenario.ATTACK_MODES),
             "campaign.ATTACK_MODES": set(campaign.ATTACK_MODES),
             "steps.IMPACT_MODE values": set(steps.IMPACT_MODE.values()),
@@ -63,7 +63,7 @@ class ModeTables(unittest.TestCase):
         self.assertLessEqual(active_attack.STEALTHY_MODES, modes)
 
     def test_the_driver_hint_names_the_registers_the_mode_writes(self):
-        for mode, targets in active_attack.ATTACK_TARGET.items():
+        for mode, targets in active_attack.attack_targets().items():
             written = {r for ws, _h in exploit_client.schedule(mode) for r, _v, _raw in ws}
             self.assertEqual(
                 {t["register"] for t in targets},
@@ -143,7 +143,8 @@ class LeafTables(unittest.TestCase):
 
 class Schedules(unittest.TestCase):
     def test_a_fixed_mode_is_its_sequence_repeated(self):
-        for mode, seq in exploit_client.ATTACKS.items():
+        for mode, build in exploit_client.ATTACKS.items():
+            seq = build(reg.feeder(reg.plant()))
             rounds = exploit_client.schedule(mode)
             self.assertEqual(len(rounds), exploit_client.DEFAULT_REPEAT[mode], mode)
             for writes, hold in rounds:

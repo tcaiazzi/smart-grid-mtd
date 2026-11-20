@@ -54,20 +54,22 @@ class VulnApp(GuestAgent):
 
 class EwsMaintenance(GuestAgent):
     """The engineering workstation's remote-maintenance service, and the
-    credential for it in a configuration file on ``client`` — the host its
-    operators work from. Whoever executes code on the client can read it: that
-    is the way onto the workstation, and from there onto the OT link."""
+    credential for it in a configuration file on each of ``clients`` — the
+    hosts its operators work from, as [(name, address, the service's URL as that
+    host reaches it)]. Whoever executes code on one of them can read it: that is
+    the way onto the workstation, and from there onto the OT link."""
 
     SCRIPT = "ews_maint.py"
     CONF = "/etc/ews-maint.conf"  # exploit_client.MAINT_CONF reads it
     ACCESS_LOG = "/ews_maint.access.jsonl"
     MITM_LOG = "/ot_mitm.jsonl"  # left by ot_mitm.py when the attack stands in the middle
 
-    def __init__(self, node, port, client, client_ip, url, token):
-        self.client, self.url, self.token = client, url, token
+    def __init__(self, node, port, clients, token):
+        self.clients, self.token = list(clients), token
+        allow = " ".join(f"--allow {ip}" for _name, ip, _url in self.clients)
         super().__init__(
             node,
-            f"python3 {self.SCRIPT} --port {port} --token {token} --allow {client_ip} "
+            f"python3 {self.SCRIPT} --port {port} --token {token} {allow} "
             f"--access-log {self.ACCESS_LOG}",
             "ews_maint.log",
             plane=PLANE,
@@ -79,8 +81,9 @@ class EwsMaintenance(GuestAgent):
         )
 
     def start(self, ctx):
-        conf = f"url={self.url}\\ntoken={self.token}\\n"
-        ctx.run(self.client, f"sh -c \"printf '{conf}' > {self.CONF}\"", wait=True)
+        for name, _ip, url in self.clients:
+            conf = f"url={url}\\ntoken={self.token}\\n"
+            ctx.run(name, f"sh -c \"printf '{conf}' > {self.CONF}\"", wait=True)
         super().start(ctx)
 
 
@@ -93,6 +96,7 @@ def emit_attack_writes(ctx):
                 if ev.get("kind") == "modbus_write":
                     ctx.emit(
                         "attack_write",
+                        unit=ev.get("unit"),
                         register=ev.get("register"),
                         register_name=ev.get("register_name"),
                         value=ev.get("value"),
@@ -112,6 +116,7 @@ def observed(phases):
             reg = p.get("register")
             writes.append(
                 {
+                    "unit": p.get("unit"),
                     "register_name": active_attack.REGISTER_NAMES.get(reg, reg),
                     "value": p.get("value"),
                     "ok": p.get("ok"),
@@ -127,13 +132,27 @@ def observed(phases):
 
 
 class _ExploitDriver(Component):
-    """An attack driven from ``node``, the attacker's machine."""
+    """An attack driven from ``node``, the attacker's machine. ``target_url`` is
+    the application of host ``via``, its way in; ``unit`` the feeder of the
+    plant (``plant_b64``) it acts on — both None for an attacker free to choose,
+    or in a lab with one of each."""
 
     plane = PLANE
 
-    def __init__(self, target_url, engine_ip, engine_port, interval=0.5, node="attacker"):
+    def __init__(
+        self,
+        target_url,
+        engine_ip,
+        engine_port,
+        interval=0.5,
+        node="attacker",
+        via=None,
+        unit=None,
+        plant_b64=None,
+    ):
         self.target_url, self.engine_ip, self.engine_port = target_url, engine_ip, engine_port
         self.interval, self.node = interval, node
+        self.via, self.unit, self.plant_b64 = via, unit, plant_b64
 
     def artifacts(self):
         return [Artifact(self.node, "/exploit.log", f"{self.node}.exploit.log")]
@@ -145,9 +164,17 @@ class ScriptedChain(_ExploitDriver):
     name = "scripted_chain"
 
     def __init__(
-        self, mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5, node="attacker"
+        self,
+        mode,
+        target_url,
+        engine_ip,
+        engine_port,
+        repeat=None,
+        interval=0.5,
+        node="attacker",
+        **where,
     ):
-        super().__init__(target_url, engine_ip, engine_port, interval, node)
+        super().__init__(target_url, engine_ip, engine_port, interval, node, **where)
         self.mode, self.repeat = mode, repeat
 
     @property
@@ -165,6 +192,9 @@ class ScriptedChain(_ExploitDriver):
             attack_mode=self.mode,
             repeat=self.repeat,
             interval=self.interval,
+            unit=self.unit,
+            plant=self.plant_b64,
+            via=self.via,
         )
         emit_attack_writes(ctx)
         return rc
@@ -175,7 +205,9 @@ class PlannedAttacker(_ExploitDriver):
     profile (opportunistic | targeted | stealthy). The planner runs in the lab
     (nodes/redteam/red_agent.py): this component launches it with the tree as
     data and reconstructs the ground truth from the record it leaves, so the
-    oracle stays off the lab and the DPI sensor never sees it."""
+    oracle stays off the lab and the DPI sensor never sees it. ``ways`` are the
+    tree's ways in ({host: the URL of its application}); ``via`` and ``unit``
+    keep the attacker to one of them and to one feeder."""
 
     name = "planned_attacker"
     RECORD = "/red_actions.jsonl"
@@ -193,9 +225,12 @@ class PlannedAttacker(_ExploitDriver):
         interval=0.5,
         tree=None,
         node="attacker",
+        ways=None,
+        **where,
     ):
-        super().__init__(target_url, engine_ip, engine_port, interval, node)
+        super().__init__(target_url, engine_ip, engine_port, interval, node, **where)
         self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
+        self.ways = dict(ways or {})
         # ctx -> the attack tree as a document (tree_doc). The scenario supplies
         # it: which tree describes a lab is the scenario's knowledge, and the
         # attacker reads a document, never the defender's code.
@@ -221,9 +256,13 @@ class PlannedAttacker(_ExploitDriver):
         tree_b64 = base64.b64encode(json.dumps(self.tree(ctx)).encode()).decode()
         goal = f"--goal {self.goal} " if self.goal else ""
         seed = f"--seed {ctx.seed} " if ctx.seed is not None else ""
+        where = "".join(f"--way {host}={url} " for host, url in self.ways.items())
+        where += f"--via {self.via} " if self.via else ""
+        where += f"--unit {self.unit} " if self.unit is not None else ""
+        where += f"--plant-b64 {self.plant_b64} " if self.plant_b64 else ""
         cmd = (
             f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 red_agent.py '
-            f"--tree-b64 {tree_b64} --profile {self.profile} {goal}{seed}"
+            f"--tree-b64 {tree_b64} --profile {self.profile} {goal}{seed}{where}"
             f"--dwell {self.dwell} --max-steps {self.max_steps} "
             f"--target-url {self.target_url} --engine-ip {self.engine_ip} "
             f"--engine-port {self.engine_port} --interval {self.interval} "
@@ -281,6 +320,8 @@ class PlannedAttacker(_ExploitDriver):
                 t=row.get("t"),
                 mode=row.get("mode"),
                 target_url=row.get("target_url"),
+                via=row.get("via"),
+                unit=row.get("unit"),
                 engine_ip=row.get("engine_ip"),
                 engine_port=row.get("engine_port"),
                 goal=row.get("goal"),
@@ -300,10 +341,8 @@ class PlannedAttacker(_ExploitDriver):
             plan = ("target", "sequence", "candidates", "blocked", "reason")
             ctx.emit("attack_plan", guest_t=row.get("t"), **{k: row.get(k) for k in plan})
         elif kind == "plan_step":
-            entry = {
-                k: row.get(k)
-                for k in ("node", "stage", "attck", "ok", "chosen_among", "target", "writes")
-            }
+            keys = ("node", "step_kind", "via", "unit", "stage", "attck", "ok")
+            entry = {k: row.get(k) for k in (*keys, "chosen_among", "target", "writes")}
             ctx.gt.record("plan_step", t=row.get("t"), mode=row.get("mode"), **entry)
             ctx.emit(
                 "plan_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **entry
@@ -317,6 +356,7 @@ class PlannedAttacker(_ExploitDriver):
                 if e.get("phase") != "modbus_write":
                     continue
                 write = dict(
+                    unit=e.get("unit"),
                     register=e.get("register"),
                     register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
                     value=e.get("value"),
@@ -332,7 +372,9 @@ class PlannedAttacker(_ExploitDriver):
                     **write,
                 )
                 ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
-            foothold = active_attack.STAGE_TO_GT.get(row.get("node"))
+            # By stage, which is the step's kind: a lab with several ways in
+            # has the access step under an id of its own on each.
+            foothold = active_attack.STAGE_TO_GT.get(row.get("stage"))
             if foothold and row.get("ok"):
                 ctx.gt.record(foothold, t=row.get("t"), mode=row.get("mode"))
         elif kind == "attack_end":
@@ -450,13 +492,17 @@ class RedConsole(GuestAgent):
         engine_port,
         interval=0.5,
         terminal=None,
+        ways=None,
+        plant_b64=None,
     ):
         packed = base64.b64encode(json.dumps(tree).encode()).decode()
+        where = "".join(f" --way {host}={url}" for host, url in (ways or {}).items())
+        where += f" --plant-b64 {plant_b64}" if plant_b64 else ""
         super().__init__(
             node,
             f"python3 red_console.py --port {port} --token {token} --tree-b64 {packed} "
             f"--target-url {target_url} --engine-ip {engine_ip} --engine-port {engine_port} "
-            f"--interval {interval}" + (f" --terminal {terminal}" if terminal else ""),
+            f"--interval {interval}{where}" + (f" --terminal {terminal}" if terminal else ""),
             "red_console.log",
             plane=PLANE,
             name="red_console",
@@ -489,6 +535,7 @@ class RedConsole(GuestAgent):
                 if e.get("phase") != "modbus_write":
                     continue
                 write = dict(
+                    unit=e.get("unit"),
                     register=e.get("register"),
                     register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
                     value=e.get("value"),
@@ -504,7 +551,7 @@ class RedConsole(GuestAgent):
                     **write,
                 )
                 ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
-            kind = active_attack.STAGE_TO_GT.get(row.get("step"))
+            kind = active_attack.STAGE_TO_GT.get(row.get("stage"))
             if kind and row.get("ok"):
                 ctx.gt.record(kind, t=row.get("t"), mode=self.MODE)
 

@@ -124,7 +124,7 @@ Shared helpers:
 | Helper | Module | Purpose |
 |---|---|---|
 | `emit_attack_writes(ctx)` | `cyberrange.planes.attack.components` | Copies the attack's Modbus writes from the ground truth onto the ledger. |
-| `build_steps(tree, target_url, engine_ip, engine_port, interval=0.5)` | `nodes/redteam/red_steps.py` (guest) | The attack tree's feasible, executable nodes as data for `RedConsole`, built in the lab: each with its stage, ATT&CK technique, prerequisites and the command that realises it. |
+| `build_steps(tree, target_url, engine_ip, engine_port, interval=0.5, ways=None, plant_b64=None)` | `nodes/redteam/red_steps.py` (guest) | The attack tree's feasible, executable nodes as data for `RedConsole`, built in the lab: each with its stage, ATT&CK technique, prerequisites and the command that realises it. |
 | `detect_nanogrid_ip(...)`, `BLOCK_POLICIES` | `cyberrange.planes.attack.components` | The CNN fingerprinting step. |
 | `generate_shared_key()` | `cyberrange.planes.defense.components` | The key that stands in for the QKD device's output. |
 
@@ -222,25 +222,31 @@ a command injection. It is the attacker's foothold in the CPS scenario. With
 | **Starts** | `python3 vuln_app.py --host 0.0.0.0 --port P [--access-log PATH]` |
 | **Artifacts** | `<node>.vuln_app.log`; `<node>.<basename(access_log)>` when logging |
 
-### `EwsMaintenance(node, port, client, client_ip, url, token)`
+### `EwsMaintenance(node, port, clients, token)`
 
 The engineering workstation's remote-maintenance service: an HTTP endpoint that
-runs a command for whoever presents `token`, and serves `client_ip` only. On
-start it also writes the credential (`url`, `token`) to `/etc/ews-maint.conf`
-on `client`, the host its operators work from. Nothing is wrong with the
+runs a command for whoever presents `token`, and serves its `clients` only —
+`[(name, address, url)]`, the hosts its operators work from (the CPS scenario
+passes every HMI that is a way in). On start it also writes the credential
+(`url`, `token`) to `/etc/ews-maint.conf` on each of them. Nothing is wrong with the
 service: its credential lives on a host that can be taken, and that is the way
 from the HMI onto the workstation, which stands on the OT link.
 
 | | |
 |---|---|
-| **Starts** | `python3 ews_maint.py --port P --token T --allow CLIENT_IP --access-log /ews_maint.access.jsonl` |
+| **Starts** | `python3 ews_maint.py --port P --token T --allow CLIENT_IP [--allow …] --access-log /ews_maint.access.jsonl` |
 | **Artifacts** | `<node>.ews_maint.log`, `<node>.ews_maint.access.jsonl`; `<node>.ot_mitm.jsonl` when an attack stood between the PLC and the engine (what the engine said, what the PLC was given) |
 
-### `ScriptedChain(mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5, node="attacker")`
+### `ScriptedChain(mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5, node="attacker", via=None, unit=None, plant_b64=None)`
 
 The fixed chain of one attack mode: RCE on the web app, then a pivot from the
 HMI (an allowed host), then unauthorized Modbus writes. `exploit_client.py`
 runs on the attacker `node` (the CPS scenario passes the lab's `it-host`).
+`target_url` is the application of the HMI `via`, the way in; `unit` is the
+feeder of the plant (`plant_b64`) the writes go to. The values below are the
+default feeder's: on another, "out of range" and "full rating" are its own.
+The writes go through `ot_write.py` on the HMI (pymodbus), which reports a
+write the engine refuses as failed.
 
 | `mode` | Writes | Effect |
 |---|---|---|
@@ -255,12 +261,12 @@ runs on the attacker `node` (the CPS scenario passes the lab's `it-host`).
 | | |
 |---|---|
 | **Call** | `attack(ctx)`, blocking. Inside the attack phase, after `ctx.open_ground_truth(...)`. |
-| **Ground truth** | `attack_start`; `rce`; one `modbus_write` per write (send time from the attacker, register, value, ok); `attack_end` |
+| **Ground truth** | `attack_start` (with `via`, `unit`); `rce`; one `modbus_write` per write (send time from the attacker, unit, register, value, ok); `attack_end` |
 | **Ledger** | one `attack_write` per write (`emit_attack_writes`) |
 | **Artifacts** | `attacker.exploit.log` |
 | **`label`** | the mode, used for the attack phase and `run_start.mode` |
 
-### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5, tree=None, node="attacker")`
+### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5, tree=None, node="attacker", ways=None, via=None, unit=None, plant_b64=None)`
 
 A reactive attacker whose brain runs **in the lab** (`nodes/redteam/red_agent.py`,
 with the planner), the red counterpart of `SocAnalytics`. This component launches
@@ -270,7 +276,10 @@ it leaves, so the oracle stays off the lab. The agent walks the attack tree of t
 (`it_access`, `it_exec`, `pivot`, then an impact). `tree` is a function
 `ctx -> tree document` supplied by the scenario (CPS: the `tree.json` the run
 recorded at deploy): the attacker reads a document, never the defender's code. When a countermeasure
-closes its path, it tries another branch, or stops.
+closes its path, it tries another branch, or stops. `ways` are the tree's ways
+in (`{host: URL of its application}`): each step runs against the HMI and the
+Modbus unit of its own place in the tree. `via` and `unit` keep the attacker to
+one way and one feeder; left `None`, it chooses on the tree.
 
 | `profile` | Chooses |
 |---|---|
@@ -282,7 +291,7 @@ closes its path, it tries another branch, or stops.
 |---|---|
 | **Call** | `attack(ctx)`, blocking |
 | **Options** | `dwell` = seconds between steps (the defender's window); `max_steps` = step budget |
-| **Ground truth** | `attack_start` (mode `planner:<profile>`); `plan_step` per step; `rce`; `modbus_write`; `attack_end` (success, stage reached) |
+| **Ground truth** | `attack_start` (mode `planner:<profile>`); `plan_step` per step (with its `step_kind`, `via`, `unit`); `rce`; `modbus_write` (with `unit`); `attack_end` (success, stage reached) |
 | **Ledger** | `plan_step` per step; `attack_write` |
 | **When the agent dies** | With no record at all, `attack(ctx)` raises and the run fails: it would otherwise be scored as a run without an attack. With a record cut short, the host writes the `attack_end` itself (`aborted`, the stage of the last step that succeeded). |
 | **Artifacts** | `attacker.red_agent.log` (every step's output), `attacker.red_actions.jsonl` |
@@ -353,8 +362,8 @@ only.
 | | |
 |---|---|
 | **Starts** | `python3 ot_sensor.py --iface IFACE --engine-ip … --plc-ip IP[@UNIT],… --hmi-ip IP[@UNIT],… --detectors D --learn-seconds L --telemetry-file telemetry.jsonl [--responder-ip R] [--plant-b64 B] [--dashboard-port P]` |
-| **Feeders** | Each PLC and HMI is bound to its feeder (`IP@UNIT`; no unit is the plant's first): a write of it to another feeder is a `policy_violation`. Each feeder's state and envelope are its own. The behavioural model learns the first feeder. |
-| **`detectors`** | `rules`, `model` or `rules,model`. **Rules** pair requests with responses and apply the role policy: `unauthorized_write`, `unauthorized_write_to_actuator`, `unauthorized_read`, `policy_violation`, `out_of_range_command`, `unsafe_command`, `manual_mode_excursion`. **Model** fits a median/MAD profile during the first `learn_seconds` and then reports `behavioral_anomaly`. |
+| **Feeders** | Each PLC and HMI is bound to its feeder (`IP@UNIT`; no unit is the plant's first): a write of it to another feeder is a `policy_violation`. Each feeder's state and envelope are its own, and so is its behavioural model: `model_fitted`, findings and alerts carry the feeder's `unit`. Traffic that belongs to no feeder (a client bound to none) counts for every model. |
+| **`detectors`** | `rules`, `model` or `rules,model`. **Rules** pair requests with responses and apply the role policy: `unauthorized_write`, `unauthorized_write_to_actuator`, `unauthorized_read`, `policy_violation`, `out_of_range_command`, `unsafe_command`, `manual_mode_excursion`. **Model** (numpy + scikit-learn) scales each feeder's per-second features robustly during the first `learn_seconds`, then reports as `behavioral_anomaly` a window far from every calibration window. |
 | **`responder_ip`** | The address the automated response writes to the plant from (role `responder`). Its writes raise no finding and stay out of the model's features; without it the sensor reports them as an unknown writer. Pass it only when a response runs. |
 | **Telemetry** | `sensor:/telemetry.jsonl`, name `ot`: `ot_finding`, `ot_alert` (raised/cleared), `model_fitted`, `model_error`, `ot_response_write` |
 | **Ledger (`mirror`)** | `finding`, `alert`, `model_fitted`, `model_error`, `response_write` |
@@ -425,7 +434,7 @@ scenario (`nodes/common/team-access.sh`, `command_audit.sh`,
 | `WebTerminal(node, port, user, password)` | monitor | A shell of `node` served to a browser (`ttyd`) behind `user:password`. Artifacts: `<node>.terminal.typescript`, every session whole; `<node>.terminal.log`. |
 | `RecordedShell(node, team, intruder=None, witnessed=False, jump=None, entry=None)` | monitor | Loads the command record into the node's interactive shells and polls it: ledger `team_command{team, node, cmd, via}`. The team is read from how the shell got there: `team` over SSH (from `jump` only, when given) or through the node's `WebTerminal`; `intruder` for a shell that descends from `entry` (the service it gets in through), one a service left behind as an orphan, or SSH from elsewhere; `control` for anything else (the referee). The intruder's commands, and a `witnessed` team's, also go to the ground truth (`command`); `control`'s never do. Artifact: `<node>.commands.jsonl`. |
 | `JumpHost(node, hosts)` | defense | SSH from `node` to `hosts` (`{name: listen address}`): the node makes its key pair, the platform installs the public key, each host accepts it only, on that address only. Artifact: `<host>.sshd.log`. |
-| `RedConsole(node, port, token, tree, target_url, engine_ip, engine_port, interval=0.5, terminal=None)` | attack | The red team's console (`red_console.py`), given the attack `tree` as data; it builds its executable steps in the lab (`red_steps.build_steps`), the same registry the autonomous planner reads. It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
+| `RedConsole(node, port, token, tree, target_url, engine_ip, engine_port, interval=0.5, terminal=None, ways=None, plant_b64=None)` | attack | The red team's console (`red_console.py`), given the attack `tree` as data; it builds its executable steps in the lab (`red_steps.build_steps`), the same registry the autonomous planner reads. It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
 
 ### `WazuhManager(node, agents)` · `WazuhAgent(node, manager_ip, agent_id, key, responses=None, logs=())`
 
@@ -536,7 +545,10 @@ instance mirrors all of them.
 The CPS twin's latest frame, emitted as a `plant` event once per new physics
 step, with load and DG bus voltages, `abnormal`, line loading, DG power,
 energy, setpoint, breaker and control mode. This is what the dashboard's
-voltage chart draws.
+voltage chart draws. Those readings are the first feeder's; on a plant of
+several the event also carries `units`, each feeder's voltages, `abnormal`,
+setpoint, breaker and control mode under its Modbus unit, so the dashboard can
+show any of them.
 
 ---
 

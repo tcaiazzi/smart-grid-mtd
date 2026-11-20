@@ -8,7 +8,8 @@ window.CyberRangePanels = {};
 class El {
   constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.style = {};
     this.dataset = {}; this.textContent = ""; this.clientWidth = 800; this.offsetWidth = 120; }
-  append(...k) { for (const c of k) if (c != null) this.children.push(c); }
+  // As the DOM does: a null handed to append() becomes the text "null".
+  append(...k) { for (const c of k) this.children.push(c == null ? String(c) : c); }
   appendChild(c) { this.append(c); return c; }
   replaceChildren(...k) { this.children = []; this.append(...k); }
   insertBefore(c) { this.append(c); return c; }
@@ -75,6 +76,52 @@ function fullRun() {
       tree_fidelity: { precision: 1, recall: 0.5, discovered: ["it_access"], extra: ["ghost"] } },
   });
 }
+// The same run on a plant of two feeders, attacked on the second: every sample
+// carries each feeder's readings, every write, finding and alert its unit.
+function twoFeederRun() {
+  const feeder = (v, abnormal, mode, kw) => ({ v_load: v, v_dg: v + 0.01, abnormal, ctrl_mode: mode, dg_setpoint: kw, switch_cmd: 0 });
+  return Object.assign(fullRun(), {
+    info: { units: [1, 2], attack_unit: 2, v_band: [0.95, 1.05] },
+    plant: [{ t: 101, ...feeder(1, false, 0, 20), units: { 1: feeder(1, false, 0, 20), 2: feeder(1, false, 0, 30) } },
+            { t: 140, ...feeder(1, false, 0, 20), units: { 1: feeder(1, false, 0, 20), 2: feeder(1.1, true, 1, 80) } },
+            { t: 145, ...feeder(1, false, 0, 20), units: { 1: feeder(1, false, 0, 20), 2: feeder(1.1, true, 1, 80) } }],
+    findings: [{ t: 133, detector: "it", klass: "web_injection_pattern", src: "10.0.0.9" },
+               { t: 139, detector: "model", klass: "behavioral_anomaly", unit: 2 },
+               { t: 139.5, detector: "model", klass: "behavioral_anomaly", unit: 1 },
+               { t: 141, detector: "rules", klass: "unsafe_command", unit: 2 }],
+    writes: [{ t: 138, unit: 2, register: "ctrl_mode", value: 1, ok: true },
+             { t: 138, unit: 2, register: "dg_setpoint", value: 80, ok: true }],
+  });
+}
+const TWO_FEEDER_EVENTS = [
+  { kind: "alert", guest_t: 139, state: "raised", detector: "model", klass: "behavioral_anomaly", unit: 2 },
+  { kind: "alert", guest_t: 139.5, state: "raised", detector: "model", klass: "behavioral_anomaly", unit: 1 },
+];
+// Everything a drawn element says, in order: its own text and its children's.
+const textOf = e => typeof e === "string" ? e : [e.textContent, ...(e.children || []).map(textOf)].join(" ");
+const all = (e, pred, out = []) => { if (typeof e !== "string") { if (pred(e)) out.push(e); for (const c of e.children) all(c, pred, out); } return out; };
+// What a plant of several feeders must show, on the panels of the cps family.
+function checkFeeders(panel, run, fail) {
+  panel.detail(run);
+  const tabs = all($("d-chips"), e => e.tag === "button");
+  const pressed = tabs.filter(b => b.attrs["aria-pressed"] === "true").map(textOf).join();
+  if (tabs.length !== 2) fail(`feeder selector: ${tabs.length} buttons for two feeders`);
+  if (!/unit 2/.test(pressed)) fail(`feeder selector: the attacked feeder is not the one shown (${pressed})`);
+  const chips = textOf($("d-chips"));
+  if (!/MANUAL/.test(chips) || !/80 kW/.test(chips)) fail(`chips show another feeder's state: ${chips}`);
+  const rows = all($("d-findings"), e => e.tag === "tr").map(textOf);
+  if (rows.filter(t => /behavioral_anomaly/.test(t)).length !== 2)
+    fail(`findings table merges the two feeders' model findings: ${rows.join(" / ")}`);
+  if (!/feeder/.test(rows[0])) fail("findings table has no feeder column");
+  run.x.unit = "1";
+  panel.detail(run);
+  if (/MANUAL/.test(textOf($("d-chips")))) fail("feeder 1 selected, feeder 2's MANUAL still shown");
+  const single = fullRun();
+  panel.detail(single);
+  if (all($("d-chips"), e => e.tag === "button").length) fail("a plant of one feeder got a feeder selector");
+  if (/feeder/.test(textOf($("d-findings")))) fail("a plant of one feeder got a feeder column");
+  if (/null|undefined|feeder/.test(textOf($("d-legend")))) fail(`a plant of one feeder: the legend reads "${textOf($("d-legend"))}"`);
+}
 const EVENTS = [
   { kind: "attack_start", guest_t: 131, mode: "planner:opportunistic", profile: "opportunistic" },
   { kind: "attack_plan", guest_t: 131, target: "mode_hijack", sequence: ["it_access", "it_exec", "pivot", "mode_hijack"],
@@ -105,8 +152,9 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
   const failures = [];
   const step = (what, fn) => { try { fn(); } catch (e) { failures.push(`${what}: ${e.stack || e}`); } };
   const panel = make(api);
-  for (const [label, run] of [["empty run", emptyRun()], ["full run", fullRun()]]) {
-    if (label === "full run") for (const ev of EVENTS) step(`reduce ${ev.kind}`, () => panel.reduce?.(run, ev));
+  for (const [label, run] of [["empty run", emptyRun()], ["full run", fullRun()], ["two feeders", twoFeederRun()]]) {
+    if (label !== "empty run") for (const ev of EVENTS) step(`reduce ${ev.kind}`, () => panel.reduce?.(run, ev));
+    if (label === "two feeders") for (const ev of TWO_FEEDER_EVENTS) step(`reduce ${ev.kind}`, () => panel.reduce?.(run, ev));
     step(`${label}: detail`, () => panel.detail?.(run));
     step(`${label}: chart`, () => panel.chart?.(run));
     for (const view of [null, ...(panel.views || []).map(v => v.id)]) {
@@ -121,6 +169,11 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
         panel.graph.drawTree(new El("div"), STRUCT, panel.graph.overlayAt(run, t), { width: 800, perspective });
       });
   }
+  if (name === "cps") step("two feeders shown apart", () => {
+    const run = twoFeederRun();
+    for (const ev of [...EVENTS, ...TWO_FEEDER_EVENTS]) panel.reduce?.(run, ev);
+    checkFeeders(panel, run, what => failures.push(what));
+  });
   step("chart with no run", () => panel.chart?.(null));
   out[name] = failures;
 }

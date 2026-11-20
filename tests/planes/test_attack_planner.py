@@ -205,6 +205,110 @@ class Planner(unittest.TestCase):
         self.assertTrue(waits and all(w == 2.0 for w in waits))
 
 
+def _two_ways_two_feeders():
+    """The tree of a lab with two HMIs, each a way in, and two feeders."""
+    from tests.nodes.test_attack_graph import two_ways_two_feeders
+
+    g = two_ways_two_feeders()
+    return _trees.to_json(attack_graph.attack_tree(g), attack_graph.countermeasures(g), g)[
+        "attack_tree"
+    ]
+
+
+WAYS = {"hmi": "http://10.10.0.20:8080", "hmib": "http://10.10.0.21:8080"}
+
+
+class SeveralWaysAndFeeders(unittest.TestCase):
+    """A lab with two ways in and two feeders has every step in several places:
+    the attacker must be able to take each, and say which it took."""
+
+    def setUp(self):
+        self.tree = _two_ways_two_feeders()
+
+    def run_planner(self, block=(), **kw):
+        p = AttackPlanner(self.tree, seed=1, **kw)
+        rec = Recorder(block=block)
+        steps = []
+        summary = p.run(rec, record=lambda **step: steps.append(step))
+        return summary, rec, steps
+
+    def test_every_write_on_every_way_and_feeder_is_a_candidate(self):
+        got = set(AttackPlanner(self.tree, seed=1).impact_candidates())
+        for leaf in ("breaker_open@hmi:u1", "breaker_open@hmi:u2", "breaker_open@hmib:u2"):
+            self.assertIn(leaf, got, "the attacker cannot see a step the tree has")
+        self.assertIn("meas_fdi", got)
+
+    def test_the_attacker_reaches_an_impact(self):
+        s, rec, _steps = self.run_planner()
+        self.assertTrue(s["success"], "a lab of two substations stopped the planner by itself")
+        self.assertEqual(rec.calls, ["it_access@hmi", "it_exec@hmi", "pivot@hmi", rec.calls[-1]])
+        self.assertTrue(rec.calls[-1].startswith("breaker_open@hmi:"))
+
+    def test_it_is_kept_to_the_way_and_the_feeder_it_is_given(self):
+        s, rec, steps = self.run_planner(profile="targeted", goal="mode_hijack", via="hmib", unit=2)
+        self.assertTrue(s["success"])
+        self.assertEqual(
+            rec.calls, ["it_access@hmib", "it_exec@hmib", "pivot@hmib", "mode_hijack@hmib:u2"]
+        )
+        last = steps[-1]
+        self.assertEqual((last["step_kind"], last["via"], last["unit"]), ("mode_hijack", "hmib", 2))
+        self.assertEqual(last["stage"], "impact")
+
+    def test_a_closed_way_sends_it_round_by_the_other(self):
+        s, rec, _steps = self.run_planner(block={"pivot@hmi"})
+        self.assertTrue(s["success"], "one blocked flow defended a plant with two ways in")
+        self.assertIn("pivot@hmib", rec.calls)
+
+    def test_the_workstation_is_reached_through_a_way_still_open(self):
+        p = AttackPlanner(self.tree, profile="targeted", goal="meas_fdi", seed=1)
+        self.assertEqual(
+            p.sequence_for("meas_fdi"),
+            ["it_access@hmi", "it_exec@hmi", "ot_foothold", "ot_aitm", "meas_fdi"],
+        )
+        self.assertEqual(
+            p.sequence_for("meas_fdi", failed={"it_access@hmi"})[:2],
+            ["it_access@hmib", "it_exec@hmib"],
+            "with the first HMI closed the workstation is still one HMI away",
+        )
+
+    def test_each_step_runs_against_its_own_way_and_unit(self):
+        idx, places = tree_doc.index(self.tree), S.places(self.tree)
+        ctx = dict(CTX, ways=WAYS, plant_b64="PLANT")
+        leaf = "mode_hijack@hmib:u2"
+        cmd = S.step_command(idx[leaf], ctx, places[leaf])
+        self.assertIn(f"--target-url {WAYS['hmib']} ", cmd)
+        self.assertIn("--unit-id 2 ", cmd)
+        self.assertIn("--plant-b64 PLANT", cmd)
+        self.assertIn("--step impact --attack manual-hijack", cmd)
+        access = S.step_command(idx["it_access@hmi"], ctx, places["it_access@hmi"])
+        self.assertIn(f"--target-url {WAYS['hmi']} ", access)
+        self.assertNotIn("--unit-id", access, "a step that touches no register names no feeder")
+
+    def test_the_agent_runs_the_workstation_steps_from_the_way_it_holds(self):
+        import red_agent
+
+        fake = FakeExploit(block={"pivot"})
+        with tempfile.NamedTemporaryFile("w+", suffix=".jsonl") as f:
+            planner = AttackPlanner(self.tree, seed=1, via="hmib")
+            agent = red_agent.RedAgent(dict(CTX, ways=WAYS), f.name, run_cmd=fake)
+            agent.run(planner, "opportunistic", dwell=0.0)
+            f.seek(0)
+            rows = [json.loads(line) for line in f if line.strip()]
+        foothold = next(c for c in fake.cmds if "--step ot_foothold" in c)
+        self.assertIn(f"--target-url {WAYS['hmib']} ", foothold)
+        step = next(r for r in rows if r.get("node") == "ot_foothold")
+        self.assertEqual(step["via"], "hmib", "the record does not say which HMI it went by")
+
+    def test_the_console_lists_every_place_with_its_own_command(self):
+        steps = red_steps.build_steps(
+            self.tree, CTX["target_url"], CTX["engine_ip"], CTX["engine_port"], ways=WAYS
+        )
+        by_id = {s["id"]: s for s in steps}
+        self.assertIn(f"--target-url {WAYS['hmib']} ", by_id["breaker_open@hmib:u2"]["command"])
+        self.assertIn("--unit-id 2 ", by_id["breaker_open@hmib:u2"]["command"])
+        self.assertEqual(by_id["pivot@hmib"]["needs"], ["it_access@hmib", "it_exec@hmib"])
+
+
 class FakeExploit:
     """Stands in for exploit_client.py on the attacker node: answers each --step
     with the JSON that step prints, failing the nodes in ``block`` as a boundary
@@ -223,7 +327,8 @@ class FakeExploit:
                 f'{{"phase":"impact","attack":"x","ok":{low}}}',
             ]
             return (0 if ok else 1, "\n".join(lines))
-        node = next((n for n in ("it_access", "it_exec", "pivot") if f"--step {n}" in cmd), "?")
+        names = ("it_access", "it_exec", "pivot", "ot_foothold", "ot_aitm")
+        node = next((n for n in names if f"--step {n}" in cmd), "?")
         ok = node not in self.block
         return (0 if ok else 1, f'{{"phase":"{node}","ok":{str(ok).lower()}}}')
 
@@ -338,7 +443,8 @@ class InLabAgent(unittest.TestCase):
         self.assertEqual(start["mode"], "planner:opportunistic")
 
     def test_blocked_pivot_no_writes(self):
-        s, gt, _ = self._reconstruct(block={"pivot"})
+        # Both ways to the plant closed: the flow and the workstation.
+        s, gt, _ = self._reconstruct(block={"pivot", "ot_foothold"})
         self.assertFalse(s["success"])
         self.assertEqual(s["stage_reached"], "it_exec")
         self.assertFalse(any(r["kind"] == "modbus_write" and r.get("ok") for r in gt.rows))

@@ -37,6 +37,7 @@ def _finding(ev):
         detector=ev.get("detector") or "rules",
         klass=ev.get("klass"),
         src=ent.get("src"),
+        unit=ent.get("unit"),
         register=ent.get("register"),
         name=ent.get("name"),
         confidence=ev.get("confidence"),
@@ -51,6 +52,7 @@ def _alert(ev):
         state=ev.get("state"),
         detector=ev.get("detector") or "rules",
         klass=ev.get("klass"),
+        unit=(ev.get("entities") or {}).get("unit"),
         guest_t=ev.get("t"),
     )
 
@@ -105,7 +107,10 @@ class OtSensor(GuestAgent):
             return _alert(ev)
         if kind in ("model_fitted", "model_error"):
             return kind, dict(
-                threshold=ev.get("threshold"), error=ev.get("error"), guest_t=ev.get("t")
+                unit=ev.get("unit"),
+                threshold=ev.get("threshold"),
+                error=ev.get("error"),
+                guest_t=ev.get("t"),
             )
         if kind == "ot_response_write":
             return "response_write", dict(

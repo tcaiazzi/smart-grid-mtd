@@ -5,7 +5,9 @@ The red counterpart of soc_analytics.py: the attacker's brain runs on the
 attacker node, not on the host. Given the attack tree as data (--tree-b64, as
 the SOC is given its inventory), an AttackPlanner chooses each step by its
 profile, runs it here by invoking exploit_client.py locally, observes the
-outcome and re-plans when a countermeasure has closed a path. Every step and the
+outcome and re-plans when a countermeasure has closed a path. In a lab with
+several ways in and several feeders each step runs against its own: the URL of
+the HMI it goes through (--way), the Modbus unit it acts on. Every step and the
 final summary are appended to --record as JSON lines; the host reads that record
 to reconstruct the ground truth (the oracle stays off the lab, so the DPI sensor
 never sees it). It decides in the lab and knows only what the tree tells it.
@@ -47,26 +49,35 @@ class RedAgent:
         self.run_cmd, self.clock = run_cmd, clock
         self._file = open(record_path, "a", buffering=1)
         self._phases = {}  # node -> the machine-readable lines its step printed
+        self._via = {}  # node -> the way in its step was run through
         self.mode = None
+        self.planner = None
+        self.held = None  # the way in this agent last ran commands on
 
     def exec_step(self, node):
         """Run one planner step here and return {ok, writes, phases}. Keeps the
         step's phases so the plan_step record can carry its Modbus writes."""
-        cmd = S.step_command(node, self.ctx)
+        doc, place = self.planner.idx[node], dict(self.planner.places[node])
+        # A step on the branch that goes by no HMI of its own (the workstation)
+        # is still run from one: the one this agent holds.
+        place["via"] = place["via"] or self.held
+        cmd = S.step_command(doc, self.ctx, place)
         rc, text = self.run_cmd(cmd)
         # The step's own output is the only account of why it failed: echoed
         # here, it reaches this agent's log.
         print(f"--- {node} (rc={rc})\n{text.rstrip()}", flush=True)
-        res = S.parse_outcome(node, text)
-        self._phases[node] = res["phases"]
+        res = S.parse_outcome(doc, text)
+        self._phases[node], self._via[node] = res["phases"], place["via"]
+        if res["ok"] and S.kind_of(doc) == "it_exec":
+            self.held = place["via"]
         return res
 
     def on_step(self, **entry):
         """The planner's per-step record callback: fold in the phases exec_step
         captured and append the plan_step line."""
-        self._write(
-            "plan_step", mode=self.mode, phases=self._phases.get(entry.get("node"), []), **entry
-        )
+        node = entry.get("node")
+        entry["via"] = self._via.get(node, entry.get("via"))
+        self._write("plan_step", mode=self.mode, phases=self._phases.get(node, []), **entry)
 
     def on_plan(self, **plan):
         """The planner's choice of what to aim at, and what it knew choosing it."""
@@ -78,12 +89,16 @@ class RedAgent:
 
     def run(self, planner, profile, dwell):
         self.mode = f"planner:{profile}"
+        self.planner = planner
         self._write(
             "attack_start",
             mode=self.mode,
             profile=profile,
             goal=planner.goal,
             dwell=dwell,
+            via=planner.via,
+            unit=planner.unit,
+            ways=self.ctx.get("ways") or {},
             target_url=self.ctx["target_url"],
             engine_ip=self.ctx["engine_ip"],
             engine_port=self.ctx["engine_port"],
@@ -109,7 +124,17 @@ def main():
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--dwell", type=float, default=0.0, help="seconds between steps")
     ap.add_argument("--max-steps", type=int, default=12)
-    ap.add_argument("--target-url", required=True)
+    ap.add_argument("--target-url", required=True, help="the way in a step uses when it names none")
+    ap.add_argument(
+        "--way",
+        action="append",
+        default=[],
+        metavar="HOST=URL",
+        help="a way in of the tree (its via_<HOST>) and the URL of that host's application",
+    )
+    ap.add_argument("--via", default=None, help="keep to the way in through this host")
+    ap.add_argument("--unit", type=int, default=None, help="keep to this feeder (Modbus unit)")
+    ap.add_argument("--plant-b64", default=None, help="the plant, for its feeders' ratings")
     ap.add_argument("--engine-ip", required=True)
     ap.add_argument("--engine-port", type=int, required=True)
     ap.add_argument("--interval", type=float, default=0.5)
@@ -124,9 +149,17 @@ def main():
         "engine_port": args.engine_port,
         "ot_write_path": args.ot_write_path,
         "interval": args.interval,
+        "ways": dict(w.split("=", 1) for w in args.way),
+        "plant_b64": args.plant_b64,
     }
     planner = AttackPlanner(
-        tree, profile=args.profile, goal=args.goal, seed=args.seed, max_steps=args.max_steps
+        tree,
+        profile=args.profile,
+        goal=args.goal,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        via=args.via,
+        unit=args.unit,
     )
     agent = RedAgent(ctx, args.record)
     summary = agent.run(planner, args.profile, args.dwell)

@@ -56,6 +56,7 @@ GOALS = (
 RESPONSE_POLICIES = ("off", "rules", "solver")
 LEARN_MARGIN_S = 5.0  # the model's calibration must end this long before the attack
 ACCESS_LOG = "/vuln_app.access.jsonl"
+WAY_IN_SERVICE = "diag-http"  # the application an HMI serves: what makes it a way in
 # Untimed phases: first-guess durations for the ETA (the dashboard replaces them
 # with the durations it observed in earlier runs of the same ledger).
 OVERHEAD_S = {"deploy": 3.0, "services": 2.1, "attack": 4.0, "download": 0.5, "undeploy": 1.0}
@@ -80,13 +81,21 @@ def plant_of(spec):
     """The hosts and addresses the episode works with, found in ``spec`` by
     role: the names and numbers the components are started with."""
     soc, sensor = spec.one("soc").name, spec.one("sensor").name
-    # The plant's first controller and HMI: the HMI the attack targets, the PLC
-    # whose writes the ground truth calls authorized.
+    # The plant's first controller and HMI: the PLC whose writes the ground
+    # truth calls authorized, the HMI an attack goes through unless told another.
     engine = spec.one("plant").name
     plc, hmi = spec.with_role("plc")[0].name, spec.with_role("hmi")[0].name
     ews = spec.with_role("engineering")
     plant_zone = spec.zone_of(engine)
+    # The ways in: every HMI that serves the application, with its URL.
+    ways = {
+        h.name: f"http://{spec.ip(h.name)}:{svc.port}"
+        for h in spec.with_role("hmi")
+        for svc in h.services
+        if svc.name == WAY_IN_SERVICE
+    }
     return types.SimpleNamespace(
+        ways=ways,
         soc=soc,
         soc_ip=spec.ip(soc),
         sensor=sensor,
@@ -98,7 +107,7 @@ def plant_of(spec):
         plc_ip=spec.ip(plc),
         hmi=hmi,
         hmi_ip=spec.ip(hmi),
-        app_port=spec.service(hmi, "diag-http").port,
+        app_port=spec.service(hmi, WAY_IN_SERVICE).port,
         # The boundary writes to the plant from its own foot on the plant's link.
         responder_ip=spec.ip(spec.boundary, plant_zone),
         ews=ews[0].name if ews else None,
@@ -185,6 +194,21 @@ class CpsScenario(Scenario):
         )
         a.add_argument("--max-steps", type=int, default=12, help="planner driver: step budget")
         a.add_argument(
+            "--attack-via",
+            default=None,
+            metavar="HOST",
+            help="the HMI the attack gets in through (scripted: default the lab's first; "
+            "planner: default any, in the tree's order)",
+        )
+        a.add_argument(
+            "--attack-unit",
+            type=int,
+            default=None,
+            metavar="UNIT",
+            help="the feeder the attack acts on, by its Modbus unit (scripted: default the "
+            "plant's first; planner: default any)",
+        )
+        a.add_argument(
             "--attack-repeat",
             type=int,
             default=None,
@@ -229,6 +253,8 @@ class CpsScenario(Scenario):
             raise SystemExit(
                 f"--attacker-profile targeted needs --attack-goal ({', '.join(GOALS)})"
             )
+        if getattr(args, "attack", False):
+            self.check_target(args)
         self.check_approval(getattr(args, "approval", "auto") or "auto")
         for f in self.features:
             f.validate(args)
@@ -239,6 +265,17 @@ class CpsScenario(Scenario):
             raise SystemExit(
                 f"the host ports a run publishes must be distinct and valid, got {ports}"
             )
+
+    def check_target(self, args):
+        """An attack aimed at a way in or a feeder the run does not have would
+        find nothing to do, and be scored as a plant well defended."""
+        via, unit = getattr(args, "attack_via", None), getattr(args, "attack_unit", None)
+        ways = plant_of(self.lab_spec(args)).ways
+        if via is not None and via not in ways:
+            raise SystemExit(f"--attack-via {via}: the lab's ways in are {', '.join(ways)}")
+        units = reg.units(self.plant_spec(args))
+        if unit is not None and unit not in units:
+            raise SystemExit(f"--attack-unit {unit}: the plant's units are {units}")
 
     def check_approval(self, spec):
         """A person's verdict needs the SOC's operator API published and a
@@ -267,6 +304,10 @@ class CpsScenario(Scenario):
             it=bool(args.it_telemetry),
             # The plant's normal band, for the dashboard to draw the readings against.
             v_band=self.plant_spec(args)["limits"]["v_band"],
+            # Its feeders, and where the attack was aimed (None: left to the attacker).
+            units=reg.units(self.plant_spec(args)),
+            attack_unit=getattr(args, "attack_unit", None),
+            attack_via=getattr(args, "attack_via", None),
         )
         for f in self.features:
             info |= f.run_info(args)
@@ -364,11 +405,15 @@ class CpsScenario(Scenario):
             driver = f.attacker(self, args)
             if driver is not None:
                 return driver
-        spec = self.lab_spec(args)
+        spec, plant = self.lab_spec(args), self.plant_spec(args)
         p = plant_of(spec)
         node = spec.one("it-host").name
-        target = f"http://{p.hmi_ip}:{p.app_port}"
+        via, unit = getattr(args, "attack_via", None), getattr(args, "attack_unit", None)
+        target = p.ways[via] if via else f"http://{p.hmi_ip}:{p.app_port}"
+        plant_b64 = reg.plant_b64(plant)
         if args.attack_driver == "planner":
+            # Left free (None), the planner chooses its way and its feeder on
+            # the tree, by its profile.
             return attack.PlannedAttacker(
                 args.attacker_profile,
                 target,
@@ -380,6 +425,10 @@ class CpsScenario(Scenario):
                 interval=args.attack_interval,
                 tree=self._attack_tree,
                 node=node,
+                ways=p.ways,
+                via=via,
+                unit=unit,
+                plant_b64=plant_b64,
             )
         return attack.ScriptedChain(
             args.attack_mode,
@@ -389,6 +438,9 @@ class CpsScenario(Scenario):
             repeat=args.attack_repeat,
             interval=args.attack_interval,
             node=node,
+            via=via or p.hmi,
+            unit=unit if unit is not None else reg.units(plant)[0],
+            plant_b64=plant_b64,
         )
 
     def episode(self, ctx):
@@ -460,34 +512,45 @@ class CpsScenario(Scenario):
                         p.engine_ip,
                         p.modbus_port,
                         seed=ctx.role_seed("hmi" if i == 0 else f"hmi:{unit}"),
-                        diag_url=f"http://127.0.0.1:{p.app_port}" if it and i == 0 else None,
+                        # Legitimate use of the application, on every HMI serving it.
+                        diag_url=(
+                            f"http://127.0.0.1:{p.ways[name].rsplit(':', 1)[1]}"
+                            if it and name in p.ways
+                            else None
+                        ),
                         diag_targets=(p.engine_ip, "localhost", p.plc_ip, "127.0.0.1"),
                         unit=unit,
                     )
                 )
-            ctx.start(attack.VulnApp(p.hmi, p.app_port, access_log=ACCESS_LOG if it else None))
+            # Every way in is a real one: the application runs on each HMI that
+            # serves it, and each holds the workstation's credential.
+            for name, url in p.ways.items():
+                port = int(url.rsplit(":", 1)[1])
+                ctx.start(attack.VulnApp(name, port, access_log=ACCESS_LOG if it else None))
             if p.ews:
                 maint = spec.service(p.ews, "maint-http").port
+                clients = [
+                    (name, spec.ip(name), f"http://{spec.ip(p.ews, spec.zone_of(name))}:{maint}")
+                    for name in p.ways
+                ]
                 ctx.start(
                     attack.EwsMaintenance(
-                        p.ews,
-                        maint,
-                        client=p.hmi,
-                        client_ip=p.hmi_ip,
-                        url=f"http://{spec.ip(p.ews, spec.zone_of(p.hmi))}:{maint}",
-                        token=maint_token(ctx.role_seed("ews-maint")),
+                        p.ews, maint, clients, token=maint_token(ctx.role_seed("ews-maint"))
                     )
                 )
             if it:
-                ctx.start(
-                    defense.ItSensor(p.hmi, p.engine_ip, p.modbus_port, ACCESS_LOG, a.learn_seconds)
-                )
+                for name in p.ways:
+                    ctx.start(
+                        defense.ItSensor(
+                            name, p.engine_ip, p.modbus_port, ACCESS_LOG, a.learn_seconds
+                        )
+                    )
             # What each agent may run, from the countermeasures the structure
             # recorded at deploy (tree.json): the host provisions the allowlist,
             # it does not decide. The SOC analytics asks for these by id.
             logs = {p.sensor: [defense.OtSensor.TELEMETRY]}
             if it:
-                logs[p.hmi] = [defense.ItSensor.TELEMETRY]
+                logs.update({name: [defense.ItSensor.TELEMETRY] for name in p.ways})
             allowed = {name: {} for name in agents}
             for cm in self._countermeasures(ctx):
                 if cm["machine"] in allowed:
@@ -537,6 +600,10 @@ class CpsScenario(Scenario):
             attack=bool(a.attack),
             attack_mode=a.attack_mode,
             attack_driver=a.attack_driver,
+            attack_via=a.attack_via,
+            attack_unit=a.attack_unit,
+            ways=p.ways,
+            units=reg.units(plant),
             engine_ip=p.engine_ip,
             plc_ip=p.plc_ip,
             hmi_ip=p.hmi_ip,

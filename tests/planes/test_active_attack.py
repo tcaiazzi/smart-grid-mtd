@@ -41,6 +41,12 @@ except Exception:
     HAVE = False
 
 
+def _interpreter_first(env):
+    """A PATH whose ``python3`` is this interpreter: the injected command runs
+    ot_write.py with the HMI's own python, which has pymodbus as this one does."""
+    return os.pathsep.join([str(Path(sys.executable).parent), env.get("PATH", "")])
+
+
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -73,6 +79,7 @@ class ActiveAttackChain(unittest.TestCase):
 
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join([str(self.stage), env.get("PYTHONPATH", "")])
+        env["PATH"] = _interpreter_first(env)
 
         self.app_port = _free_port()
         self.eng_port = _free_port()
@@ -146,6 +153,18 @@ class ActiveAttackChain(unittest.TestCase):
         finally:
             c.close()
 
+    def test_a_write_the_engine_refuses_is_reported_as_failed(self):
+        url = f"http://127.0.0.1:{self.app_port}"
+        raw = reg.encode(20.0, reg.ACTUATOR_REGISTERS[reg.HR_DG_SETPOINT][1])
+        to = f"python3 ot_write.py 127.0.0.1 {self.eng_port}"
+        self.assertIn("ot_write ok", exploit_client.rce(url, f"{to} {reg.HR_DG_SETPOINT}={raw}"))
+        # The default plant has one feeder: unit 9 is nobody's, register 99 no actuator.
+        for refused in (f"--unit=9 {reg.HR_DG_SETPOINT}={raw}", "99=1"):
+            out = exploit_client.rce(url, f"{to} {refused}; echo rc=$?")
+            self.assertIn("ot_write failed", out, f"'{refused}' was reported as written")
+            self.assertNotIn("ot_write ok", out)
+            self.assertIn("rc=1", out)
+
 
 @unittest.skipUnless(HAVE, "pymodbus / exploit_client unavailable")
 class AttackVsPLC(unittest.TestCase):
@@ -162,6 +181,7 @@ class AttackVsPLC(unittest.TestCase):
         shutil.copy(guest_paths.DEFENSE / "ot_registers.py", self.stage / "ot_registers.py")
         env = dict(os.environ)
         env["PYTHONPATH"] = str(self.stage)
+        env["PATH"] = _interpreter_first(env)
         self.env = env
         eng_env = dict(os.environ)
         eng_env["PYTHONPATH"] = os.pathsep.join([str(AGENTS_T), str(guest_paths.DEFENSE)])

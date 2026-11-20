@@ -18,11 +18,13 @@ RUN apt-get update && \
 
 # Python deps (system-wide; --break-system-packages for Debian 12 PEP 668).
 # pandapower pulls pandas/scipy/networkx; pymodbus pinned to the stable classic
-# datastore API. numpy is used by the DPI sensor's (stdlib-only) featurizer.
+# datastore API. numpy and scikit-learn are the DPI sensor's behavioural model
+# (its featurizer and the per-feeder anomaly model).
 RUN pip3 install --no-cache-dir --break-system-packages \
         numpy==2.4.6 \
         pandapower==3.5.6 \
-        pymodbus==3.6.9
+        pymodbus==3.6.9 \
+        scikit-learn==1.5.0
 
 # Wazuh agent: the hosts on the management network report to the manager on the
 # SOC node and run its active responses. Installed on every node of the image,

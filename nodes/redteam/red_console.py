@@ -214,7 +214,15 @@ class RedConsole:
 def main():
     ap = argparse.ArgumentParser(description="Red team console: the attack's steps on demand")
     ap.add_argument("--tree-b64", required=True, help="attack tree document, base64 of JSON")
-    ap.add_argument("--target-url", required=True)
+    ap.add_argument("--target-url", required=True, help="the way in a step uses when it names none")
+    ap.add_argument(
+        "--way",
+        action="append",
+        default=[],
+        metavar="HOST=URL",
+        help="a way in of the tree (its via_<HOST>) and the URL of that host's application",
+    )
+    ap.add_argument("--plant-b64", default=None, help="the plant, for its feeders' ratings")
     ap.add_argument("--engine-ip", required=True)
     ap.add_argument("--engine-port", type=int, required=True)
     ap.add_argument("--interval", type=float, default=0.5)
@@ -225,7 +233,13 @@ def main():
     args = ap.parse_args()
     tree = json.loads(base64.b64decode(args.tree_b64))
     steps = red_steps.build_steps(
-        tree, args.target_url, args.engine_ip, args.engine_port, interval=args.interval
+        tree,
+        args.target_url,
+        args.engine_ip,
+        args.engine_port,
+        interval=args.interval,
+        ways=dict(w.split("=", 1) for w in args.way),
+        plant_b64=args.plant_b64,
     )
     console = RedConsole(Bench(steps, args.record), args.token, args.port, terminal=args.terminal)
     print(f"red console on port {console.port}, {len(steps)} steps", flush=True)

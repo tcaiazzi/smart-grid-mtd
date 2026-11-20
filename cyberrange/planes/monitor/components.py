@@ -101,21 +101,33 @@ class PlantMirror(Component):
         if fr.get("step") == self.step:
             return
         self.step = fr.get("step")
-        act = fr.get("actuators") or {}
+        # The frame's own readings are the first feeder's, and the whole plant
+        # when it has one. A plant of several carries each feeder's under
+        # "units": mirrored too, or a feeder other than the first is never seen.
+        units = {unit: _readings(f) for unit, f in (fr.get("units") or {}).items()}
         ctx.emit(
             "plant",
             step=fr.get("step"),
             frame_t=fr.get("timestamp"),
-            v_load=fr.get("v_load"),
-            v_dg=fr.get("v_dg"),
-            abnormal=fr.get("abnormal"),
             line_load=fr.get("line_load"),
             p_dg=fr.get("p_dg"),
             energy_kwh=fr.get("energy_kwh"),
-            dg_setpoint=act.get("dg_setpoint"),
-            ctrl_mode=act.get("ctrl_mode"),
-            switch_cmd=act.get("switch_cmd"),
+            **_readings(fr),
+            **({"units": units} if units else {}),
         )
+
+
+def _readings(feeder):
+    """What the ledger keeps of one feeder's state in a frame."""
+    act = feeder.get("actuators") or {}
+    return dict(
+        v_load=feeder.get("v_load"),
+        v_dg=feeder.get("v_dg"),
+        abnormal=feeder.get("abnormal"),
+        dg_setpoint=act.get("dg_setpoint"),
+        ctrl_mode=act.get("ctrl_mode"),
+        switch_cmd=act.get("switch_cmd"),
+    )
 
 
 # ── people in the lab ────────────────────────────────────────────────────────

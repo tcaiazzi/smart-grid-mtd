@@ -140,11 +140,20 @@ def _detector(e):
     return e.get("detector") or "rules"  # pre-v2 runs only had rules
 
 
-def _manual_windows(frames, dt):
-    """[(t_start, t_end)] spans where the frames report ctrl_mode == MANUAL."""
+def _feeder(frame, unit):
+    """``frame`` as feeder ``unit`` reports it. A plant of several feeders
+    carries each one's readings under "units" (the keys are strings: JSON); the
+    frame's own top level is the first feeder, and the whole of a plant of one."""
+    return (frame.get("units") or {}).get(str(unit)) or frame
+
+
+def _manual_windows(frames, dt, unit=None):
+    """[(t_start, t_end)] spans where the frames report feeder ``unit`` (default:
+    the plant's first) in MANUAL."""
     spans, cur = [], None
     for fr in frames:
-        manual = int((fr.get("actuators") or {}).get("ctrl_mode", fr.get("ctrl_mode", 0)) or 0) == 1
+        f = _feeder(fr, unit)
+        manual = int((f.get("actuators") or {}).get("ctrl_mode", f.get("ctrl_mode", 0)) or 0) == 1
         t = fr.get("timestamp", 0)
         if manual and cur is None:
             cur = [t, t]
@@ -158,17 +167,26 @@ def _manual_windows(frames, dt):
     return spans
 
 
-def _detection(findings, attack_start, first_write, first_abnormal, manual_spans):
+def _detection(findings, attack_start, first_write, first_abnormal, manual_spans, unit=None):
+    """``unit`` is the feeder the attack acted on, when the ground truth says."""
     if attack_start is None:
         fa = findings
-        hits = []
+        during = []
     else:
         fa = [e for e in findings if e["t"] < attack_start - SLACK_S]
-        hits = [e["t"] for e in findings if e["t"] >= attack_start - SLACK_S]
+        during = [e for e in findings if e["t"] >= attack_start - SLACK_S]
+    hits = [e["t"] for e in during]
     first = min(hits) if hits else None
     in_op = sum(1 for e in fa if any(a - SLACK_S <= e["t"] <= b + SLACK_S for a, b in manual_spans))
     return {
         "detected": bool(hits),
+        # A finding that names the attacked feeder: with several feeders, an
+        # alarm on another one is not this attack seen. None: no feeder known.
+        "on_attacked_feeder": (
+            any((e.get("entities") or {}).get("unit") == unit for e in during)
+            if unit is not None and attack_start is not None
+            else None
+        ),
         "findings": len(findings),
         "detection_latency_s": round(first - attack_start, 3) if first is not None else None,
         "latency_from_write_s": (
@@ -376,7 +394,9 @@ def compute_metrics(out_dir: str) -> dict:
     events = _read_jsonl(_find(out_dir, "sensor.telemetry.jsonl", "telemetry.jsonl"))
     # IT-side sensor findings (when --it-telemetry ran): same ot_finding shape,
     # detector="it". Folded in so detection and response latency see them too.
-    it_events = _read_jsonl(_find(out_dir, "hmi.it_telemetry.jsonl", "it_telemetry.jsonl"))
+    # One file per HMI that is a way in.
+    it_files = sorted(glob.glob(os.path.join(out_dir, "*it_telemetry.jsonl")))
+    it_events = [e for path in it_files for e in _read_jsonl(path)]
     gt = _read_jsonl(_find(out_dir, "ground_truth.jsonl"))
     resp_path = os.path.join(out_dir, "response.jsonl")
     resp = _read_jsonl(resp_path) if os.path.exists(resp_path) else None
@@ -393,6 +413,16 @@ def compute_metrics(out_dir: str) -> dict:
     attack_end = next((e["t"] for e in gt if e.get("kind") == "attack_end"), None)
     writes = [e["t"] for e in _plant_acts(gt)]
     first_write = min(writes) if writes else attack_start
+    # The feeder the attack acted on: where it wrote, or where it was aimed.
+    attack_unit = next(
+        (
+            e["unit"]
+            for kind in ("modbus_write", "attack_start")
+            for e in gt
+            if e.get("kind") == kind and e.get("unit") is not None
+        ),
+        None,
+    )
     mode = next((e.get("mode") for e in gt if e.get("kind") == "attack_start"), None)
     attack_end_ev = next((e for e in gt if e.get("kind") == "attack_end"), {})
     planner = bool(mode) and str(mode).startswith("planner:")
@@ -420,7 +450,7 @@ def compute_metrics(out_dir: str) -> dict:
         for v in (feeder.get("v_load", V_NOMINAL), feeder.get("v_dg", V_NOMINAL))
         if v is not None
     ]
-    manual_spans = _manual_windows(frames, dt)
+    manual_spans = _manual_windows(frames, dt, attack_unit)
     manual_after = (
         sum(
             min(b, ts[-1] + dt) - max(a, attack_start)
@@ -454,13 +484,19 @@ def compute_metrics(out_dir: str) -> dict:
             first_write,
             first_abn,
             normal_spans,
+            attack_unit,
         )
         for d in DETECTORS
     }
     if it_findings:
         per["it"] = _detection(it_findings, attack_start, first_write, first_abn, normal_spans)
-    per["combined"] = _detection(findings, attack_start, first_write, first_abn, normal_spans)
-    fitted = next((e for e in events if e.get("kind") == "model_fitted"), None)
+    per["combined"] = _detection(
+        findings, attack_start, first_write, first_abn, normal_spans, attack_unit
+    )
+    # One model per feeder, each with the threshold it fitted.
+    thresholds = {
+        str(e.get("unit")): e.get("threshold") for e in events if e.get("kind") == "model_fitted"
+    }
 
     comb = per["combined"]
     # MTM: back in band for good = the first normal frame after the last abnormal one.
@@ -499,7 +535,8 @@ def compute_metrics(out_dir: str) -> dict:
         "findings": comb["findings"],
         "first_finding_t": min((e["t"] for e in findings), default=None),
         "detectors": per,
-        "model_threshold": fitted.get("threshold") if fitted else None,
+        "attack_unit": attack_unit,
+        "model_thresholds": thresholds,
         # Impact
         "time_to_impact_s": (
             round(first_abn - first_write, 3)
@@ -559,15 +596,16 @@ def format_report(m: dict) -> str:
     lines.append(f"- false alarms (normal phase): {m['false_alarms']}")
     lines.append("")
     lines.append(
-        "| detector | detected | latency (s) | from write (s) | before impact "
-        "| false alarms | …in operator windows | classes |"
+        "| detector | detected | on the attacked feeder | latency (s) | from write (s) "
+        "| before impact | false alarms | …in operator windows | classes |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     det_rows = (*DETECTORS, *(["it"] if "it" in m["detectors"] else []), "combined")
     for d in det_rows:
         x = m["detectors"][d]
         lines.append(
-            f"| {d} | {'yes' if x['detected'] else 'no'} | {x['detection_latency_s']} "
+            f"| {d} | {'yes' if x['detected'] else 'no'} "
+            f"| {_yes_no(x.get('on_attacked_feeder'))} | {x['detection_latency_s']} "
             f"| {x['latency_from_write_s']} | "
             f"{'yes' if x['before_impact'] and x['detected'] else 'no'} "
             f"| {x['false_alarms']} | {x['false_alarms_in_operator_windows']} "
@@ -685,6 +723,11 @@ def aggregate(rows):
                     "runs": n,
                     "detected": len(hit) if attack else None,
                     "detection_rate": _rate(len(hit), n) if attack else None,
+                    "on_attacked_feeder_rate": (
+                        _rate(sum(1 for d in hit if d.get("on_attacked_feeder")), n)
+                        if attack and any(d.get("on_attacked_feeder") is not None for d in ds)
+                        else None
+                    ),
                     "latency_median_s": _median(lat) if attack else None,
                     "latency_min_s": min((x for x in lat if x is not None), default=None)
                     if attack
@@ -775,6 +818,10 @@ def _fmt(v):
     if isinstance(v, float):
         return f"{v:g}"
     return str(v)
+
+
+def _yes_no(flag):
+    return "—" if flag is None else "yes" if flag else "no"
 
 
 def format_aggregate(agg) -> str:

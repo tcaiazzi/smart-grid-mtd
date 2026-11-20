@@ -483,7 +483,7 @@ decreases within a run.
 
 Two details of the model mapping prevent known misreadings:
 - the voltage features `v_min`/`v_max` count as consequence evidence;
-- z-scores are absolute values and an overvoltage also moves `v_min`, so `v_min`
+- a feature's deviation is an absolute value and an overvoltage also moves `v_min`, so `v_min`
   is read as an undervoltage (that is, as `breaker_open`) only when it is more
   than four times `v_max`.
 
@@ -675,7 +675,7 @@ the lab by `red_agent.py`, uses the tree as a plan:
 1. **Candidate goals.** The impact leaves that are `feasible` on the graph,
    ordered by profile:
    - *opportunistic*: the biggest `impact` first;
-   - *targeted*: only `--attack-goal`;
+   - *targeted*: only the leaves of the kind `--attack-goal` names;
    - *stealthy*: the lowest `DETECTABILITY` first
      (`steps.py`).
 2. **Steps.** For a goal: its `prerequisites` in stage order
@@ -703,9 +703,17 @@ generator the SOC runs on its full inventory. What the attacker never saw is
 absent or not feasible; tree fidelity (`metrics._tree_fidelity`) counts the
 leaves each tree lets an attacker reach and scores the difference.
 
-The attacker's executable steps (`steps.py`) are the lab's single way in and
-first feeder: a step qualified by another way or feeder is not one the exploit
-client can carry out, and the planner leaves it aside.
+The attacker's executable steps (`steps.py`) are keyed by the *kind* of a step.
+In a lab with several ways in or several feeders the same step stands in several
+places of the tree, each a node of its own (`breaker_open@hmib:u2`): the node's
+document names its kind, and its place in the tree says which HMI it goes
+through (the `via_<host>` it stands under) and which feeder it acts on (the unit
+of the registers it targets). `steps.places` reads both, and each step runs
+against its own: the URL of that HMI's application, that Modbus unit, and the
+values of that feeder (its rating, read from the plant description). `--attack-via`
+and `--attack-unit` keep the attacker to one way and one feeder; left free, it
+chooses on the tree by its profile, and a way that a countermeasure closes sends
+it round by another.
 
 ## 8. What is recorded
 
@@ -751,7 +759,7 @@ feeder that has those registers. What still names it by kind:
 | `policy.RulesPolicy.PLAYBOOK` / `TRIGGERS` | what the baseline does when it is confirmed |
 | `nodes/redteam/steps.py` `IMPACT_MODE`, `DETECTABILITY` | how the attacker realises it, and how loud it is |
 | `planes/attack/agents/exploit_client.py` `ATTACKS` or `SCHEDULES`, `DEFAULT_REPEAT` | the writes of the mode that realises it |
-| `planes/attack/active_attack.py` `ATTACK_TARGET`, `STEALTHY_MODES` | the registers the ground truth names for that mode |
+| `planes/attack/active_attack.py` `attack_targets()`, `STEALTHY_MODES` | the registers the ground truth names for that mode |
 | `scenarios/cps/scenario.py` `ATTACK_MODES`, `GOALS` and `campaign.py` `ATTACK_MODES` | so the mode and the goal can be chosen |
 | `scenarios/cps/metrics.py` `expected_response` | what a correct response to it is |
 
@@ -793,8 +801,10 @@ changing a constant. To see the effect on real data, replay recorded runs with
   reused across hosts, say) is a new entry in the generator, not only in the
   data.
 - **Probability and time of a step** (WP2 T2.2's annotations) are not there yet.
-- **The attacker executes the first way in and the first feeder only**
-  (`steps.py`, §7).
+- **The branch by the workstation is not per feeder.** `meas_fdi` falsifies the
+  readings of the first PLC the tool in the middle hears (`ot_mitm.py`), and the
+  tree has that branch once. The attacker of `cps-recon` likewise believes in
+  one way in and one feeder: its reconnaissance stops at the first of each.
 - **`observable` is static.** It marks the IT steps as unobservable, which is
   true of the OT sensor but not with the IT sensor running. Nothing reads it
   except the dashboard.

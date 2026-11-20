@@ -43,7 +43,7 @@ featurizer over the observed Modbus traffic + process state, and a robust
 anomaly model calibrated online on the normal phase.
 
 Copied flat onto the sensor machine next to ot_sensor.py (see the scenario's
-guest_files.py). Stdlib + numpy only, unit-testable off-wire.
+guest_files.py). Stdlib + numpy + scikit-learn, unit-testable off-wire.
 
 Why a model next to the rules: the rules encode the plant contract — who may
 write what, which values are in range. A stealthy attacker that writes

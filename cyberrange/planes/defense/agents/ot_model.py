@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """ot_model.py — the learned half of the OT sensor: a per-window behavioural
-featurizer over the observed Modbus traffic + process state, and a robust
-anomaly model calibrated online on the normal phase.
+featurizer over the observed Modbus traffic + process state, and an anomaly
+model calibrated online on the normal phase. The sensor keeps one of each per
+feeder of the plant.
 
 Copied flat onto the sensor machine next to ot_sensor.py (see
-the scenario's guest_files.py). Stdlib + numpy only, unit-testable off-wire.
+the scenario's guest_files.py). Stdlib + numpy + scikit-learn, unit-testable
+off-wire.
 
 Why a model next to the rules: the rules (ot_sensor.py) encode the plant
 contract — who may write what, which values are in range, when the physics went
@@ -14,18 +16,26 @@ The model instead learns what normal *behaviour* looks like (session churn,
 setpoint jump sizes, how long control stays in MANUAL, …) and flags the
 deviation, possibly before the impact.
 
-Model: for every feature, center = median and scale = max(MAD·1.4826, floor)
-over the calibration windows; a window's score is its largest robust |z|. The
-floors are per-feature priors in natural units (a count, kW, pu, seconds) so a
-feature that never varied during calibration does not make the model explode on
-the first harmless blip. Threshold = max(k, margin × the q-quantile of the
-calibration scores) — a quantile, not the max, so a start-up transient inside
-the calibration period (the clients' first TCP handshakes) cannot inflate it.
+Model: every feature is centred on its median and scaled by its spread over the
+calibration windows (scikit-learn's RobustScaler), the spread never below a
+floor. A window's score is its mean distance to the calibration windows nearest
+to it (NearestNeighbors): how far it is from anything seen while the plant was
+normal. Normal behaviour has several shapes — a second with the HMI's poll and
+one without, an operator's dispatch — and a window is compared with its own
+kind, not with an average of all. The floors are per-feature priors in natural
+units (a count, kW, pu, seconds) so a feature that never varied during
+calibration does not make the model explode on the first harmless blip.
+Threshold = max(k, margin × the q-quantile of the calibration windows' own
+scores, each against the others) — a quantile, not the max, so a start-up
+transient inside the calibration period (the clients' first TCP handshakes)
+cannot inflate it.
 """
 
 import math
 
 import numpy as np
+from sklearn.neighbors import NearestNeighbors
+from sklearn.preprocessing import RobustScaler
 
 import ot_registers as reg  # flat import; copied alongside on the sensor
 
@@ -59,8 +69,6 @@ FLOORS = {
     "v_max": 0.008,
     "v_min": 0.008,
 }
-
-MAD_TO_SIGMA = 1.4826
 
 
 class WindowFeaturizer:
@@ -237,19 +245,24 @@ class WindowFeaturizer:
         return self._advance(now)
 
 
-class RobustAnomalyModel:
-    """Median/MAD robust z-score model with online calibration."""
+class AnomalyModel:
+    """Distance to the nearest calibration windows, in robustly scaled features."""
 
-    def __init__(self, k=6.0, margin=1.2, quantile=0.95, min_calibration=10, floors=None):
+    def __init__(
+        self, k=4.0, margin=1.2, quantile=0.95, min_calibration=10, neighbors=3, floors=None
+    ):
         self.k = float(k)
         self.margin = float(margin)
         self.quantile = float(quantile)
         self.min_calibration = int(min_calibration)
+        self.neighbors = int(neighbors)
         self.floors = np.array([(floors or FLOORS)[f] for f in FEATURES], dtype=float)
         self._calib = []
         self.center = None
         self.scale = None
         self.threshold = None
+        self._scaled = None  # the calibration windows, scaled
+        self._nn = None
 
     @property
     def fitted(self):
@@ -259,22 +272,29 @@ class RobustAnomalyModel:
         self._calib.append(np.asarray(vec, dtype=float))
 
     def fit(self):
-        if len(self._calib) < self.min_calibration:
+        if len(self._calib) < max(self.min_calibration, self.neighbors + 1):
             raise ValueError(
                 f"need >= {self.min_calibration} calibration windows, got {len(self._calib)}"
             )
         X = np.vstack(self._calib)
-        self.center = np.median(X, axis=0)
-        mad = np.median(np.abs(X - self.center), axis=0) * MAD_TO_SIGMA
-        self.scale = np.maximum(mad, self.floors)
-        calib_scores = [self.score(x)[0] for x in X]
-        self.threshold = max(self.k, self.margin * float(np.quantile(calib_scores, self.quantile)))
+        # unit_variance: the interquartile range as a standard deviation, so a
+        # floor and a threshold read in the same units for every feature.
+        scaler = RobustScaler(unit_variance=True).fit(X)
+        self.center = scaler.center_
+        self.scale = np.maximum(scaler.scale_, self.floors)
+        self._scaled = (X - self.center) / self.scale
+        # One neighbour more than scored: a calibration window's nearest is itself.
+        nn = NearestNeighbors(n_neighbors=self.neighbors + 1).fit(self._scaled)
+        own = nn.kneighbors(self._scaled)[0][:, 1:].mean(axis=1)
+        self._nn = nn
+        self.threshold = max(self.k, self.margin * float(np.quantile(own, self.quantile)))
         return self
 
     def score(self, vec):
-        """-> (score, z-vector)."""
-        z = np.abs((np.asarray(vec, dtype=float) - self.center) / self.scale)
-        return float(z.max()), z
+        """-> (score, per-feature distance from the nearest calibration window)."""
+        x = ((np.asarray(vec, dtype=float) - self.center) / self.scale).reshape(1, -1)
+        dist, idx = self._nn.kneighbors(x, n_neighbors=self.neighbors)
+        return float(dist[0].mean()), np.abs(x[0] - self._scaled[idx[0][0]])
 
     def explain(self, z, top=3):
         idx = np.argsort(z)[::-1][:top]

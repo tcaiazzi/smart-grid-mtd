@@ -224,7 +224,7 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertEqual((model["false_alarms"], model["false_alarms_in_operator_windows"]), (1, 1))
         self.assertEqual(rules["false_alarms"], 0)
         self.assertEqual(m["detectors"]["combined"]["detection_latency_s"], 2.6)
-        self.assertEqual(m["model_threshold"], 6.0)
+        self.assertEqual(list(m["model_thresholds"].values()), [6.0])
 
     def test_impact_persists(self):
         m = compute_metrics(str(self.d))
