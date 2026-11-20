@@ -599,7 +599,7 @@ class ExampleSkeleton(_Skeleton, unittest.TestCase):
         [panel] = [f["content"] for f in self.out["files"] if f["path"].endswith("panel.js")]
         shape = test_panels.run_node(test_panels.HARNESS % panel)
         self.assertEqual(0, shape.returncode, shape.stderr)
-        self.assertEqual({"guide-probe": ["cards"]}, json.loads(shape.stdout))
+        self.assertEqual({"guide-probe": ["cards", "labels"]}, json.loads(shape.stdout))
         drawn = test_panels.run_node(test_panels.DRAW_HARNESS.replace("/* PANELS */", panel))
         self.assertEqual(0, drawn.returncode, drawn.stderr)
         self.assertEqual({}, {k: v for k, v in json.loads(drawn.stdout).items() if v})

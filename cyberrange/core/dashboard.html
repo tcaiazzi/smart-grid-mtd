@@ -61,7 +61,7 @@ select { max-width: 100%; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; min-width: 0; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
-.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .value { overflow-wrap: anywhere; font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .tile .note { color: var(--muted); font-size: 12px; }
 .bar { height: 10px; border-radius: 999px; background: var(--wash); overflow: hidden; display: flex; gap: 2px; margin: 4px 0 16px; }
 .bar > span { display: block; height: 100%; }
@@ -84,7 +84,7 @@ select { max-width: 100%; }
 .help { background: var(--wash); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; font-size: 13px; color: var(--ink-2); white-space: pre-line; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 6px 8px; vertical-align: bottom; }
+th { white-space: nowrap; text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 6px 8px; vertical-align: bottom; }
 td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.num, th.num { text-align: right; }
 tr.click { cursor: pointer; }
@@ -92,6 +92,8 @@ tr.click:hover td { background: var(--wash); }
 tr.sel td { background: var(--wash); }
 tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
 .muted { color: var(--muted); }
+/* A name standing for a recorded identifier: hovering it gives the identifier. */
+.term[title] { text-decoration: underline dotted var(--axis); text-underline-offset: 3px; cursor: help; }
 .phases { display: flex; gap: 2px; margin: 8px 0 4px; }
 .ph { flex: 1 1 0; min-width: 0; }
 .ph .seg { height: 10px; border-radius: 3px; background: var(--wash); border: 1px solid var(--ring); position: relative; overflow: hidden; }
@@ -210,6 +212,7 @@ td.wrap { white-space: normal; min-width: 280px; }
       <div class="legend" id="d-legend"></div>
       <div class="chart" id="d-chart"><div class="tip" id="tip"></div></div>
       <div class="err" id="d-err"></div>
+      <p class="sub" id="d-notes" style="margin:6px 0 0"></p>
       <h2 style="margin-top:14px" id="f-title"></h2>
       <p class="sub" id="f-sub"></p>
       <div class="scroll"><table id="d-findings"></table></div>
@@ -251,10 +254,12 @@ td.wrap { white-space: normal; min-width: 280px; }
     data-help="The campaign's aggregate over its scored runs: the scenario's tabs, and the mean with its 95% confidence interval for every metric. A standalone run has no aggregate: its score is in the run's detail.">
     <h2>Results</h2>
     <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
+    <div class="err" id="r-err"></div>
     <div class="tabs" id="r-tabs" role="group" aria-label="Results table"></div>
     <div class="scroll"><table id="results"></table></div>
   </section>
   </div>
+  <p class="sub" id="unshown" style="margin:16px 0 0"></p>
 </main>
 
 <!-- The libraries are this server's own files (vendor/VENDOR.json); the version in the
@@ -262,25 +267,55 @@ td.wrap { white-space: normal; min-width: 280px; }
 <script src="vendor/d3.min.js?v=7.9.2"></script>
 <script src="vendor/plot.umd.min.js?v=0.6.19"></script>
 <script src="graph.js"></script>
-<script>
+<!-- The page's model: its state, the reducer that folds ledger events into it, and
+     the helpers every view and every panel calls. Nothing here touches the page
+     when it loads, so tests/core/panel_draw_harness.js runs this very script. -->
+<script data-part="model">
 "use strict";
 // ── state & reducer ─────────────────────────────────────────────────────────
-let S, cur = { id: null, since: 0 }, selectedRun = null, resultsTab = null;
+let S, cur = { id: null, since: 0, gen: null }, selectedRun = null, resultsTab = null;
 let ledgers = [], clockSkew = 0;
 
 function fresh() {
-  return { kind: null, scenario: null, campaign: null, runs: {}, order: [], aggregate: null, current: null,
-           ended: null, step: null };
+  return { kind: null, scenario: null, campaign: null, runs: {}, order: [], aggregate: null, aggregateError: null,
+           current: null, ended: null, step: null, unshown: {} };
 }
 S = fresh();
 
+// The facts of a run the page keeps in lists, by event kind: the list on the run
+// and the field holding the time the fact happened (the guest's or the plant's
+// own clock; the ledger's `t` is when the host heard of it). A fact is the event
+// WHOLE, so a view reads any field the ledger has: copying fields one by one is
+// how a column ends up empty for ever, with nothing to say so. `as` adds the few
+// names the views use for a field, and the defaults that spare them a guard.
+const FACTS = {
+  plant: { list: "plant", t: "frame_t", as: ev => ({ energy: ev.energy_kwh, units: ev.units || null }) },
+  finding: { list: "findings" },
+  alert: { list: "alerts" },
+  // `register` is the name where the ledger has one; the address stays beside it.
+  attack_write: { list: "writes", t: "write_t", as: ev => ({ register: ev.register_name || ev.register, register_addr: ev.register }) },
+  tree_state: { list: "states", as: ev => ({ nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }) },
+  decision: { list: "decisions", as: ev => ({ actions: ev.actions || [], needs_approval: ev.needs_approval || [] }) },
+  action: { list: "actions" },
+  mtd_action: { list: "mtd" },
+  data_gap: { list: "gaps", as: ev => ({ gap: ev.gap_s }) },
+  detection: { list: "detections" },
+  detector_alert: { list: "detections" },
+};
+const FACT_LISTS = [...new Set(Object.values(FACTS).map(f => f.list))];
+function fact(ev) {
+  const f = FACTS[ev.kind];
+  return { ...ev, heard_t: ev.t, t: ev[f.t || "guest_t"] || ev.t, ...(f.as ? f.as(ev) : {}) };
+}
+const noFacts = () => Object.fromEntries(FACT_LISTS.map(k => [k, []]));
+
 function runOf(id) {
   if (!S.runs[id]) {
-    S.runs[id] = { id, mode: null, seed: null, status: "pending", attempt: 1, phases: [],
-      plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
+    S.runs[id] = { id, mode: null, seed: null, status: "pending", attempt: 1, phases: [], ...noFacts(),
+      threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
-      states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
-      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], players: {}, playground: false, x: {}, info: {} };
+      respond: null, scenario: null, step: null, notes: [],
+      approvals: {}, teams: [], players: {}, playground: false, x: {}, info: {} };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -288,18 +323,32 @@ function runOf(id) {
 
 function resetRunDetail(r, ev) {
   Object.assign(r, { status: "running", attempt: ev.attempt || 1, mode: ev.mode, seed: ev.seed,
-    scenario: ev.scenario || null, mtd: [], gaps: [], alerts2: [],
+    scenario: ev.scenario || null, ...noFacts(),
     phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, timed: p.timed, start_t: null, end_t: null, ok: null })),
-    plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
+    threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
-    states: [], decisions: [], actions: [], respond: ev.respond || null,
+    respond: ev.respond || null, notes: [],
     approvals: {}, teams: [], players: {}, playground: !!ev.playground, x: {},
     // The run_start event whole: what the scenario's run_info says, for its panel.
     info: ev });
 }
+// A campaign unit has no end event of its own: it ends when the next one starts,
+// or with the campaign. Until then its steps keep it "running", scored or not —
+// and it would stay so for ever, hours after the campaign finished.
+function closeUnit(t, how) {
+  const u = S.step && S.runs[S.step.unit];
+  if (!u || u.status !== "running") return;
+  Object.assign(u, { status: how, end_t: t, step: null });
+  if (u.start_t) u.duration = t - u.start_t;
+  if (S.current === u.id) S.current = null;
+}
+function player(r, team) { return r.players[team] || (r.players[team] = { calls: 0, failed: 0 }); }
 
 function apply(ev) {
   const r = ev.run_id ? runOf(ev.run_id) : null;
+  const kept = r && FACTS[ev.kind];
+  if (kept) r[kept.list].push(fact(ev));
+  let folded = true;
   switch (ev.kind) {
     case "campaign_start": {
       const keep = S.aggregate;
@@ -313,7 +362,7 @@ function apply(ev) {
     case "run_start": if (!S.kind) S.kind = "run"; if (!S.scenario) S.scenario = ev.scenario || null;
       resetRunDetail(r, ev); S.current = r.id; break;
     // campaign units and their (command) steps; a scored unit shares its run's id
-    case "unit_start": S.step = { unit: ev.unit, step: null, t: ev.t };
+    case "unit_start": closeUnit(ev.t, "ok"); S.step = { unit: ev.unit, step: null, t: ev.t };
       if (S.runs[ev.unit]) { const u = S.runs[ev.unit]; if (u.status === "pending") u.status = "running"; u.start_t = u.start_t ?? ev.t; S.current = ev.unit; }
       break;
     case "step_start": S.step = { unit: ev.unit, step: ev.step, t: ev.t };
@@ -322,10 +371,9 @@ function apply(ev) {
     case "step_end": if (!ev.ok && S.runs[ev.unit]) S.runs[ev.unit].error = ev.error; break;
     case "step_failed": if (S.runs[ev.unit]) S.runs[ev.unit].status = "failed"; break;
     case "unit_blocked": if (S.runs[ev.unit]) S.runs[ev.unit].status = "blocked"; break;
-    // the MTD coordinator's telemetry, mirrored live
-    case "mtd_action": r.mtd.push({ t: ev.guest_t || ev.t, action: ev.action, status: ev.status, cost: ev.cost }); break;
-    case "data_gap": r.gaps.push({ t: ev.guest_t || ev.t, gap: ev.gap_s }); break;
-    case "detector_alert": case "detection": r.alerts2.push({ t: ev.guest_t || ev.t, kind: ev.kind, ev }); break;
+    // A step tried again, and one whose output an earlier attempt left behind.
+    case "step_retry": if (S.runs[ev.unit]) Object.assign(S.runs[ev.unit], { status: "retrying", attempt: ev.attempt || 2, error: ev.error }); break;
+    case "step_skipped": if (S.runs[ev.unit]) S.runs[ev.unit].notes.push(`step ${ev.step}: reused from an earlier attempt, not run again`); break;
     case "phase": {
       const p = r.phases.find(x => x.name === ev.name) ||
         (r.phases.push({ name: ev.name, planned_s: null, start_t: null, end_t: null, ok: null }), r.phases[r.phases.length - 1]);
@@ -333,11 +381,6 @@ function apply(ev) {
       else { p.end_t = ev.t; p.ok = ev.ok; p.duration = ev.duration_s; }
       break;
     }
-    case "plant": r.plant.push({ t: ev.frame_t || ev.t, v_load: ev.v_load, v_dg: ev.v_dg, abnormal: ev.abnormal,
-      ctrl_mode: ev.ctrl_mode, dg_setpoint: ev.dg_setpoint, switch_cmd: ev.switch_cmd, energy: ev.energy_kwh,
-      units: ev.units || null }); break;
-    case "finding": r.findings.push({ t: ev.guest_t || ev.t, detector: ev.detector, klass: ev.klass, src: ev.src, unit: ev.unit, register: ev.register }); break;
-    case "alert": r.alerts.push(ev); break;
     case "model_fitted": {
       // One model per feeder: the thresholds side by side, named by unit when there are several.
       const by = (r.thresholds = r.thresholds || {});
@@ -346,12 +389,9 @@ function apply(ev) {
       r.threshold = units.length > 1 ? units.map(u => `u${u} ${by[u]}`).join(" · ") : by[units[0]];
       break;
     }
-    case "attack_write": r.writes.push({ t: ev.write_t || ev.t, unit: ev.unit, register: ev.register_name || ev.register, value: ev.value }); break;
-    case "tree_state": r.states.push({ t: ev.guest_t || ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
-    case "decision": r.decisions.push({ t: ev.guest_t || ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
-    case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine });
+    case "action":
       // A response a person asked for is that person's doing, not the policy's.
-      if (ev.by && ev.by !== "soc") r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "countermeasure",
+      if (r && ev.by && ev.by !== "soc") r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "countermeasure",
         text: `${ev.op === "revert" ? "revert " : ""}${ev.id}`, where: ev.machine, ok: ev.ok, who: ev.by, note: ev.note });
       break;
     // People in the lab: a shell command, a step of the attack run by hand, the defender's mode changed.
@@ -382,12 +422,19 @@ function apply(ev) {
     case "run_failed": r.status = "failed"; break;
     case "run_metrics": r.status = "ok"; r.metrics = ev.metrics; r.end_t = r.end_t ?? ev.t;
       if (r.start_t && r.duration == null) r.duration = ev.t - r.start_t; break;
-    case "aggregate": S.aggregate = { detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
-    case "campaign_end": S.ended = ev; break;
+    // The aggregate whole: its tables are the scenario's, and its panel reads them by name.
+    case "aggregate": S.aggregate = ev; S.aggregateError = null; break;
+    case "aggregate_failed": S.aggregateError = ev.error || "no reason recorded"; break;
+    case "campaign_end": closeUnit(ev.t, ev.status === "interrupted" ? "interrupted" : "ok");
+      S.ended = ev; S.current = null; S.step = null; break;
+    default: folded = !!kept;
   }
   // The scenario folds the event kinds only it knows into run.x, after the page
-  // has taken what it draws itself.
-  if (r) panel()?.reduce?.(r, ev);
+  // has taken what it draws itself; its reduce() answers true for a kind it took.
+  const taken = r ? panel()?.reduce?.(r, ev) : false;
+  // A kind nobody folds is counted and named at the foot of the page: an event
+  // the page cannot show must not look like an event that did not happen.
+  if (!folded && !taken) S.unshown[ev.kind] = (S.unshown[ev.kind] || 0) + 1;
 }
 
 // ── ETA ─────────────────────────────────────────────────────────────────────
@@ -445,7 +492,53 @@ function dur(s) {
   const hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60;
   return hh ? `${hh}h ${String(mm).padStart(2, "0")}m` : `${mm}:${String(ss).padStart(2, "0")}`;
 }
-function clock(t) { return t ? new Date((t - clockSkew) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"; }
+// A wall-clock time, to the second, in the reader's time zone; with its date when
+// it is not today's, since an old run's "17:30" says nothing of which day.
+function clock(t) {
+  if (!t) return "—";
+  const d = new Date((t - clockSkew) * 1000), time = d.toLocaleTimeString([], { hour12: false });
+  return d.toDateString() === new Date().toDateString() ? time
+    : `${d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })} ${time}`;
+}
+// A time as an offset from an origin. The column or label it goes under names
+// the origin (run start, attack start): an offset alone does not say from what.
+function rel(t, t0) {
+  if (t == null || t0 == null) return "—";
+  const d = t - t0, a = Math.abs(d), sign = d < 0 ? "−" : "+";
+  return a < 100 ? `${sign}${+a.toFixed(a < 10 ? 2 : 1)} s` : `${sign}${dur(a)}`;
+}
+// Words, not identifiers: every "_" of a recorded name becomes a space.
+const pretty = s => String(s ?? "").replaceAll("_", " ");
+// How a metric reads to a person: {label, unit, help}. The scenario's panel names
+// its own (labels.metrics); for the rest the key itself is spelled out, and the
+// unit read off its suffix, which is how the platform's metrics are named.
+const UNIT_OF_SUFFIX = [["_kwh", "kWh"], ["_kw", "kW"], ["_pu", "pu"], ["_s", "s"], ["_rate", "share 0–1"], ["_frac", "share 0–1"]];
+function metric(key) {
+  const own = panel()?.labels?.metrics?.[key];
+  if (own) return { key, label: own.label, unit: own.unit || "", help: own.help || "" };
+  const parts = String(key).split("."), last = parts[parts.length - 1];
+  const hit = UNIT_OF_SUFFIX.find(([suffix]) => last.endsWith(suffix));
+  if (hit) parts[parts.length - 1] = last.slice(0, -hit[0].length);
+  return { key, label: parts.map(pretty).join(" · "), unit: hit ? hit[1] : "", help: "" };
+}
+const metricHead = m => `${m.label}${m.unit ? ` (${m.unit})` : ""}`;
+// A recorded identifier by its human name, the identifier itself on hover. The
+// name is the caller's (a run's own structure names its nodes) or the panel's
+// (labels.terms); an identifier nobody named is at least spelled as words.
+function termText(id, label) { return label || panel()?.labels?.terms?.[id] || pretty(id); }
+function term(id, label, help) {
+  const text = termText(id, label);
+  return h("span", { class: "term", title: [text === id ? null : `recorded as: ${id}`, help].filter(Boolean).join("\n") || null }, text);
+}
+// A box with nothing to show says why: an empty panel reads as a broken one.
+const empty = why => h("div", { class: "empty" }, why);
+// A table from headers [label, help, kind] (kind "num" right-aligns) and rows of
+// cells; `none` is what it says when it has no row.
+function table(heads, rows, none) {
+  return h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, heads.map(([label, help, kind]) => h("th", { class: kind === "num" ? "num" : null, title: help || null }, label)))),
+    h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: heads.length, class: "empty" }, none || "Nothing to show yet")))));
+}
 function num(v, d = 3) { return v == null || Number.isNaN(v) ? "—" : (typeof v === "number" && isFinite(v) ? +v.toFixed(d) : v); }
 const STATUS = {
   running: ["var(--s1)", "running"], scoring: ["var(--s1)", "scoring"], pending: ["var(--axis)", "pending"],
@@ -466,6 +559,9 @@ function svg(tag, attrs, text) {
   return e;
 }
 
+</script>
+<script>
+"use strict";
 // ── render ──────────────────────────────────────────────────────────────────
 function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).status; }
 
@@ -485,9 +581,21 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 //   graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree,
 //           options?, origin?}  the structure card; marks also drive the time bar
 //   results: {tabs, render}     tabs of the campaign aggregate
+//   labels: {metrics, terms, mode}   the scenario's words: metrics[key] =
+//                               {label, unit, help} for a metric it reports,
+//                               terms[id] = the name of an identifier it records,
+//                               mode(mode, run) = a run's mode as a sentence
 const panelApi = {
   get S() { return S; },
-  $, h, svg, num, dur, clock, now, statusBadge, queueTable, stepCell,
+  $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table,
+  now, statusBadge, queueTable, stepCell,
+  // The run's recorded structure (knowledge graph, attack tree), or null while it
+  // loads: the page draws again when it arrives. It names the tree's nodes.
+  structure(r) {
+    const st = gStruct[`${cur.id}|${r.id}`];
+    if (!st) loadStructure(cur.id, r.id);
+    return st && typeof st === "object" && !st.error ? st : null;
+  },
   shownRunId: () => shownRunId(),
   select(id) { selectedRun = id; render(); },
   render: () => render(),
@@ -535,6 +643,9 @@ function render() {
   guard("graph-card", renderGraph);
   guard("op-card", renderOperator);
   guard("teams-card", renderTeams);
+  const unshown = Object.entries(S.unshown).map(([kind, n]) => `${kind} ×${n}`).join(" · ");
+  $("unshown").textContent = unshown
+    ? `Recorded in this ledger but shown nowhere on this page (event kinds it has no view for): ${unshown}.` : "";
 }
 
 function counts() {
@@ -550,7 +661,7 @@ function counts() {
 const TILE_HELP = {
   "Runs done": "Runs finished and scored, out of all the runs of the experiment",
   "Failed": "Runs that ended in an error (the queue says which)",
-  "Elapsed": "Wall-clock time since the experiment started",
+  "Elapsed": "Wall-clock time since the experiment started. Clock times on this page are in this browser's time zone",
   "Time left": "Estimated from each phase's expected length and the phases seen so far",
   "Now": "The run, and its phase, under way right now",
 };
@@ -575,7 +686,7 @@ function renderTiles(lst) {
     tile("Time left", live ? (curRun?.playground ? "open" : dur(rem)) : (lst === "interrupted" ? "stopped" : "—"),
       live ? (curRun?.playground ? "playground: until closed with Ctrl-C" : `ETA ${clock(t + rem)}`) : (end ? `ended ${clock(end)}` : "")),
     tile("Now", curRun ? curRun.id : (S.step?.unit && live ? S.step.unit : "idle"),
-      curPhase ? `phase: ${curPhase.name.replace("_", " ")}` : (S.step?.step && live ? `step: ${S.step.step}` : "")),
+      curPhase ? `phase: ${pretty(curPhase.name)}` : (S.step?.step && live ? `step: ${S.step.step}` : "")),
   );
   const bar = $("pbar"); bar.replaceChildren();
   if (c.total) {
@@ -625,8 +736,8 @@ function renderQueueNeutral() {
     }
   }
   queueTable({
-    note: keys.length ? "metrics as the scenario reported them" : "no scored runs yet",
-    columns: [{ label: "step" }, ...keys.map(k => ({ label: k, num: true }))],
+    note: keys.length ? "The first metrics each run reported; hover a column for the name it was recorded under." : "No run has been scored yet.",
+    columns: [{ label: "step" }, ...keys.map(k => ({ label: metricHead(metric(k)), attrs: { class: "num", title: `recorded as: ${k}` } }))],
     cells: r => [stepCell(r),
       ...keys.map(k => h("td", { class: "num" },
         r.metrics && r.metrics[k] != null ? String(num(r.metrics[k])) : "—"))],
@@ -648,10 +759,12 @@ function shownRunId() {
 function renderDetail() {
   const id = shownRunId(), r = id ? S.runs[id] : null;
   $("d-title").textContent = r ? `Run ${id}` : "Run";
-  if (!r) { $("d-sub").textContent = "Select a run."; ["d-phases", "d-chips", "d-legend", "d-findings"].forEach(x => $(x).replaceChildren()); panel()?.chart?.(null); return; }
+  if (!r) { $("d-sub").textContent = "Select a run."; ["d-phases", "d-chips", "d-legend", "d-findings", "d-notes"].forEach(x => $(x).replaceChildren()); panel()?.chart?.(null); return; }
+  // The mode as the scenario words it (labels.mode), else as it was recorded.
+  const mode = r.mode ? (panel()?.labels?.mode?.(r.mode, r) || r.mode) : "mode not recorded";
   $("d-sub").textContent = r.start_t
-    ? `${r.mode || "?"} · seed ${r.seed ?? "—"} · started ${clock(r.start_t)}`
-    : (r.status === "skipped" ? `${r.mode} · seed ${r.seed} · result reused from an earlier attempt (no live trace in this attempt)` : `${r.mode || "?"} · seed ${r.seed ?? "—"} · waiting in the queue`);
+    ? `${mode} · seed ${r.seed ?? "—"} · started ${clock(r.start_t)}`
+    : (r.status === "skipped" ? `${mode} · seed ${r.seed} · result reused from an earlier attempt (no live trace in this attempt)` : `${mode} · seed ${r.seed ?? "—"} · waiting in the queue`);
   // phases
   const t = now(), obs = observedPhase();
   const totalEst = r.phases.reduce((a, p) => a + Math.max(phaseEst(p, obs), 2), 0) || 1;
@@ -660,13 +773,14 @@ function renderDetail() {
     const compact = Math.max(est, 2) / totalEst < 0.12;
     const frac = p.end_t ? 1 : p.start_t ? Math.min(1, el / Math.max(est, 0.1)) : 0;
     const cls = "ph" + (compact ? " compact" : "") + (p.end_t ? (p.ok === false ? " failed" : " done") : p.start_t ? " active" : "");
-    const title = `${p.name.replace("_", " ")}: ${p.start_t ? `${dur(el)} of ~${dur(est)}` : `~${dur(est)}`}`;
+    const title = `${pretty(p.name)}: ${p.start_t ? `${dur(el)} of ~${dur(est)}` : `~${dur(est)}`}`;
     return h("div", { class: cls, style: `flex-grow:${Math.max(est, 2)}`, title, "aria-label": title },
       h("div", { class: "seg" }, h("i", { style: `width:${100 * frac}%` })),
-      h("div", { class: "nm" }, p.name.replace("_", " ")),
+      h("div", { class: "nm" }, pretty(p.name)),
       h("div", { class: "tm" }, p.start_t ? `${dur(el)} / ${dur(est)}` : dur(est)));
   }));
   $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
+  $("d-notes").textContent = r.notes.join(" · ");
   const scenarioDetail = panel()?.detail;
   if (scenarioDetail) return scenarioDetail(r);
   // No panel: the phases above are all the page can say about a run.
@@ -691,17 +805,23 @@ function renderResults() {
     $("r-tabs").replaceChildren(...tabs.map(t => h("button", { type: "button", "aria-pressed": String(t.id === resultsTab),
       onclick: () => { resultsTab = t.id; renderResults(); } }, t.label)));
   }
+  // A campaign whose aggregation failed says so: its tables, if any, are an earlier run's.
+  $("r-err").textContent = S.aggregateError ? `The campaign could not aggregate its runs: ${S.aggregateError}` : "";
   if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run"
     ? (Object.values(S.runs).some(r => r.metrics) ? "This run is scored in its detail above; an aggregate is a campaign's." : "A single run is scored when it ends; an aggregate is a campaign's.")
     : "No scored runs yet")))); return; }
   const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
   if (resultsTab === "ci" && hasCi) {
     const gk = a.ci.length && "group" in a.ci[0] ? "group" : "mode";
-    const head = h("tr", {}, h("th", {}, gk === "group" ? "configuration" : "mode"), h("th", {}, "metric"),
-      ...["runs", "mean", "95% CI", "median", "min–max"].map(x => h("th", { class: "num" }, x)));
-    const rows = a.ci.map(r => h("tr", {}, h("td", {}, r[gk]), h("td", {}, r.metric), n(r.n), n(r.mean),
+    const head = h("tr", {}, h("th", { title: "The configuration or attack the runs share" }, gk === "group" ? "configuration" : "mode"),
+      h("th", { title: "What was measured; hover a name for what it means and the key it was recorded under" }, "metric"),
+      h("th", { title: "The unit of the figures on the row; a share is a fraction of runs, 0 to 1" }, "unit"),
+      ...[["runs", "Scored runs the row is computed over"], ["mean", ""], ["95% CI", "Confidence interval of the mean; needs at least two runs"],
+          ["median", ""], ["min–max", ""]].map(([x, help]) => h("th", { class: "num", title: help || null }, x)));
+    const rows = a.ci.map(r => { const m = metric(r.metric); return h("tr", {}, h("td", {}, pretty(r[gk])),
+      h("td", { title: [m.help, `recorded as: ${r.metric}`].filter(Boolean).join("\n") }, m.label), h("td", { class: "muted" }, m.unit || "—"), n(r.n), n(r.mean),
       h("td", { class: "num" }, r.n > 1 ? `${num(r.ci95_low)} – ${num(r.ci95_high)}` : "—"), n(r.median),
-      h("td", { class: "num" }, r.min == null ? "—" : `${num(r.min)}–${num(r.max)}`)));
+      h("td", { class: "num" }, r.min == null ? "—" : `${num(r.min)}–${num(r.max)}`)); });
     tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
   } else if (res && resultsTab) {
     res.render(resultsTab, a, tb);
@@ -709,7 +829,7 @@ function renderResults() {
     tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "This campaign reported no aggregate the page can tabulate."))));
   }
   const scored = Object.values(S.runs).filter(r => r.metrics).length;
-  $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. Rates are shares of runs (0–1).`;
+  $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. A rate or share is a fraction of runs, from 0 to 1.`;
 }
 
 // ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
@@ -733,7 +853,7 @@ async function loadStructure(lid, id) {
   gStruct[k] = "loading";
   try { gStruct[k] = await getJSON(`/api/structure?id=${encodeURIComponent(lid)}&run=${encodeURIComponent(id)}`); }
   catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
-  gSig = ""; renderGraph();
+  gSig = ""; render();  // the cards name the tree's nodes from it
 }
 // ── the run's time ──────────────────────────────────────────────────────────
 // The time bar is on the run's own clock: the slider is a time (stable while
@@ -756,8 +876,8 @@ function runTime(r) {
 function relLabel(r, t) {
   if (t == null) return "live";
   const o = panel()?.graph?.origin?.(r);
-  return o && o.t != null ? `${t - o.t >= 0 ? "+" : ""}${num(t - o.t, 2)} s ${o.label}`
-    : (r.start_t ? `+${dur(t - r.start_t)} into the run` : clock(t));
+  return o && o.t != null ? `${rel(t, o.t)} ${o.label}`
+    : (r.start_t ? `${rel(t, r.start_t)} since run start` : clock(t));
 }
 function renderTimebar() {
   const id = shownRunId(), r = id ? S.runs[id] : null, p = panel(), T = runTime(r);
@@ -1005,11 +1125,15 @@ function renderOperator() {
     $("op-pending").replaceChildren(...pending.map(a => suggestionCard(a)));
     const w0 = r.writes[0]?.t ?? r.start_t;
     $("op-history").replaceChildren(...(closed.length ? [
-      h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "suggestion"),
-        h("th", {}, "outcome"), h("th", {}, "by"), h("th", { class: "num" }, "answered in"), h("th", {}, "why it was suggested"))),
+      h("thead", {}, h("tr", {}, h("th", { class: "num", title: r.writes.length ? "When it was answered or expired, counted from the attacker's first write to the plant" : "When it was answered or expired, since run start" },
+          r.writes.length ? "since first write" : "since run start"),
+        h("th", { title: "The countermeasure proposed; hover for the name it is recorded under" }, "suggestion"),
+        h("th", { title: "approved · rejected · expired (nobody answered in time, so it was not applied)" }, "outcome"),
+        h("th", { title: "Who answered" }, "by"), h("th", { class: "num", title: "How long the operator took to answer" }, "answered in"),
+        h("th", { title: "The policy's own justification" }, "why it was suggested"))),
       h("tbody", {}, closed.map(a => { const [c, label] = OUTCOME[a.state] || ["var(--axis)", a.state]; return h("tr", {},
-        h("td", { class: "num" }, w0 ? `${a.t - w0 >= 0 ? "+" : ""}${num(a.t - w0, 2)} s` : clock(a.t)),
-        h("td", {}, a.action || "—"),
+        h("td", { class: "num" }, w0 ? rel(a.t, w0) : clock(a.t)),
+        h("td", {}, a.action ? term(a.action, a.explanation?.countermeasure?.label) : "—"),
         h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`),
         h("td", {}, a.operator || "—"),
         h("td", { class: "num" }, a.state === "expired" || a.waited_s == null ? "—" : `${num(a.waited_s, 1)} s`),
@@ -1022,7 +1146,6 @@ function renderOperator() {
   });
 }
 const TEAM = { red: "var(--critical)", blue: "var(--s1)", control: "var(--axis)" };
-function player(r, team) { return r.players[team] || (r.players[team] = { calls: 0, failed: 0 }); }
 // Who acted, as the records name them: a harness says so itself ("agent:<name>").
 const actor = name => !name ? "—" : String(name).startsWith("agent:")
   ? [h("span", { class: "agent" }, "agent"), ` ${String(name).slice(6)}`] : name;
@@ -1048,11 +1171,14 @@ function renderTeams() {
   if ((!rows.length && !who.length) || sig === teamSig) return;
   teamSig = sig;
   $("teams-players").replaceChildren(...who);
-  const stamp = t => t ? new Date((t - clockSkew) * 1000).toLocaleTimeString() : "—";
+  const heads = [["time", "Wall-clock time, in this browser's time zone"], ["team", "red: the attackers · blue: the defenders"],
+    ["what", "step: a step of the attack · countermeasure · mode: the defender's mode changed · command: run in a lab shell"],
+    ["detail", "What was run, whether it worked, and the reason the player gave"], ["where", "The lab host it ran on"],
+    ["by", "The person or harness (marked 'agent') that did it"]];
   $("teams").replaceChildren(
-    h("thead", {}, h("tr", {}, ["time", "team", "what", "", "where", "by"].map((x, i) => h("th", { class: i ? null : "num" }, x)))),
+    h("thead", {}, h("tr", {}, heads.map(([x, help], i) => h("th", { class: i ? null : "num", title: help }, x)))),
     h("tbody", {}, [...rows].sort((a, b) => b.t - a.t).slice(0, 300).map(e => h("tr", {},
-      h("td", { class: "num" }, stamp(e.t)),
+      h("td", { class: "num" }, clock(e.t)),
       h("td", {}, h("span", { class: "dot", style: `background:${TEAM[e.team] || "var(--axis)"}` }), h("span", { class: "team" }, ` ${e.team || "?"}`)),
       h("td", {}, e.what),
       h("td", { class: "wrap" }, e.what === "command" ? h("code", {}, e.text) : e.text,

@@ -84,20 +84,20 @@
   // Every fact of either side is a stop of the run's time bar.
   function marks(run) {
     const m = [];
-    for (const s of run.states || []) m.push({ t: s.t, kind: "belief update" });
-    for (const d of run.decisions || []) m.push({ t: d.t, kind: "decision" });
-    for (const a of run.actions || []) m.push({ t: a.t, kind: `${a.id} ${a.ok ? "applied" : "failed"}` });
-    for (const w of run.writes || []) m.push({ t: w.t, kind: "attacker write" });
+    for (const s of run.states || []) m.push({ t: s.t, kind: "defender's belief changes" });
+    for (const d of run.decisions || []) m.push({ t: d.t, kind: "defender decides" });
+    for (const a of run.actions || []) m.push({ t: a.t, kind: `countermeasure ${pretty(a.id)} ${didWhat(a)}` });
+    for (const w of run.writes || []) m.push({ t: w.t, kind: "attacker writes to the plant" });
     const red = run.x && run.x.red;
     if (red) {
-      for (const st of red.steps) m.push({ t: st.t, kind: `attacker ${st.node} ${st.ok ? "done" : "failed"}` });
-      for (const c of red.recon) m.push({ t: c.t, kind: `attacker recon (${c.stage})` });
+      for (const st of red.steps) m.push({ t: st.t, kind: `attacker step ${pretty(st.node)} ${st.ok ? "done" : "failed"}` });
+      for (const c of red.recon) m.push({ t: c.t, kind: `attacker reconnaissance (${c.stage === "it" ? "IT network" : "plant"})` });
     }
     // One stop per detector and class: a burst of identical findings is one fact.
     const seen = new Set();
     for (const f of run.findings || []) {
       const k = `${f.detector}|${f.klass}`;
-      if (!seen.has(k)) { seen.add(k); m.push({ t: f.t, kind: `${f.detector}: ${f.klass}` }); }
+      if (!seen.has(k)) { seen.add(k); m.push({ t: f.t, kind: `finding: ${pretty(f.klass)}` }); }
     }
     return m.filter(x => x.t != null).sort((a, b) => a.t - b.t);
   }
@@ -106,8 +106,7 @@
     const upto = uptoT(t);
     const states = (run.states || []).filter(upto);
     const st = states[states.length - 1] || null;
-    const applied = {};
-    for (const a of run.actions || []) if (upto(a) && a.ok && a.id !== "notify" && !(a.id in applied)) applied[a.id] = a.t;
+    const applied = inForce((run.actions || []).filter(upto));
     // What the attacker really did by t, drawn over the defender's belief.
     const red = run.x && run.x.red, done = {}, failed = {};
     const steps = red ? red.steps.filter(upto) : [], plans = red ? red.plans.filter(upto) : [];
@@ -330,15 +329,19 @@
       g.append(el("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 6, fill: "var(--surface)",
         stroke: bad || hot ? "var(--critical)" : "var(--ring)", "stroke-width": bad || hot ? 2 : 1, "stroke-dasharray": bad ? "4 2" : null }));
       const label = n.type === "host" ? n.name : n.type === "ip" ? n.addr : n.type === "service" ? `${n.host}/${n.name}`
-        : n.type === "register" ? `${n.kind === "holding" ? "HR" : "IR"}${n.addr} ${n.name}` : n.type === "flow_rule" ? `${n.action} ${n.proto || ""}/${n.dport ?? "*"}`
+        : n.type === "register" ? `${n.name} (${n.kind === "holding" ? "holding" : "input"} ${n.addr})` : n.type === "flow_rule" ? `${n.action} ${n.proto || ""}/${n.dport ?? "*"}`
         : n.name || n.id;
       g.append(el("text", { x: p.x + 8, y: p.y + 16, "font-size": 11, fill: "var(--ink)" }, clip(label, 21)));
       if (n.sensitive) g.append(el("circle", { cx: p.x + NW - 9, cy: p.y + NH / 2, r: 3.5, fill: "var(--warning)" }));
       const enter = ev => {
         for (const e of edges) e.p.setAttribute("opacity", e.s === n.id || e.t === n.id ? 1 : 0.08);
         if (tip) {
-          const rows = Object.entries(n).filter(([k]) => !["id"].includes(k)).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
-          tip.show(ev, n.id, rows);
+          // What the graph records of the node, one property a line, then how it relates to others.
+          const say = v => v == null ? "—" : Array.isArray(v) ? (v.join(", ") || "none") : typeof v === "object"
+            ? Object.entries(v).map(([k, x]) => `${pretty(k)} ${x}`).join(", ") : typeof v === "boolean" ? (v ? "yes" : "no") : String(v);
+          const rows = Object.entries(n).filter(([k]) => k !== "id" && k !== "type").map(([k, v]) => `${pretty(k)}: ${say(v)}`);
+          const links = [...(G.out[n.id] || []).map(e => `${pretty(e.rel)} → ${e.t}`), ...(G.inn[n.id] || []).map(e => `${e.s} → ${pretty(e.rel)}`)];
+          tip.show(ev, `${pretty(n.type)}: ${label}`, [...rows, ...(links.length ? [`relations: ${links.slice(0, 8).join(" · ")}${links.length > 8 ? ` … (${links.length})` : ""}`] : [])]);
         }
       };
       const leave = () => { for (const e of edges) e.p.setAttribute("opacity", 0.75); if (tip) tip.hide(); };
@@ -482,13 +485,13 @@
 
   function queue(ui) {
     ui.queueTable({
-      note: { html: "rules / model: detection latency from the first malicious write; "
-                  + "<b>*</b> = fired only after the physical impact." },
+      note: { html: "detected by rules / by model: how long after the first malicious write each detector reported; "
+                  + "<b>*</b> = only after the plant had already left its normal band; <b>missed</b> = never." },
       columns: [
-        { label: "rules", attrs: { class: "num", title: LATENCY_HINT } },
-        { label: "model", attrs: { class: "num", title: LATENCY_HINT } },
-        { label: "impact" },
-        { label: "false alarms", num: true },
+        { label: "detected by rules", attrs: { class: "num", title: `The Modbus policy rules: ${LATENCY_HINT}` } },
+        { label: "detected by model", attrs: { class: "num", title: `The learned traffic model: ${LATENCY_HINT}` } },
+        { label: "impact on the plant", attrs: { title: "none: the voltages stayed in band · recovered: they left it and came back, after that long · persists: still out of band when the attack ended" } },
+        { label: "false alarms", attrs: { class: "num", title: "Findings during normal operation, with no attack to explain them" } },
       ],
       cells: r => {
         const m = r.metrics;
@@ -519,7 +522,7 @@
       out.push(chip("score · response", `${resp.accurate ? "accurate" : "inaccurate"}${resp.over_response ? " · over-response" : ""}`,
         resp.accurate ? "var(--good)" : "var(--warning)"));
     const fid = m.tree_fidelity;
-    if (fid) out.push(chip("score · tree fidelity", `P ${num(fid.precision, 2)} · R ${num(fid.recall, 2)}`));
+    if (fid) out.push(chip("score · tree fidelity", `precision ${num(fid.precision, 2)} · recall ${num(fid.recall, 2)}`));
     return out;
   }
 
@@ -561,9 +564,9 @@
   // The selected run: live plant state and score as chips, the voltage chart,
   // and the sensor findings by detector and class. The page has drawn the phases.
   function detail(r) {
-    if (r.threshold != null) $("d-sub").textContent += ` · model threshold ${r.threshold}`;
+    if (r.threshold != null) $("d-sub").textContent += ` · learned model reports above an anomaly score of ${r.threshold}`;
     $("f-title").textContent = "Findings";
-    $("f-sub").textContent = "Sensor findings so far, by detector and class (live during the run).";
+    $("f-sub").textContent = "What the sensors reported so far, by detector and by class of what they saw (live during the run).";
     const unit = shownUnit(r), mine = onUnit(unit);
     const last = r.plant.length ? feederOf(r.plant[r.plant.length - 1], unit) : undefined;
     const writes = r.writes.filter(mine);
@@ -577,6 +580,8 @@
       chip("plant", last ? (last.abnormal ? "abnormal" : "in band") : "—", last ? (last.abnormal ? "var(--critical)" : "var(--good)") : null),
       chip("rules fired", writes.length ? firstAfter("rules") : String(byDet("rules").length)),
       chip("model fired", writes.length ? firstAfter("model") : String(byDet("model").length)),
+      // A model that could not be fitted detects nothing: "0 findings" would read as "nothing to find".
+      ...(sides(r).blue.modelErrors.filter(mine).length ? [chip("model", "not fitted", "var(--critical)")] : []),
       ...scoreChips(r.metrics),
     );
     drawChart(r);
@@ -585,24 +590,56 @@
     const many = several(r);
     for (const f of r.findings) { const k = `${f.detector}|${f.klass}|${many ? f.unit ?? "" : ""}`; (agg[k] = agg[k] || { d: f.detector, k: f.klass, u: f.unit, n: 0, first: f.t }).n++; }
     const rows = Object.values(agg).sort((a, b) => a.first - b.first).map(a =>
-      h("tr", {}, h("td", {}, a.d), h("td", {}, a.k), many ? h("td", {}, a.u != null ? `unit ${a.u}` : "—") : null,
+      h("tr", {}, h("td", {}, UI.term(a.d)), h("td", {}, UI.term(a.k)), many ? h("td", {}, a.u != null ? `unit ${a.u}` : "—") : null,
         h("td", { class: "num" }, String(a.n)),
-        h("td", { class: "num" }, r.start_t ? `+${dur(a.first - r.start_t)}` : "—")));
-    $("d-findings").replaceChildren(h("thead", {}, h("tr", {}, h("th", {}, "detector"), h("th", {}, "class"), many ? h("th", {}, "feeder") : null, h("th", { class: "num" }, "count"), h("th", { class: "num" }, "first at"))),
-      h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: many ? 5 : 4, class: "empty" }, "No findings"))));
+        h("td", { class: "num" }, r.start_t ? rel(a.first, r.start_t) : "—")));
+    $("d-findings").replaceChildren(h("thead", {}, h("tr", {},
+        th("detector", "Which sensor reported: the Modbus policy rules, the learned traffic model, or the host sensor on the IT side"),
+        th("class", "What kind of thing it saw; hover for the name it is recorded under"),
+        many ? th("feeder", "The feeder (Modbus unit) the finding concerns") : null,
+        th("count", "How many findings of this detector and class", true), th("first, since run start", "When the first of them came, counted from the start of the run", true))),
+      h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: many ? 5 : 4, class: "empty" },
+        reused(r) || (r.start_t ? "No findings: the sensors have reported nothing in this run" : "No findings: this run has not started")))));
   }
 
   // The campaign aggregate (metrics.write_aggregate): detection per mode and
   // detector, physical impact per mode.
-  const RESULT_TABS = [{ id: "detection", label: "Detection" }, { id: "impact", label: "Physical impact" }];
+  const RESULT_TABS = [{ id: "detection", label: "Detection" }, { id: "impact", label: "Physical impact" },
+    { id: "response", label: "Response" }, { id: "countermeasures", label: "Countermeasures" }];
+  const RESULT_EMPTY = {
+    response: "No run of this campaign had a response policy: the defender only watched.",
+    countermeasures: "No countermeasure was timed in this campaign: none was applied, or the runs had no response policy.",
+  };
   function results(tab, a, tb) {
     const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
     const data = a[tab];
-    if (!data) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "No scored runs yet")))); return; }
-    if (tab === "detection") {
+    if (!data || !data.length) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, RESULT_EMPTY[tab] || "No scored runs yet")))); return; }
+    const cols = (heads, cells) => tb.replaceChildren(
+      h("thead", {}, h("tr", {}, heads.map(([label, help, text]) => h("th", { class: text ? null : "num", title: help || null }, label)))),
+      h("tbody", {}, data.map(r => h("tr", {}, cells(r)))));
+    if (tab === "response") {
+      cols([["mode", "The attack (or normal operation) the runs were under", true], ["policy", "The response policy that decided", true],
+        ["runs", "Scored runs with a response policy"],
+        ["accurate (share of runs)", "Runs where the response did what the attack called for"],
+        ["over-response (runs)", "Runs where it also did something the attack did not call for"],
+        ["decision latency, median (s)", "From the first finding to the first countermeasure done"],
+        ["explained (share of decisions)", "Decisions that came with the policy's own justification"],
+        ["attacker writes after the block, median", "Malicious writes the plant still accepted once a blocking countermeasure was in force"],
+        ["false responses", "Countermeasures run before the attack, or in a run with no attack"],
+        ["runs with a failed action", "Runs where a countermeasure could not be carried out"],
+        ["HMI unavailable, median (s)", "How long the response kept the operator's HMI cut off"]],
+        r => [h("td", {}, r.mode), h("td", {}, r.policy), n(r.runs), n(r.accuracy), n(r.over_response_runs), n(r.decision_latency_median_s),
+          n(r.explained_coverage), n(r.attacker_writes_after_block_median), n(r.false_responses), n(r.failed_action_runs), n(r.hmi_unavailable_median_s)]);
+    } else if (tab === "countermeasures") {
+      cols([["countermeasure", "The countermeasure, by its id in the attack tree", true], ["runs", "Runs in which it was applied"],
+        ["dispatch, median (s)", "From the request for the countermeasure to its outcome on the host that runs it"],
+        ["runs that settled", "Runs in which it was the last restoring countermeasure and the plant came back into its band"],
+        ["settle, median (s)", "In those runs, from the countermeasure done to the plant back in its band"]],
+        r => [h("td", {}, r.countermeasure), n(r.runs), n(r.dispatch_median_s), n(r.settle_runs), n(r.settle_median_s)]);
+    } else if (tab === "detection") {
       const head = h("tr", {}, ...["mode", "detector", "runs"].map(x => h("th", {}, x)),
         ...["detection rate", "latency median (s)", "min–max (s)", "before impact", "false alarms (runs)", "…in operator windows"].map(x => h("th", { class: "num" }, x)));
-      const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, r.detector), n(r.runs),
+      const rows = data.map(r => h("tr", {}, h("td", {}, r.mode), h("td", {}, UI.term(r.detector)), n(r.runs),
         n(r.detection_rate), n(r.latency_median_s), h("td", { class: "num" }, r.latency_min_s == null ? "—" : `${num(r.latency_min_s)}–${num(r.latency_max_s)}`),
         n(r.before_impact_rate), h("td", { class: "num" }, `${r.false_alarms} (${r.runs_with_false_alarms})`), n(r.false_alarms_in_operator_windows)));
       tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
@@ -622,6 +659,9 @@
   const tickLabel = v => v < 60 || v % 60 ? `${v}s` : v % 3600 ? `${v / 60}m` : `${v / 3600}h`;
   const Y_LO = 0.80, Y_HI = 1.20;
   let chartKey = null;
+  // Why a run has nothing live to show, when the reason is that it was not run again.
+  const reused = r => r.status === "skipped"
+    ? "This run was not run again: its score was reused from an earlier attempt of the campaign, so this ledger has its result but not its events." : null;
   function drawChart(r) {
     const box = $("d-chart"), tip = $("tip");
     const unit = r ? shownUnit(r) : null;
@@ -633,7 +673,8 @@
     const legend = $("d-legend"); legend.replaceChildren();
     if (!r || !r.plant.length) {
       box.querySelector(".empty")?.remove();
-      box.append(h("div", { class: "empty" }, r && r.start_t ? "Waiting for the first plant sample…" : "No plant trace for this run."));
+      box.append(h("div", { class: "empty" }, !r ? "Select a run to see its plant." : reused(r) || (r.status === "running"
+        ? "Waiting for the first plant sample: the plant is polled once the lab is up." : "This run recorded no plant sample.")));
       return;
     }
     box.querySelector(".empty")?.remove();
@@ -739,28 +780,43 @@
   function sides(r) {
     if (!r.x.red) Object.assign(r.x, {
       red: { start: null, plans: [], steps: [], recon: [], belief: null, end: null },
-      blue: { alerts: [], respWrites: [] },
+      blue: { alerts: [], respWrites: [], modelErrors: [] },
     });
     return r.x;
   }
+  // Like the page's own reducer, each fact is the event whole with `t` the time
+  // it happened: a view reads whatever the ledger recorded, and only the fields
+  // the views name differently, or default, are spelled out. Answers true for a
+  // kind it folds, so the page knows the event is shown somewhere.
   function reduce(r, ev) {
-    const x = sides(r), t = ev.guest_t || ev.t;
+    const x = sides(r), f = { ...ev, t: ev.guest_t || ev.t };
     switch (ev.kind) {
-      case "attack_start": x.red.start = { t, mode: ev.mode, profile: ev.profile, goal: ev.goal }; break;
-      case "attack_plan": x.red.plans.push({ t, target: ev.target, sequence: ev.sequence || [],
-        candidates: ev.candidates || [], blocked: ev.blocked || [], reason: ev.reason }); break;
-      case "plan_step": x.red.steps.push({ t, node: ev.node, stage: ev.stage, attck: ev.attck, ok: !!ev.ok,
-        target: ev.target, observed: ev.observed || {}, by: "agent" }); break;
-      case "red_step": x.red.steps.push({ t, node: ev.step, stage: ev.stage || ev.step, ok: !!ev.ok,
+      case "attack_start": x.red.start = f; break;
+      case "attack_plan": x.red.plans.push({ ...f, sequence: ev.sequence || [], candidates: ev.candidates || [], blocked: ev.blocked || [] }); break;
+      case "plan_step": x.red.steps.push({ ...f, ok: !!ev.ok, observed: ev.observed || {}, by: "agent" }); break;
+      case "red_step": x.red.steps.push({ ...f, node: ev.step, stage: ev.stage || ev.step, ok: !!ev.ok,
         observed: ev.observed || {}, by: ev.operator || "red team" }); break;
-      case "recon": x.red.recon.push({ t, stage: ev.stage, hosts: ev.hosts || [], foothold: ev.foothold,
-        engine_ip: ev.engine_ip, modbus_port: ev.modbus_port, modbus_ok: ev.modbus_ok, registers: ev.registers || null }); break;
-      case "attacker_belief": x.red.belief = { t, tree: ev.tree }; break;
-      case "attack_end": x.red.end = { t, success: !!ev.success, stage_reached: ev.stage_reached, writes_ok: ev.writes_ok }; break;
-      case "alert": x.blue.alerts.push({ t, state: ev.state, detector: ev.detector, klass: ev.klass, unit: ev.unit }); break;
-      case "response_write": x.blue.respWrites.push({ t, register: ev.register, value: ev.value }); break;
+      case "recon": x.red.recon.push({ ...f, hosts: ev.hosts || [], registers: ev.registers || null }); break;
+      case "attacker_belief": x.red.belief = f; break;
+      case "attack_end": x.red.end = { ...f, success: !!ev.success }; break;
+      case "alert": x.blue.alerts.push(f); break;
+      case "response_write": x.blue.respWrites.push(f); break;
+      case "model_error": x.blue.modelErrors.push(f); break;
+      default: return false;
     }
+    return true;
   }
+  // The countermeasures in force at a time: applied and not reverted since. An
+  // action that failed changes nothing. Ledgers without `op` only ever applied.
+  function inForce(actions) {
+    const on = {};
+    for (const a of [...actions].sort((p, q) => p.t - q.t)) {
+      if (!a.ok || a.id === "notify") continue;
+      if (a.op === "revert") delete on[a.id]; else if (!(a.id in on)) on[a.id] = a.t;
+    }
+    return on;
+  }
+  const didWhat = a => a.op === "revert" ? (a.ok ? "reverted" : "revert failed") : (a.ok ? "applied" : "failed");
 
   const STATE_RANK = { confirmed: 0, inferred: 1, suspected: 2 };
   const STAGES = ["it_access", "it_exec", "pivot"];
@@ -830,18 +886,60 @@
     plant: "Whether the bus voltages are inside the plant's normal band",
     "rules fired": "First rules finding after the first attacker write (or how many, with no attack)",
     "model fired": "First learned-model finding after the first attacker write (or how many, with no attack)",
+    model: "The learned model could not be fitted on this run's normal phase, so it reports nothing (the journal has the reason)",
     "score · detection": "Detection latency from the first malicious write (green: before the physical impact)",
     "score · false alarms": "Findings with no attack to explain them",
     "score · attack reached": "The furthest stage of the attack that succeeded",
     "score · impact": "Whether the plant left its band, and whether and when it recovered",
     "score · response": "Whether the response did what this attack called for, and nothing it did not",
-    "score · tree fidelity": "How close the attacker's own tree is to the real one: precision and recall of its feasible leaves",
+    "score · tree fidelity": "How close the attacker's own tree is to the real one, from 0 to 1. Precision: the share of the leaves it believes in that are real. Recall: the share of the real leaves it found",
     // kill chain
     "time to detect": "From the attacker's first step to the defender's first finding",
     "time to respond": "From the first finding to the first countermeasure that worked",
     "time to impact": "From the attacker's first step to the plant leaving its band",
     "who is ahead": "The furthest stage the attacker reached, against the furthest the defender has confirmed",
   };
+
+  // This scenario's words, for the page (ui.metric, ui.term) and for the views
+  // here: every metric of the campaign's mean [95% CI] table (metrics.CI_HEADLINE),
+  // the detectors by what they are, and a run's mode as a sentence.
+  const LABELS = {
+    metrics: {
+      "detectors.combined.detected": { label: "attack detected, by any detector", unit: "share of runs",
+        help: "Runs in which at least one detector reported after the attack began" },
+      "detectors.combined.latency_from_write_s": { label: "detection latency", unit: "s",
+        help: "From the first malicious write to the first finding of any detector" },
+      impact_duration_s: { label: "plant out of its normal band", unit: "s", help: "From the first abnormal plant sample to the last" },
+      max_abs_deviation_pu: { label: "largest voltage deviation from nominal", unit: "pu",
+        help: "pu (per unit): a voltage as a fraction of its nominal value; 0.05 pu is 5 %" },
+      false_alarms: { label: "false alarms", unit: "findings", help: "Findings during normal operation, with no attack to explain them" },
+      "response.accurate": { label: "response accurate", unit: "share of runs",
+        help: "Runs in which every countermeasure the attack called for was applied" },
+      mitigated_s: { label: "time to mitigation", unit: "s",
+        help: "From the first malicious write to the plant back in its band for good; no value while the impact persists" },
+    },
+    terms: {
+      rules: "rules (Modbus policy)", model: "learned model", it: "IT host sensor", combined: "any detector",
+      notify: "Alert the operator, no automatic action",
+    },
+    mode: mode => mode === "normal" ? "normal operation, no attack"
+      : mode.startsWith("planner:") ? `attack by the planning agent (${mode.slice(8)} profile)`
+      : mode.startsWith("recon:") ? `attack by the reconnaissance agent (${mode.slice(6)} profile)`
+      : `scripted attack: ${mode}`,
+  };
+  // The names a run's own structure gives the nodes of its attack tree and its
+  // countermeasures. `text` is the name alone; `el` shows it with the recorded
+  // id on hover; `id` keeps the id (where space is short) with the name on hover.
+  // Until the structure has loaded, an id is spelled out as words.
+  function namer(r) {
+    const st = UI.structure ? UI.structure(r) : null, T = st ? treeIndex(st.tree) : null;
+    const label = id => (T && (T.nodes[id]?.label || T.cms[id]?.label)) || null;
+    return {
+      loaded: !!T, text: id => UI.termText(id, label(id)), el: (id, help) => UI.term(id, label(id), help),
+      id: id => h("span", { class: "term", title: label(id) || LABELS.terms[id] || null }, id),
+      list: (ids, sep = ", ") => ids.flatMap((id, i) => [i ? sep : null, UI.term(id, label(id))]),
+    };
+  }
 
   const kv = rows => h("dl", { class: "kv" }, ...rows.filter(([, v]) => v != null && v !== "" && !(Array.isArray(v) && !v.length))
     .flatMap(([k, v]) => [h("dt", { title: HELP[k] || null }, k), h("dd", {}, v)]));
@@ -854,27 +952,27 @@
     h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: heads.length, class: "empty" }, empty)))));
   // A time relative to the start of the attack (or of the run).
   const t0Of = (r, R) => R.start?.t ?? R.steps[0]?.t ?? r.writes[0]?.t ?? r.start_t;
-  const rel = (t, t0) => t == null || t0 == null ? "—" : `${t - t0 >= 0 ? "+" : ""}${num(t - t0, 1)} s`;
   // A row that moves the run's time to its fact when clicked.
   const jump = t => ({ class: "click", tabindex: "0", title: "Show the run at this time",
     onclick: () => UI.setTime(t), onkeydown: e => { if (e.key === "Enter") UI.setTime(t); } });
 
-  function redDoing(v) {
+  function redDoing(v, N) {
     const R = v.red, lastStep = last(R.steps);
-    const status = R.end ? (R.end.success ? "finished: it reached its impact" : `stopped: defended (reached ${R.end.stage_reached || "nothing"})`)
-      : lastStep ? `at ${lastStep.node} — ${lastStep.ok ? "done" : "failed, re-planning"}`
+    const status = R.end ? (R.end.success ? "finished: it reached its impact" : `stopped: defended (reached ${R.end.stage_reached ? N.text(R.end.stage_reached) : "nothing"})`)
+      : lastStep ? `at "${N.text(lastStep.node)}" — ${lastStep.ok ? "done" : "failed, re-planning"}`
       : R.start ? "planning its first step" : R.writes.length ? "writing to the plant" : null;
     const byReg = {};
     for (const w of R.writes) { const k = w.register || "?"; (byReg[k] = byReg[k] || { n: 0, v: w.value, ok: 0 }).n++; byReg[k].v = w.value; if (w.ok !== false) byReg[k].ok++; }
     const writes = Object.entries(byReg).map(([k, w]) => `${k} ×${w.n} (last ${w.v}${w.ok < w.n ? `, ${w.n - w.ok} refused` : ""})`).join(" · ");
     return status || R.steps.length ? kv([
       ["status", status],
-      ["aims at", R.target ? `${R.target}${R.remaining.length ? ` — next: ${R.remaining.join(" → ")}` : ""}` : null],
-      ["steps", R.steps.length ? h("span", {}, ...R.steps.map(s => mark(s.ok, s.node, [s.attck, s.by !== "agent" ? `by ${s.by}` : null].filter(Boolean).join(" · ")))) : null],
+      ["aims at", R.target ? h("span", {}, N.el(R.target), ...(R.remaining.length ? [" — still to do: ", ...N.list(R.remaining, " → ")] : [])) : null],
+      ["steps", R.steps.length ? h("span", {}, ...R.steps.map(s => mark(s.ok, N.text(s.node),
+        [`recorded as: ${s.node}`, s.attck ? `ATT&CK ${s.attck}` : null, s.by !== "agent" ? `by ${s.by}` : null].filter(Boolean).join(" · ")))) : null],
       ["writes", writes || null],
     ]) : none("No attack activity yet.");
   }
-  function redKnows(v) {
+  function redKnows(v, N) {
     const R = v.red;
     const who = R.steps.map(s => s.observed?.whoami).find(Boolean);
     const it = last(R.recon.filter(c => c.stage === "it")), ot = last(R.recon.filter(c => c.stage === "ot"));
@@ -890,39 +988,43 @@
         : pivot ? `${pivot.ok ? "reachable" : "unreachable"}${pivot.observed?.detail ? ` (${pivot.observed.detail})` : ""}` : null],
       ["registers read", regs.length ? regs.slice(0, 6).map(([a, x]) => `${a}=${x}`).join(" · ") + (regs.length > 6 ? ` … (${regs.length})` : "") : null],
       ["its belief", R.belief ? `a tree of ${countNodes(R.belief.tree)} nodes` : null],
-      ["options", P && P.candidates.length ? P.candidates.map(c => `${c.node}${c.impact != null ? ` (impact ${c.impact})` : ""}`).join(" · ") : null],
-      ["paths closed", P && P.blocked.length ? P.blocked.join(" · ") : null],
+      ["options", P && P.candidates.length ? P.candidates.map(c => `${N.text(c.node)}${c.impact != null ? ` (impact weight ${c.impact})` : ""}`).join(" · ") : null],
+      ["paths closed", P && P.blocked.length ? h("span", {}, ...N.list(P.blocked, " · ")) : null],
     ]) : none("Nothing yet.");
   }
-  function blueDoing(v, r) {
+  function blueDoing(v, r, N) {
     const B = v.blue, policy = r.respond && r.respond !== "off" ? r.respond : (B.decisions[0]?.policy || null);
     const advise = Object.keys(r.approvals).length > 0, d = last(B.decisions), cms = {};
     for (const a of B.actions) if (a.id !== "notify") cms[a.id] = a;
     const pending = B.approvals.filter(a => a.state === "requested");
     return kv([
       ["response", policy ? `${policy}${advise ? ", advising an operator" : ", automatic"}` : "watching only: no response policy"],
-      ["last decision", d ? `${d.actions.join(", ") || "no action"}${d.rationale ? ` — ${d.rationale}` : ""}` : (policy ? "none yet" : null)],
-      ["countermeasures", Object.keys(cms).length ? h("span", {}, ...Object.values(cms).map(a =>
-        mark(a.ok, `${a.id}${a.machine ? ` @${a.machine}` : ""}`))) : null],
-      ["awaiting operator", pending.length ? pending.map(a => `⏳ ${a.action}`).join(" · ") : null],
+      ["last decision", d ? h("span", {}, ...(d.actions.length ? N.list(d.actions) : ["no action"]), d.rationale ? ` — ${d.rationale}` : null) : (policy ? "none yet" : null)],
+      // Each countermeasure by its latest action: in force, reverted since, or failed.
+      ["countermeasures", Object.keys(cms).length ? h("div", {}, ...Object.values(cms).map(a => h("div", {},
+        a.op === "revert" && a.ok ? h("span", { class: "muted" }, "↩ ") : mark(a.ok, ""),
+        N.el(a.id), h("span", { class: "muted" }, `${a.machine ? ` on ${a.machine}` : ""}${a.op === "revert" ? ` — ${didWhat(a)}, no longer in force` : a.ok ? "" : " — failed"}`)))) : null],
+      ["awaiting operator", pending.length ? h("span", {}, "⏳ ", ...N.list(pending.map(a => a.action), " · ⏳ ")) : null],
       ["plant writes", B.respWrites.length ? `${B.respWrites.length} restoring write${B.respWrites.length === 1 ? "" : "s"}` : null],
     ]);
   }
-  function blueSees(v, r) {
+  function blueSees(v, r, N) {
     const B = v.blue, byDet = {};
     for (const f of B.findings) byDet[f.detector] = (byDet[f.detector] || 0) + 1;
     const lf = last(B.findings);
     const nodes = Object.entries(B.st?.nodes || {}).filter(([, s]) => s[0] in STATE_RANK)
       .sort((a, b) => STATE_RANK[a[1][0]] - STATE_RANK[b[1][0]] || b[1][1] - a[1][1]);
     return B.findings.length || nodes.length ? kv([
-      ["findings", Object.entries(byDet).map(([k, n]) => `${k} ×${n}`).join(" · ")],
-      ["latest", lf ? `${lf.klass}${lf.src ? ` from ${lf.src}` : ""}${lf.unit != null ? ` on unit ${lf.unit}` : ""}${lf.maps_to ? ` → ${lf.maps_to}` : ""}` : null],
+      ["findings", Object.entries(byDet).map(([k, n]) => `${UI.termText(k)} ×${n}`).join(" · ")],
+      ["latest", lf ? `${pretty(lf.klass)}${lf.src ? ` from ${lf.src}` : ""}${lf.unit != null ? ` on unit ${lf.unit}` : ""}${lf.maps_to ? ` — points to the step "${N.text(lf.maps_to)}"` : ""}` : null],
       ["alerts open", B.open.length ? B.open.join(" · ") : null],
-      ["attack tree", nodes.length ? h("span", {}, ...nodes.map(([id, s]) => h("span", {
-        style: `margin-right:10px;white-space:nowrap;color:${STATE_STYLE[s[0]].stroke}` }, `${id} ${s[0]} ${num(s[1], 2)}`))) : null],
-      ["expects next", B.st?.next?.length ? B.st.next.join(" · ") : null],
+      // One line per step it has an opinion on: the step, how sure, the belief behind it.
+      ["attack tree", nodes.length ? h("div", {}, ...nodes.map(([id, s]) => h("div", {},
+        h("span", { class: "dot", style: `background:${STATE_STYLE[s[0]].stroke};margin-right:6px` }), N.el(id),
+        h("span", { class: "muted" }, ` — ${s[0]}, belief ${num(s[1], 2)}`)))) : null],
+      ["expects next", B.st?.next?.length ? h("span", {}, ...N.list(B.st.next, " · ")) : null],
       ["hosts implicated", B.st?.hosts?.length ? B.st.hosts.join(" · ") : null],
-      ["model threshold", r.threshold != null ? String(r.threshold) : null],
+      ["model threshold", r.threshold != null ? `${r.threshold} (anomaly score, no unit)` : null],
     ]) : none("Nothing observed yet.");
   }
   const side = (who, label, parts) => h("div", { class: `side ${who}` },
@@ -976,8 +1078,11 @@
         put(s("path", { d: `M${cx - 4},${cy + 6} L${cx + 4},${cy + 6} L${cx},${cy - 2}Z`, fill: "var(--s1)", opacity: 0.6 }), f.t, `${f.detector}: ${f.klass}${where(r, f)}`); }
       for (const d of r.decisions) { const cx = X(d.t);
         put(s("path", { d: `M${cx},${y - 6} L${cx + 6},${y} L${cx},${y + 6} L${cx - 6},${y}Z`, fill: "var(--surface)", stroke: "var(--s1)", "stroke-width": 2 }), d.t, `decision: ${d.actions.join(", ") || "no action"}`); }
-      for (const a of r.actions) if (a.id !== "notify")
-        put(s("rect", { x: X(a.t) - 4, y: y - 4, width: 8, height: 8, fill: a.ok ? "var(--good)" : "var(--critical)" }), a.t, `${a.id} ${a.ok ? "applied" : "failed"}`);
+      // A revert is the same square, hollow: the countermeasure is no longer in force.
+      for (const a of r.actions) if (a.id !== "notify") {
+        const col = a.ok ? "var(--good)" : "var(--critical)", undo = a.op === "revert";
+        put(s("rect", { x: X(a.t) - 4, y: y - 4, width: 8, height: 8, fill: undo ? "var(--surface)" : col, stroke: col, "stroke-width": undo ? 2 : 0 }), a.t, `${a.id} ${didWhat(a)}`);
+      }
     }
     if (row("plant") >= 0) {
       const y = Yc(row("plant"));
@@ -1013,7 +1118,7 @@
     const counter = n => {
       for (const d of B.decisions) for (const [a, c] of Object.entries(d.covers || {}))
         if ([...(c.prevents || []), ...(c.restores || [])].includes(n)) {
-          const act = B.actions.find(x => x.id === a && x.ok && x.t >= d.t - 1e-3);
+          const act = B.actions.find(x => x.id === a && x.ok && x.op !== "revert" && x.t >= d.t - 1e-3);
           if (act) return { id: a, t: act.t };
         }
       return null;
@@ -1030,20 +1135,22 @@
     const v = sidesAt(r, t), R = v.red, B = v.blue, rows = chainRows(r, v), t0 = t0Of(r, R);
     const a0 = R.steps[0]?.t ?? r.writes[0]?.t ?? null;
     const f0 = B.findings.find(f => a0 == null || f.t >= a0 - 1)?.t ?? null;
-    const c0 = f0 == null ? null : B.actions.find(a => a.ok && a.id !== "notify" && a.t >= f0)?.t ?? null;
+    const c0 = f0 == null ? null : B.actions.find(a => a.ok && a.op !== "revert" && a.id !== "notify" && a.t >= f0)?.t ?? null;
     const p0 = a0 == null ? null : r.plant.filter(uptoT(t)).find(p => p.abnormal && p.t >= a0)?.t ?? null;
     const reached = Math.max(-1, ...R.steps.filter(s => s.ok).map(s => stageIndex(s.node)));
     const seen = Math.max(-1, ...Object.entries(B.st?.nodes || {}).filter(([, s]) => s[0] === "confirmed").map(([n]) => stageIndex(n)));
-    const nameOf = i => i < 0 ? "nothing" : i < STAGES.length ? STAGES[i] : "impact";
-    const ahead = a0 == null ? "no attack yet" : reached > seen ? `attacker: ${nameOf(reached)} vs ${nameOf(seen)} confirmed`
-      : `defender has confirmed ${nameOf(seen)}`;
+    const N = namer(r);
+    const nameOf = i => i < 0 ? "nothing" : i < STAGES.length ? `"${N.text(STAGES[i])}"` : "the impact on the plant";
+    const ahead = a0 == null ? "no attack yet" : reached > seen ? `attacker: it reached ${nameOf(reached)}, the defender has confirmed ${nameOf(seen)}`
+      : `defender: it has confirmed ${nameOf(seen)}`;
     const kpi = (k, val, dot) => chip(k, val, dot);
     const span = x => x == null ? "—" : `${num(x, 2)} s`;
     const kpis = h("div", { class: "chips" },
-      kpi("time to detect", a0 == null ? "—" : span(f0 == null ? null : f0 - a0), f0 == null ? null : "var(--s1)"),
-      kpi("time to respond", span(c0 == null || f0 == null ? null : c0 - f0), c0 == null ? null : "var(--good)"),
-      kpi("time to impact", a0 == null ? "—" : (p0 == null ? "not reached" : span(p0 - a0)), p0 == null ? "var(--good)" : "var(--critical)"),
+      kpi("time to detect", a0 == null ? "no attack yet" : f0 == null ? "not detected" : span(f0 - a0), a0 == null ? null : f0 == null ? "var(--critical)" : "var(--s1)"),
+      kpi("time to respond", f0 == null ? "nothing found yet" : c0 == null ? "no countermeasure yet" : span(c0 - f0), c0 == null ? null : "var(--good)"),
+      kpi("time to impact", a0 == null ? "no attack yet" : (p0 == null ? "plant not affected" : span(p0 - a0)), a0 == null ? null : p0 == null ? "var(--good)" : "var(--critical)"),
       kpi("who is ahead", ahead, a0 == null ? null : reached > seen ? "var(--critical)" : "var(--s1)"));
+    if (reused(r)) { box.replaceChildren(none(reused(r))); return; }
     if (!rows.length) { box.replaceChildren(kpis, none("No attack step yet: each row will compare when the attacker did a step with when the defender saw it.")); return; }
     // One bar per step on a shared axis, from the attack's start to its last fact.
     const times = rows.flatMap(x => [x.did, x.failed, x.sus, x.conf, x.c?.t]).filter(v => v != null);
@@ -1057,32 +1164,37 @@
       if (x.failed != null) at(x.failed, s("path", { d: `M${X(x.failed) - 4},5 L${X(x.failed) + 4},13 M${X(x.failed) + 4},5 L${X(x.failed) - 4},13`, stroke: "var(--critical)", "stroke-width": 2 }), `attacker failed it ${rel(x.failed, t0)}`);
       if (x.sus != null) at(x.sus, s("path", { d: `M${X(x.sus) - 5},15 L${X(x.sus) + 5},15 L${X(x.sus)},5Z`, fill: "var(--s1)", opacity: 0.8 }), `defender suspected it ${rel(x.sus, t0)}`);
       if (x.conf != null) at(x.conf, s("path", { d: `M${X(x.conf)},3 L${X(x.conf) + 6},9 L${X(x.conf)},15 L${X(x.conf) - 6},9Z`, fill: "var(--s1)" }), `defender confirmed it ${rel(x.conf, t0)}`);
-      if (x.c) at(x.c.t, s("rect", { x: X(x.c.t) - 4, y: 5, width: 8, height: 8, fill: "var(--good)" }), `${x.c.id} applied ${rel(x.c.t, t0)}`);
+      if (x.c) at(x.c.t, s("rect", { x: X(x.c.t) - 4, y: 5, width: 8, height: 8, fill: "var(--good)" }), `${N.text(x.c.id)}: applied ${rel(x.c.t, t0)}`);
       if (t != null) g.append(s("line", { x1: X(t), x2: X(t), y1: 0, y2: 18, stroke: "var(--ink)" }));
       return g;
     };
-    const lag = x => { const a = x.did ?? x.failed; return a == null || x.sus == null ? "—" : `${x.sus - a >= 0 ? "+" : ""}${num(x.sus - a, 2)} s`; };
+    const lag = x => { const a = x.did ?? x.failed; return a == null || x.sus == null ? "—" : rel(x.sus, a); };
+    const SINCE = "counted from the start of the attack";
     box.replaceChildren(kpis,
       h("div", { class: "legend" }, h("span", {}, h("span", { class: "dot", style: "background:var(--critical)" }), "attacker did it (✗ failed)"),
         h("span", {}, "▲ defender suspected"), h("span", {}, "◆ confirmed"), h("span", {}, h("span", { class: "dot", style: "background:var(--good);border-radius:1px" }), "countermeasure applied")),
-      table([th("attack step", "A step of the attack tree the attacker ran, or the defender has an opinion on"),
-        th("timeline", "The step's facts on one axis, from the start of the attack; the black line is the time shown"),
-        th("attacker", "When the attacker did the step (from the start of the attack); ✗ when it tried and failed", true),
-        th("suspected", "When the defender first believed it possible", true), th("confirmed", "When the defender was first sure of it", true),
-        th("seen after", "How long after the attacker's step the defender first suspected it", true),
-        th("countered by", "The first countermeasure that covered the step and was applied")],
-        rows.map(x => h("tr", jump(x.did ?? x.failed ?? x.sus ?? t0), h("td", {}, x.n), h("td", {}, bar(x)),
+      h("p", { class: "sub", style: "margin:6px 0" }, "Times are counted from the start of the attack: the attacker's first step, or its first write to the plant."),
+      table([th("attack step", "A step of the attack tree the attacker ran, or the defender has an opinion on; hover for the name it is recorded under"),
+        th("timeline", `The step's facts on one axis, ${SINCE}; the black line is the time shown`),
+        th("attacker did it", `When the attacker did the step, ${SINCE}; ✗ when it tried and failed`, true),
+        th("defender suspected", `When the defender first believed the step possible, ${SINCE}`, true),
+        th("defender confirmed", `When the defender was first sure of it, ${SINCE}`, true),
+        th("suspected after", "How long after the attacker's step the defender first suspected it. Negative: the defender expected the step before the attacker got to it", true),
+        th("countered by", `The first countermeasure that covered the step and was applied, and when (${SINCE})`)],
+        rows.map(x => h("tr", jump(x.did ?? x.failed ?? x.sus ?? t0), h("td", { class: "wrap" }, N.el(x.n)), h("td", {}, bar(x)),
           h("td", { class: "num" }, x.did != null ? rel(x.did, t0) : x.failed != null ? h("span", { style: "color:var(--critical)" }, `✗ ${rel(x.failed, t0)}`) : "—"),
           h("td", { class: "num" }, rel(x.sus, t0)), h("td", { class: "num" }, rel(x.conf, t0)),
-          h("td", { class: "num" }, lag(x)), h("td", {}, x.c ? `${x.c.id} at ${rel(x.c.t, t0)}` : "—"))), ""));
+          h("td", { class: "num" }, lag(x)),
+          h("td", { class: "wrap" }, x.c ? [N.el(x.c.id), h("span", { class: "muted" }, ` at ${rel(x.c.t, t0)}`)] : h("span", { class: "muted", title: "No applied countermeasure covers this step" }, "nothing")))), ""));
   }
 
   // A card redraws only when what it shows changed: same run, time, data, width.
   function keep(box, r, t, extra) {
     const x = sides(r);
     const sig = JSON.stringify([r.id, r.status, t, x.red.steps.length, x.red.plans.length, x.red.recon.length, !!x.red.belief, !!x.red.end,
-      r.writes.length, r.findings.length, r.states.length, r.decisions.length, r.actions.length, x.blue.alerts.length,
+      r.writes.length, r.findings.length, r.states.length, r.decisions.length, r.actions.length, x.blue.alerts.length, x.blue.modelErrors.length,
       Object.values(r.approvals).map(a => a.state).join(), r.plant.length, Math.round(box.clientWidth / 40),
+      !!(UI.structure && UI.structure(r)),  // the names of the tree's nodes arrive with the structure
       document.documentElement.dataset.theme || "", extra ?? null]);
     if (box.dataset.sig === sig) return false;
     box.dataset.sig = sig;
@@ -1092,83 +1204,99 @@
   // ── the cards of the three views ──────────────────────────────────────────
   function renderSides(box, r, t) {
     if (!keep(box, r, t)) return;
-    const v = sidesAt(r, t);
+    const v = sidesAt(r, t), N = namer(r);
     box.replaceChildren(h("div", { class: "cols2" },
-      side("red", "Attacker", [["doing", redDoing(v)], ["knows", redKnows(v)]]),
-      side("blue", "Defender", [["doing", blueDoing(v, r)], ["sees / believes", blueSees(v, r)]])),
+      side("red", "Attacker", [["doing", redDoing(v, N)], ["knows", redKnows(v, N)]]),
+      side("blue", "Defender", [["doing", blueDoing(v, r, N)], ["sees / believes", blueSees(v, r, N)]])),
       lanesBox(r, t, ["attacker", "defender", "plant"]));
   }
 
   function renderAttacker(box, r, t) {
     if (!keep(box, r, t)) return;
-    const v = sidesAt(r, t), R = v.red, t0 = t0Of(r, R);
+    const v = sidesAt(r, t), R = v.red, t0 = t0Of(r, R), N = namer(r);
     const seen = o => [o.whoami ? `as ${o.whoami}` : null, o.detail || null,
       o.writes?.length ? `${o.writes.filter(w => w.ok).length}/${o.writes.length} writes accepted (${[...new Set(o.writes.map(w => w.register_name))].join(", ")})` : null]
       .filter(Boolean).join(" · ") || "—";
-    const steps = table([th("at", "From the start of the attack", true), th("step", "The attack-tree step it ran"),
-      th("ATT&CK", "The technique the step is an instance of"), th("outcome", "✓ worked · ✗ failed"),
+    const since = th("since attack start", "Counted from the start of the attack: the attacker's first step, or its first write to the plant", true);
+    const steps = table([since, th("step", "The attack-tree step it ran; hover for the name it is recorded under"),
+      th("ATT&CK technique", "The MITRE ATT&CK technique the step is an instance of"), th("outcome", "✓ worked · ✗ failed"),
       th("what it observed", "What the step's own output told the attacker: the user it ran as, what it found, which writes the plant accepted"),
-      th("by", "The autonomous agent, or the person at the red console")],
-      R.steps.map(s => h("tr", jump(s.t), h("td", { class: "num" }, rel(s.t, t0)), h("td", {}, s.node), h("td", {}, s.attck || "—"),
+      th("by", "agent: the autonomous attacker · a name: the person at the red console")],
+      R.steps.map(s => h("tr", jump(s.t), h("td", { class: "num" }, rel(s.t, t0)), h("td", { class: "wrap" }, N.el(s.node)), h("td", {}, s.attck || "—"),
         h("td", {}, mark(s.ok, s.ok ? "done" : "failed")), h("td", { class: "wrap" }, seen(s.observed || {})), h("td", {}, s.by))),
-      "No step yet");
+      R.start || r.writes.length ? "This attacker ran no step of the attack tree: it only wrote to the plant (see its writes above)"
+        : "No attack step yet: the attack has not started, or this run has none");
+    const WHY = { initial: "first plan", replan: "re-plan after a failed step" };
     const plans = R.plans.length ? [h("h3", { class: "sub", style: "margin:14px 0 4px" }, "Its plans"),
-      table([th("at", "From the start of the attack", true), th("why", "initial: its first choice · replan: a step failed and it chose again"),
-        th("target", "The impact it chose"), th("route", "The steps to get there, in order"),
-        th("options", "The impacts open to it then (impact weight · how detectable, 0–1)"), th("closed", "Steps that had failed: paths it gave up")],
-        R.plans.map(p => h("tr", jump(p.t), h("td", { class: "num" }, rel(p.t, t0)), h("td", {}, p.reason || "—"), h("td", {}, p.target),
-          h("td", {}, p.sequence.join(" → ")),
-          h("td", { class: "wrap" }, p.candidates.map(c => `${c.node} (${c.impact ?? "?"} · ${c.detectability ?? "?"})`).join(", ") || "—"),
-          h("td", {}, p.blocked.join(", ") || "—"))), "")] : [];
+      table([since, th("why", "first plan: its first choice · re-plan: a step failed and it chose again"),
+        th("target", "The impact on the plant it chose to go for"), th("route", "The steps to get there, in order"),
+        th("options", "The impacts open to it then, with the weight it gives each and how likely it thinks each is to be detected (0–1)"),
+        th("closed", "Steps that had failed: it gave up every path through them")],
+        R.plans.map(p => h("tr", jump(p.t), h("td", { class: "num" }, rel(p.t, t0)), h("td", {}, WHY[p.reason] || p.reason || "—"), h("td", { class: "wrap" }, N.el(p.target)),
+          h("td", { class: "wrap" }, N.list(p.sequence, " → ")),
+          h("td", { class: "wrap" }, p.candidates.map(c => `${N.text(c.node)} (weight ${c.impact ?? "?"}, detectability ${c.detectability ?? "?"})`).join("; ") || "—"),
+          h("td", { class: "wrap" }, p.blocked.length ? N.list(p.blocked) : "none"))), "")] : [];
+    const STAGE = { it: "IT network scan", ot: "plant, through the foothold" };
     const recon = R.recon.length ? [h("h3", { class: "sub", style: "margin:14px 0 4px" }, "Its reconnaissance"),
-      table([th("at", "From the start of the attack", true), th("stage", "it: the network scan · ot: the plant, through the foothold"), th("found", "What it learnt")],
-        R.recon.map(c => h("tr", jump(c.t), h("td", { class: "num" }, rel(c.t, t0)), h("td", {}, c.stage),
+      table([since, th("stage", "IT network scan: what hosts and ports it found · plant: what it learnt of the plant's Modbus server through its foothold"), th("found", "What it learnt; registers are listed as address=value")],
+        R.recon.map(c => h("tr", jump(c.t), h("td", { class: "num" }, rel(c.t, t0)), h("td", {}, STAGE[c.stage] || c.stage),
           h("td", { class: "wrap" }, c.stage === "it"
             ? `${(c.hosts || []).map(x => `${x.ip} (${(x.ports || []).map(p => p.port ?? p).join(", ")})`).join(" · ") || "no host"}${c.foothold ? ` — foothold ${c.foothold.ip ?? c.foothold}:${c.foothold.port ?? ""}` : ""}`
             : `${c.engine_ip || "?"}:${c.modbus_port || "?"} Modbus ${c.modbus_ok ? "answers" : "silent"}${c.registers ? ` — ${Object.entries(c.registers).map(([a, x]) => `${a}=${x}`).join(" · ")}` : ""}`))), "")] : [];
     box.replaceChildren(h("div", { class: "cols2" },
-      side("red", "Doing", [["now", redDoing(v)]]), side("red", "Knows", [["of the target", redKnows(v)]])),
+      side("red", "Doing", [["now", redDoing(v, N)]]), side("red", "Knows", [["of the target", redKnows(v, N)]])),
       lanesBox(r, t, ["attacker", "plant"]),
       h("h3", { class: "sub", style: "margin:14px 0 4px" }, "Its steps"), steps, ...plans, ...recon);
   }
 
   function renderDefender(box, r, t) {
     if (!keep(box, r, t)) return;
-    const v = sidesAt(r, t), B = v.blue, t0 = r.start_t;
-    const cost = c => c ? Object.entries(c).filter(([, x]) => typeof x === "number").map(([k, x]) => `${k} ${num(x, 2)}`).join(" · ") : "—";
-    const decisions = table([th("at", "From the start of the run", true),
-      th("trigger", "The finding that led to it, and how long after it the decision came"),
-      th("actions", "What it decided to run"), th("cost", "The terms the policy weighed (residual risk, future risk, operational cost, …)"),
-      th("justification", "The policy's own reason")],
+    const v = sidesAt(r, t), B = v.blue, t0 = r.start_t, N = namer(r);
+    // What the policy weighed, in its own terms, spelled out.
+    const COST = { residual: "risk left", future: "risk ahead", op: "operational cost", time: "time to take effect", energy: "energy cost", total: "total" };
+    const cost = c => c && Object.values(c).some(x => typeof x === "number")
+      ? Object.entries(c).filter(([, x]) => typeof x === "number").map(([k, x]) => `${COST[k] || pretty(k)} ${num(x, 2)}`).join(" · ")
+      : h("span", { class: "muted", title: "This policy records no cost for its decisions, or the run predates the record" }, "not recorded");
+    const since = th("since run start", "Counted from the start of the run", true);
+    const decisions = table([since,
+      th("triggered by", "The finding that led to the decision, and how long after that finding the decision came"),
+      th("decided", "The countermeasures it chose to run; hover for the name each is recorded under"),
+      th("what it weighed", "The terms of the policy's cost function for this choice, unitless, lower is better: risk left once it is applied, risk still ahead, operational cost, time to take effect, energy cost, and their total"),
+      th("its justification", "The policy's own reason, as it recorded it")],
       B.decisions.map(d => h("tr", jump(d.t), h("td", { class: "num" }, rel(d.t, t0)),
-        h("td", {}, d.trigger_klass ? `${d.trigger_klass}${d.trigger_t != null ? ` (+${num(d.t - d.trigger_t, 2)} s)` : ""}` : "—"),
-        h("td", {}, d.actions.join(", ") || "no action"), h("td", { class: "wrap" }, cost(d.cost_terms)),
+        h("td", {}, d.trigger_klass ? `${pretty(d.trigger_klass)}${d.trigger_t != null ? ` (decided ${num(d.t - d.trigger_t, 2)} s later)` : ""}`
+          : h("span", { class: "muted", title: "The decision does not record which finding led to it" }, "not recorded")),
+        h("td", { class: "wrap" }, d.actions.length ? N.list(d.actions) : "no action"), h("td", { class: "wrap" }, cost(d.cost_terms)),
         h("td", { class: "wrap" }, d.rationale || "—"))),
-      r.respond && r.respond !== "off" ? "No decision yet" : "No response policy in this run: the defender only watches");
+      r.respond && r.respond !== "off" ? "No decision yet: nothing the policy answers to has been found" : "No response policy in this run: the defender only watches");
     // Alerts as intervals: raised, then cleared.
     const open = {}, alerts = [];
     for (const a of sides(r).blue.alerts.filter(uptoT(t))) {
-      const k = `${a.detector}: ${a.klass}${where(r, a)}`;
+      const k = `${UI.termText(a.detector)}: ${pretty(a.klass)}${where(r, a)}`;
       if (a.state === "cleared") { if (open[k]) { open[k].cleared = a.t; delete open[k]; } }
       else if (!open[k]) { open[k] = { k, raised: a.t, cleared: null }; alerts.push(open[k]); }
     }
-    const alertTable = table([th("alert", "Detector and class"), th("raised", "From the start of the run", true),
-      th("cleared", "When the condition ended", true), th("lasted", "", true)],
+    const alertTable = table([th("alert", "The detector that raised it and the class of what it saw"), th("raised", "When, since run start", true),
+      th("cleared", "When the condition ended, since run start; \"still open\" if it has not", true), th("lasted", "From raised to cleared", true)],
       alerts.map(a => h("tr", jump(a.raised), h("td", {}, a.k), h("td", { class: "num" }, rel(a.raised, t0)),
-        h("td", { class: "num" }, a.cleared == null ? "open" : rel(a.cleared, t0)),
-        h("td", { class: "num" }, a.cleared == null ? "—" : `${num(a.cleared - a.raised, 1)} s`))), "No alert yet");
+        h("td", { class: "num" }, a.cleared == null ? "still open" : rel(a.cleared, t0)),
+        h("td", { class: "num" }, a.cleared == null ? "—" : `${num(a.cleared - a.raised, 1)} s`))), "No alert raised yet");
     // When each node of the tree first reached each belief.
     const firstAt = {};
     for (const st of r.states.filter(uptoT(t))) for (const [n, [state]] of Object.entries(st.nodes || {}))
       if (state in STATE_RANK) (firstAt[n] = firstAt[n] || {})[state] = firstAt[n][state] ?? st.t;
-    const belief = table([th("step", "A node of the attack tree"),
-      ...["suspected", "inferred", "confirmed"].map(k => th(k, HELP["attack tree"], true))],
+    const BELIEF = { suspected: "first suspected", inferred: "first inferred", confirmed: "first confirmed" };
+    const BELIEF_HELP = { suspected: "When the defender first thought the step possible", inferred: "When it first took the step as implied by a later step it had confirmed",
+      confirmed: "When it was first sure the step had happened" };
+    const belief = table([th("attack step", "A node of the attack tree; hover for the name it is recorded under"),
+      ...["suspected", "inferred", "confirmed"].map(k => th(BELIEF[k], `${BELIEF_HELP[k]}, since run start`, true))],
       Object.entries(firstAt).sort((a, b) => Math.min(...Object.values(a[1])) - Math.min(...Object.values(b[1])))
-        .map(([n, f]) => h("tr", jump(Math.min(...Object.values(f))), h("td", {}, n),
+        .map(([n, f]) => h("tr", jump(Math.min(...Object.values(f))), h("td", { class: "wrap" }, N.el(n)),
           ...["suspected", "inferred", "confirmed"].map(k => h("td", { class: "num", style: f[k] != null ? `color:${STATE_STYLE[k].stroke}` : null }, rel(f[k], t0))))),
-      "No belief yet");
+      r.respond && r.respond !== "off" ? "No belief yet: no finding has pointed to a step of the attack tree"
+        : "This run's defender keeps no belief on the attack tree: it has no response policy");
     box.replaceChildren(h("div", { class: "cols2" },
-      side("blue", "Doing", [["now", blueDoing(v, r)]]), side("blue", "Sees / believes", [["so far", blueSees(v, r)]])),
+      side("blue", "Doing", [["now", blueDoing(v, r, N)]]), side("blue", "Sees / believes", [["so far", blueSees(v, r, N)]])),
       lanesBox(r, t, ["defender", "plant"]),
       h("h3", { class: "sub", style: "margin:14px 0 4px" }, "Its decisions"), decisions,
       h("div", { class: "cols2", style: "margin-top:14px" },
@@ -1187,39 +1315,45 @@
   function journalOf(r) {
     const x = sides(r), red = x.red, out = [];
     const add = (t, side, text) => { if (t != null) out.push({ t, side, text }); };
-    if (red.start) add(red.start.t, "attacker", `attack starts (${red.start.mode || "?"})`);
-    for (const c of red.recon) add(c.t, "attacker", c.stage === "it" ? `recon: ${(c.hosts || []).length} host(s) found${c.foothold ? `, foothold ${c.foothold.ip ?? c.foothold}` : ""}`
-      : `recon: plant at ${c.engine_ip}:${c.modbus_port}, Modbus ${c.modbus_ok ? "answers" : "silent"}`);
-    if (red.belief) add(red.belief.t, "attacker", "builds its own attack tree");
-    for (const p of red.plans) add(p.t, "attacker", `${p.reason === "replan" ? "re-plans" : "plans"}: ${p.target} via ${p.sequence.join(" → ")}`);
-    for (const s of red.steps) add(s.t, "attacker", `${s.node} ${s.ok ? "done" : "failed"}${s.by !== "agent" ? ` (by ${s.by})` : ""}${s.observed?.whoami ? ` — runs as ${s.observed.whoami}` : ""}`);
+    // Steps and countermeasures by the names the run's structure gives them.
+    const N = namer(r), q = id => `"${N.text(id)}"`;
+    if (red.start) add(red.start.t, "attacker", `attack starts${red.start.mode ? `: ${LABELS.mode(red.start.mode)}` : ""}`);
+    for (const c of red.recon) add(c.t, "attacker", c.stage === "it" ? `reconnaissance: ${(c.hosts || []).length} host(s) found${c.foothold ? `, foothold on ${c.foothold.ip ?? c.foothold}` : ""}`
+      : `reconnaissance: plant at ${c.engine_ip}:${c.modbus_port}, its Modbus server ${c.modbus_ok ? "answers" : "does not answer"}`);
+    if (red.belief) add(red.belief.t, "attacker", "builds its own attack tree from what it found");
+    for (const p of red.plans) add(p.t, "attacker", `${p.reason === "replan" ? "re-plans" : "plans"}: goes for ${q(p.target)}, by way of ${p.sequence.map(q).join(" → ")}`);
+    for (const s of red.steps) add(s.t, "attacker", `step ${s.ok ? "done" : "failed"}: ${q(s.node)}${s.by !== "agent" ? ` (by ${s.by})` : ""}${s.observed?.whoami ? ` — runs as ${s.observed.whoami}` : ""}`);
     let w = null;
     for (const x2 of r.writes) {
       const reg = `${x2.register}${where(r, x2)}`;   // the same register of another feeder is another write
-      if (w && w.reg === reg && x2.t - w.last < 5) { w.n++; w.last = x2.t; w.item.text = `writes ${x2.register} = ${x2.value}${where(r, x2)} ×${w.n}`; continue; }
-      w = { reg, n: 1, last: x2.t, item: { t: x2.t, side: "attacker", text: `writes ${x2.register} = ${x2.value}${where(r, x2)}` } };
+      const refused = x2.ok === false ? " — refused by the plant" : "";
+      if (w && w.reg === reg + refused && x2.t - w.last < 5) { w.n++; w.last = x2.t; w.item.text = `writes ${x2.register} = ${x2.value}${where(r, x2)} ×${w.n}${refused}`; continue; }
+      w = { reg: reg + refused, n: 1, last: x2.t, item: { t: x2.t, side: "attacker", text: `writes ${x2.register} = ${x2.value}${where(r, x2)}${refused}` } };
       out.push(w.item);
     }
-    if (red.end) add(red.end.t, "attacker", red.end.success ? "attack ends: impact reached" : `attack ends: stopped at ${red.end.stage_reached || "nothing"}`);
+    if (red.end) add(red.end.t, "attacker", red.end.success ? "attack ends: it reached its impact on the plant"
+      : `attack ends short of its impact: it got as far as ${red.end.stage_reached ? q(red.end.stage_reached) : "nothing"}`);
     let f = null;
     for (const x2 of r.findings) {
-      const k = `${x2.detector}: ${x2.klass}${where(r, x2)}`;
-      if (f && f.k === k && x2.t - f.last < 5) { f.n++; f.last = x2.t; f.item.text = `finding ${k} ×${f.n}`; continue; }
-      f = { k, n: 1, last: x2.t, item: { t: x2.t, side: "defender", text: `finding ${k}${x2.src ? ` from ${x2.src}` : ""}${x2.maps_to ? ` → ${x2.maps_to}` : ""}` } };
+      const k = `${UI.termText(x2.detector)}: ${pretty(x2.klass)}${where(r, x2)}`;
+      if (f && f.k === k && x2.t - f.last < 5) { f.n++; f.last = x2.t; f.item.text = `finding by ${k} ×${f.n}`; continue; }
+      f = { k, n: 1, last: x2.t, item: { t: x2.t, side: "defender", text: `finding by ${k}${x2.src ? ` from ${x2.src}` : ""}${x2.maps_to ? `, pointing to the step ${q(x2.maps_to)}` : ""}` } };
       out.push(f.item);
     }
-    for (const a of x.blue.alerts) add(a.t, "defender", `alert ${a.state}: ${a.detector}: ${a.klass}${where(r, a)}`);
+    for (const a of x.blue.alerts) add(a.t, "defender", `alert ${a.state}: ${UI.termText(a.detector)}: ${pretty(a.klass)}${where(r, a)}`);
+    for (const e of x.blue.modelErrors) add(e.t, "defender", `the learned model could not be fitted${where(r, e)}: ${e.error || "no reason recorded"}`);
     let prev = {};
     for (const st of r.states) {
-      const changes = Object.entries(st.nodes || {}).filter(([n, s2]) => s2[0] in STATE_RANK && prev[n] !== s2[0]).map(([n, s2]) => `${n} ${s2[0]}`);
+      const changes = Object.entries(st.nodes || {}).filter(([n, s2]) => s2[0] in STATE_RANK && prev[n] !== s2[0]).map(([n, s2]) => `${q(n)} ${s2[0]}`);
       prev = Object.fromEntries(Object.entries(st.nodes || {}).map(([n, s2]) => [n, s2[0]]));
-      if (changes.length) add(st.t, "defender", `believes: ${changes.join(", ")}`);
+      if (changes.length) add(st.t, "defender", `now believes: ${changes.join(", ")}`);
     }
-    for (const d of r.decisions) add(d.t, "defender", `decides: ${d.actions.join(", ") || "no action"}`);
-    for (const a of r.actions) if (a.id !== "notify") add(a.t, "defender", `${a.op === "revert" ? "reverts" : "applies"} ${a.id}${a.machine ? ` on ${a.machine}` : ""}: ${a.ok ? "done" : "failed"}`);
+    for (const d of r.decisions) add(d.t, "defender", `decides: ${d.actions.map(q).join(", ") || "no action"}`);
+    for (const a of r.actions) if (a.id !== "notify") add(a.t, "defender", `${a.op === "revert" ? "reverts" : "applies"} ${q(a.id)}${a.machine ? ` on ${a.machine}` : ""}: ${a.ok ? "done" : "failed"}`);
+    const ANSWER = { granted: "approved", rejected: "rejected", expired: "left unanswered until it expired" };
     for (const a of Object.values(r.approvals)) {
-      add(a.asked_t, "defender", `asks the operator: ${a.action}`);
-      if (a.state && a.state !== "requested" && a.t !== a.asked_t) add(a.t, "defender", `operator: ${a.action} ${a.state}${a.operator ? ` by ${a.operator}` : ""}`);
+      add(a.asked_t, "defender", `asks the operator whether to apply ${q(a.action)}`);
+      if (a.state && a.state !== "requested" && a.t !== a.asked_t) add(a.t, "defender", `operator: ${q(a.action)} ${ANSWER[a.state] || a.state}${a.operator ? ` by ${a.operator}` : ""}`);
     }
     for (const [, plant, name] of feeders(r)) {
       for (const [a, b] of spans(plant, p => p.abnormal)) { add(a, "plant", `voltages leave the normal band${name}`); add(b, "plant", `voltages back in band${name}`); }
@@ -1240,7 +1374,7 @@
         h("span", { class: "dot", style: `background:${SIDES[k]};margin-right:5px` }), k)));
     const t0 = r.start_t;
     const rows = shown.map(e => h("tr", { ...jump(e.t), style: t != null && e.t > t + 1e-6 ? "opacity:.4" : null },
-      h("td", { class: "num" }, t0 ? `+${dur(e.t - t0)}` : clock(e.t)),
+      h("td", { class: "num" }, t0 ? rel(e.t, t0) : clock(e.t)),
       h("td", {}, h("span", { class: "dot", style: `background:${SIDES[e.side]}` }), ` ${e.side}`),
       h("td", { class: "wrap" }, e.text)));
     // replaceChildren would print a null as the text "null": the note is spread in or not at all.
@@ -1248,8 +1382,10 @@
       ...(items.length > shown.length ? [h("p", { class: "sub" }, `The last ${shown.length} of ${items.length} facts. `,
         h("button", { type: "button", onclick: () => { journalAll[view] = true; box.dataset.sig = ""; UI.render(); } }, "show all"))] : []),
       h("div", { class: "scroll", style: "max-height:420px;overflow-y:auto" }, h("table", {},
-        h("thead", {}, h("tr", {}, th("at", "From the start of the run", true), th("side", "Whose fact it is"), th("what", "Facts after the time shown are greyed"))),
-        h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 3, class: "empty" }, "Nothing yet"))))));
+        h("thead", {}, h("tr", {}, th("since run start", "When the fact happened, counted from the start of the run", true),
+          th("side", "Whose fact it is: the attacker's, the defender's, or the plant's own state"), th("what happened", "Facts after the time shown on the time bar are greyed"))),
+        h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 3, class: "empty" },
+          Object.values(show).some(Boolean) ? "Nothing has happened yet on the sides shown" : "Every side is switched off: choose one above"))))));
   }
 
   const GRAPH_OPTIONS = [
@@ -1263,7 +1399,7 @@
         { id: "defender", label: "Defender's", help: "Only what the defender believes, and its countermeasures" },
       ] },
   ];
-  const origin = r => r.writes.length ? { t: r.writes[0].t, label: "from the first malicious write" } : null;
+  const origin = r => r.writes.length ? { t: r.writes[0].t, label: "since the first malicious write" } : null;
 
   // The page's sections and this panel's cards, composed into three views.
   const VIEWS = [
@@ -1308,6 +1444,7 @@
       graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree, options: GRAPH_OPTIONS, origin },
       // The results tabs this scenario fills, shown before any run is scored.
       results: { tabs: RESULT_TABS, render: results },
+      labels: LABELS,
     };
   };
 })();

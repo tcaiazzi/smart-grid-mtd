@@ -50,7 +50,7 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
 console.log(JSON.stringify(out));
 """
 
-KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards", "views"}
+KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards", "views", "labels"}
 # The page's own sections, which a view may list beside the panel's cards.
 PAGE_SECTIONS = {"queue-card", "detail", "results-card", "graph-card", "op-card", "teams-card"}
 GRAPH_KEYS = {"index", "overlayAt", "marks", "drawTopology", "drawKG", "drawTree"}
@@ -67,11 +67,13 @@ def run_node(script):
     is longer than the operating system lets a single argument be. The drawing
     harness loads the page's libraries from the files named in the environment,
     in the order VENDOR.json lists them (a library after the one it needs)."""
-    from cyberrange.core.dashboard import VENDOR_DIR, vendored
+    from cyberrange.core.dashboard import PAGE, VENDOR_DIR, vendored
 
     env = {
         **os.environ,
         "DASHBOARD_VENDOR_FILES": json.dumps([os.path.join(VENDOR_DIR, f) for f in vendored()]),
+        # The harness takes the page's reducer and helpers from the page itself.
+        "DASHBOARD_PAGE": PAGE,
     }
     return subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, env=env)
 
@@ -286,6 +288,31 @@ console.log(JSON.stringify(out));""",
                     "ci", [t["id"] for t in results["tabs"]], "'ci' is the page's own tab"
                 )
 
+    def test_every_headline_metric_has_a_name_a_reader_can_use(self):
+        """The Results card lists a campaign's headline metrics. One the panel
+        does not name is shown as its key spelled out — `detectors · combined ·
+        latency from write` — which tells a reader of the page nothing."""
+        from cyberrange.scenarios.cps.metrics import CI_HEADLINE
+        from cyberrange.scenarios.mqtt_mtd.campaign import HEADLINE
+
+        for name, keys in (("cps", CI_HEADLINE), ("mqtt-mtd", HEADLINE)):
+            script = (HARNESS % open(registry.get(name).panel_js()).read()).replace(
+                "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
+                "(panel.labels && panel.labels.metrics) || {}",
+            )
+            result = run_node(script)
+            self.assertEqual(0, result.returncode, result.stderr.strip())
+            named = json.loads(result.stdout)[name]
+            for key in keys:
+                with self.subTest(scenario=name, metric=key):
+                    self.assertIn(
+                        key, named, f"{name}'s panel gives the headline metric {key!r} no name"
+                    )
+                    self.assertTrue(named[key].get("label"), f"{key}: an empty label")
+                    self.assertTrue(
+                        named[key].get("unit"), f"{key}: no unit, so its figures cannot be read"
+                    )
+
     def test_the_page_scripts_parse(self):
         """A syntax error in a page is a blank page and nothing else says so: the
         dashboard here, the two team consoles served in the lab, and the
@@ -303,7 +330,11 @@ console.log(JSON.stringify(out));""",
         ):
             with self.subTest(page=page):
                 html = (paths.REPO_ROOT / page).read_text()
-                scripts = re.findall(r"<script>(.*?)</script>", html, re.DOTALL)
+                # Inline scripts only: one with a src has no body, one with a
+                # type is data. The dashboard names its parts (data-part).
+                scripts = re.findall(
+                    r'<script(?: data-part="[^"]*")?>(.*?)</script>', html, re.DOTALL
+                )
                 self.assertTrue(scripts, f"no inline script found in {page}")
                 with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
                     f.write("\n".join(scripts))
