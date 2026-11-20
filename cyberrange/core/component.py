@@ -14,10 +14,13 @@ TelemetryMirror puts their telemetry on the progress ledger.
     telemetry()     [TelemetrySource] the guest telemetry files it writes
     poll(ctx)       pull live state into the ledger while the run observes;
                     must never raise (the core swallows and logs anyway)
+    mirror(ev)      optional: (event, fields) the ledger keeps of one row of
+                    its telemetry, or None; TelemetryMirror calls it
 """
 
 import json
 import logging
+import shlex
 from dataclasses import dataclass
 
 log = logging.getLogger("core.component")
@@ -81,6 +84,80 @@ class GuestAgent(Component):
         return [
             Artifact(self.node, f"/{self.console_log}", f"{self.node}.{self.console_log}")
         ] + self._artifacts
+
+
+class SeatPlayer(GuestAgent):
+    """A player that is not a person, on a node of its own: a harness
+    (core/harness.py) started at a team's seat and left to play.
+
+    The node is a sandbox. Before the harness starts, the node's firewall is
+    closed around ``seat`` — (address, port, interface) of the team's console
+    — and the model's API; the harness then runs as an unprivileged user, with
+    its terms in the environment (``terms``: the CR_* variables its launcher
+    reads). The team's ``token`` and the harness's ``secrets`` reach the node
+    as files, never on a command line. ``resolvers`` are the name servers the
+    node is given: a lab node has none of its own.
+
+    What the player does is on its transcript, written on the node by the
+    seat's adapter and not by the harness it measures; it is mirrored to the
+    ledger as ``player_start``, ``player_call``, ``player_usage`` and
+    ``player_exit``. ``exited`` turns true at the last one."""
+
+    HOME = "/home/player"
+    TRANSCRIPT = f"{HOME}/player.jsonl"
+    TOKEN, TERMS, SECRETS = f"{HOME}/seat.token", f"{HOME}/terms.env", f"{HOME}/secrets.env"
+    RUN = "bash /player-run.sh"  # nodes/players/player-run.sh, staged by the scenario
+    EVENTS = ("player_start", "player_call", "player_usage", "player_exit")
+
+    def __init__(
+        self, node, team, harness, seat, token, terms=None, secrets=None, resolvers=(), plane="core"
+    ):
+        super().__init__(
+            node,
+            self.RUN,
+            "player.log",
+            plane=plane,
+            name=f"player:{team}",
+            artifacts=[Artifact(node, self.TRANSCRIPT, f"player-{team}.jsonl")],
+        )
+        self.team, self.harness, self.token = team, harness, token
+        ip, port, iface = seat
+        self.terms = {
+            "SEAT_IP": ip,
+            "SEAT_PORT": port,
+            "SEAT_IFACE": iface,
+            "LAUNCHER": harness.launcher,
+            "RESOLVERS": " ".join(resolvers),
+            "CR_SEAT_URL": f"http://{ip}:{port}",
+            "CR_SEAT_TOKEN_FILE": self.TOKEN,
+            "CR_TEAM": team,
+            "CR_TRANSCRIPT": self.TRANSCRIPT,
+            **{k: v for k, v in (terms or {}).items() if v is not None},
+        }
+        self.secrets = dict(secrets or {})
+        self.exited = False
+
+    @staticmethod
+    def _env(values):
+        return "".join(f"{k}={shlex.quote(str(v))}\n" for k, v in values.items())
+
+    def start(self, ctx):
+        ctx.upload(self.node, self.TOKEN, self.token)
+        ctx.upload(self.node, self.TERMS, self._env(self.terms))
+        ctx.upload(self.node, self.SECRETS, self._env(self.secrets))
+        super().start(ctx)
+
+    def telemetry(self):
+        return [TelemetrySource(self.node, self.TRANSCRIPT, "player")]
+
+    def mirror(self, ev):
+        kind = ev.get("kind")
+        if kind not in self.EVENTS:
+            return None
+        if kind == "player_exit":
+            self.exited = True
+        fields = {k: v for k, v in ev.items() if k not in ("kind", "t")}
+        return kind, fields | {"team": self.team, "guest_t": ev.get("t")}
 
 
 class TelemetryCursor:

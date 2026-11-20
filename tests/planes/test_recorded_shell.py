@@ -56,6 +56,20 @@ class Whose(unittest.TestCase):
         self.assertEqual(own.whose(row(ancestry=terminal)), "red")
         self.assertEqual(own.whose(row(ancestry=["bash"])), RecordedShell.CONTROL)
 
+    def test_a_command_run_at_the_teams_seat_is_the_teams(self):
+        own = RecordedShell("attacker", "red", witnessed=True)
+        self.assertEqual(
+            own.whose(row() | {"seat": "red"}),
+            "red",
+            "a command an agent ran through its console was taken for the referee's, "
+            "and left out of the attack's record",
+        )
+        self.assertEqual(
+            self.defended.whose(row() | {"seat": "red"}),
+            RecordedShell.CONTROL,
+            "a row marked with the other team's seat was taken for the defenders'",
+        )
+
 
 class GroundTruth(unittest.TestCase):
     """Only what a team did is the attack's record."""
@@ -92,6 +106,18 @@ class GroundTruth(unittest.TestCase):
         shell = RecordedShell("attacker", "red", witnessed=True)
         ctx = self.polled(shell, row(ancestry=["bash"]), row(ancestry=["ttyd -p"]))
         self.assertEqual([t["team"] for t in ctx.truth], ["red"])
+
+    def test_a_command_from_the_seat_says_who_ran_it_and_why(self):
+        shell = RecordedShell("attacker", "red", witnessed=True)
+        seated = row() | {"seat": "red", "operator": "agent:x", "note": "mapping the plant"}
+        ctx = self.polled(shell, seated, row(ancestry=["ttyd -p"]))
+        self.assertEqual(
+            [(e["via"], e.get("operator"), e.get("note")) for e in ctx.events],
+            [("seat", "agent:x", "mapping the plant"), (None, None, None)],
+        )
+        self.assertEqual(
+            len(ctx.truth), 2, "the seat's command is missing from the attack's record"
+        )
 
 
 if __name__ == "__main__":

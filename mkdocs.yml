@@ -66,6 +66,7 @@ nav:
       - CPS recon: scenario-cps-recon.md
       - CPS SOC (Wazuh + IRIS): scenario-cps-soc.md
   - Red vs blue playground: playground-red-vs-blue.md
+  - Harnesses as players: playing-with-agents.md
   - Platform:
       - Architecture: platform.md
       - Where files go: structure.md

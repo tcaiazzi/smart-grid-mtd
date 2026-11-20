@@ -9,15 +9,17 @@ Run: `.venv/bin/python -m pytest tests/nodes/test_red_console.py`.
 import json
 import os
 import tempfile
+import time
 import unittest
 import urllib.error
 import urllib.request
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.REDTEAM)
+guest_paths.add(guest_paths.REDTEAM, guest_paths.COMMON)
 
 import red_console as R  # noqa: E402  (flat guest import, needs the path set above)
+import seat  # noqa: E402  (flat guest import, needs the path set above)
 
 TOKEN = "r3d"
 STEPS = [
@@ -77,6 +79,15 @@ class TheBench(unittest.TestCase):
         self.assertIsNone(self.bench.launch("rm -rf /"))
         self.assertEqual(self.shell.ran, [], "the console ran something that is not a step")
 
+    def test_the_reason_given_for_a_step_is_kept_with_it(self):
+        self.assertEqual(
+            self.bench.launch("pivot", "agent:x", "the web app gave a shell")["note"],
+            "the web app gave a shell",
+        )
+        self.assertNotIn(
+            "note", self.bench.launch("pivot"), "a step nobody explained gained an empty reason"
+        )
+
     def test_readiness_follows_what_succeeded(self):
         ready = lambda: {s["id"]: s["ready"] for s in self.bench.state()["steps"]}  # noqa: E731
         self.assertEqual(ready(), {"it_access": True, "pivot": False, "breaker_open": False})
@@ -96,6 +107,29 @@ class TheBench(unittest.TestCase):
         self.bench.launch("pivot")
         self.assertEqual(
             outcome(), {"it_access": "done", "pivot": "failed", "breaker_open": "waiting"}
+        )
+
+
+class TheShell(unittest.TestCase):
+    """What the console runs a step with — a real shell, here."""
+
+    def test_a_step_cut_at_the_timeout_keeps_what_it_did_until_then(self):
+        rc, out = R.run_shell('echo \'{"phase": "modbus_write", "ok": true}\'; sleep 30', 0.5)
+        self.assertEqual(rc, -1)
+        self.assertEqual(
+            R.phases_of(out),
+            [{"phase": "modbus_write", "ok": True}],
+            "the writes the plant took before the step was cut are on no record",
+        )
+        self.assertIn("timed out", out)
+
+    def test_a_step_cut_at_the_timeout_leaves_nothing_running(self):
+        mark = os.path.join(tempfile.mkdtemp(prefix="red-"), "still-writing")
+        R.run_shell(f"(sleep 1; touch {mark}) & sleep 30", 0.3)
+        time.sleep(1.5)
+        self.assertFalse(
+            os.path.exists(mark),
+            "a step the console called over went on acting on the plant in the background",
         )
 
 
@@ -145,6 +179,59 @@ class TheConsole(unittest.TestCase):
     def test_a_console_without_a_token_is_refused(self):
         with self.assertRaises(ValueError):
             R.RedConsole(R.Bench(STEPS), "", host="127.0.0.1")
+
+
+class TheSeatAtTheConsole(TheConsole):
+    """A player that is not a browser sits at the same console, behind the same
+    token: a seat reachable without it, or a shell that queues behind a running
+    step, would make an agent a different kind of player from a person."""
+
+    def setUp(self):
+        self.shell = FakeShell()
+        self.typed = []
+
+        def run(cmd):
+            self.typed.append(cmd)
+            return 0, "out", ""
+
+        place = seat.Seat("red", R.ACTIONS, "tree", "# Red team", audit_log=os.devnull, run=run)
+        self.console = R.RedConsole(
+            R.Bench(STEPS, run=self.shell),
+            TOKEN,
+            host="127.0.0.1",
+            terminal="http://t/",
+            seat=place,
+        ).start()
+        self.addCleanup(self.console.shutdown)
+
+    def test_the_seat_and_the_briefing_are_served_to_the_team_only(self):
+        for path in ("/seat", "/briefing"):
+            self.assertEqual(self.call("GET", path, token=None)[0], 401)
+        doc = json.loads(self.call("GET", "/seat")[1])
+        self.assertEqual((doc["team"], doc["actions"]), ("red", ["run_step", "shell"]))
+        self.assertEqual(json.loads(self.call("GET", "/briefing")[1]), {"briefing": "# Red team"})
+
+    def test_a_command_is_run_for_the_team_only(self):
+        self.assertEqual(self.call("POST", "/shell", token=None, body={"cmd": "id"})[0], 401)
+        self.assertEqual(self.call("POST", "/shell", body={"operator": "eve"})[0], 400)
+        self.assertEqual(self.typed, [], "a command ran for a caller it should have refused")
+        status, body = self.call("POST", "/shell", body={"cmd": "id", "operator": "agent:x"})
+        self.assertEqual((status, json.loads(body)["stdout"]), (200, "out"))
+        self.assertEqual(self.typed, ["id"])
+
+    def test_a_note_given_at_the_console_reaches_the_record(self):
+        body = {"operator": "agent:x", "note": "first way in"}
+        self.assertEqual(
+            json.loads(self.call("POST", "/steps/it_access", body=body)[1])["note"], "first way in"
+        )
+
+
+class AConsoleNobodyGaveASeat(TheConsole):
+    def test_it_serves_no_seat(self):
+        for method, path in (("GET", "/seat"), ("GET", "/briefing"), ("POST", "/shell")):
+            self.assertEqual(
+                self.call(method, path, body={"cmd": "id"} if method == "POST" else None)[0], 404
+            )
 
 
 if __name__ == "__main__":

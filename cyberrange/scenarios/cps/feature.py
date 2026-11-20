@@ -60,6 +60,10 @@ class Feature:
         return {}
 
     # ── the episode ──────────────────────────────────────────────────────────
+    def phases(self, args):
+        """[PhaseSpec] this feature adds to the episode, after the lab's own."""
+        return []
+
     def services(self, ctx):
         """Components started with the lab's services, before normal operation."""
 

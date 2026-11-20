@@ -38,7 +38,7 @@ include make/cps-advisor.mk
 include make/cps-recon.mk
 include make/cps-soc.mk
 
-.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams cps-recon-image cps-recon-lab cps-recon cps-recon-dashboard cps-soc-image cps-soc-lab cps-soc cps-soc-teams cps-soc-dashboard dashboard fmt lint selftest selftest-fast check lab-conf platform-loc clean
+.PHONY: help split datasets dataset-train dataset-test all-datasets train all-train evaluate attack baseline demo experiment experiment-baseline all-evaluate all-attack all plots plots-baseline plots-all entropy entropy-compare entropy-all train-rl train-rl-entropy compare-rl compare-rl-all plot-tradeoff sweep detector-runs detector-dataset detector-train detector-final cps-image cps-selftest cps-engine cps-lab cps-attack cps-campaign cps-dashboard cps-metrics cps-replay cps-advisor cps-advisor-lab cps-advisor-dashboard cps-teams cps-players-image cps-agents cps-recon-image cps-recon-lab cps-recon cps-recon-dashboard cps-soc-image cps-soc-lab cps-soc cps-soc-teams cps-soc-dashboard dashboard fmt lint selftest selftest-fast check lab-conf platform-loc clean
 
 help:
 	@echo "Variant: $(VARIANT)  (set NO_MTD=1 for baseline)   Model: $(MODEL_SRC)"
@@ -100,6 +100,9 @@ help:
 	@echo "Cyber-physical scenario with an operator in the loop (PLAYGROUND=1 keeps a lab up until Ctrl-C):"
 	@echo "  cps-advisor         Attack the lab: the SOC suggests, you approve or reject at its console (:$(CPS_BLUE_PORT))"
 	@echo "  cps-teams           Red team vs blue team, each from its own console; up until Ctrl-C"
+	@echo "                      RED_HARNESS / BLUE_HARNESS=claude-code|scripted puts a harness at that seat"
+	@echo "  cps-agents          Harness vs harness (RED_HARNESS, BLUE_HARNESS, *_MODEL), ENGAGEMENT_S at most"
+	@echo "  cps-players-image   Build the images of the players' nodes (needs cps-image)"
 	@echo "  cps-advisor-lab     Deploy the advisor lab, normal operation only"
 	@echo "  cps-advisor-dashboard  Dashboard restricted to the advisor runs (suggestions and answers)"
 	@echo ""

@@ -138,6 +138,7 @@ td.wrap { white-space: normal; min-width: 280px; }
 .sug details { margin: 6px 0; font-size: 13px; }
 .sug summary { cursor: pointer; color: var(--ink-2); }
 .team { font-weight: 600; }
+.agent { border: 1px solid var(--muted); border-radius: 4px; padding: 0 4px; font-size: 11px; }
 /* The time bar keeps its shape while it is used: the slider takes the free
    width, the label after it has a fixed one. */
 .timebar { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
@@ -235,9 +236,10 @@ td.wrap { white-space: normal; min-width: 280px; }
   </section>
 
   <section class="card" id="teams-card" style="display:none"
-    data-help="What people in the lab did, newest first: a step run from a team console, a countermeasure applied or reverted by hand, a mode change, and every command typed in a lab shell, with the host and the team it is attributed to.">
+    data-help="What the players in the lab did, newest first: a step run from a team console, a countermeasure applied or reverted by hand, a mode change, and every command run in a lab shell, with the host and the team it is attributed to. A player may be a person or a harness; a harness is marked 'agent', and the reason it gave for an action is shown under it.">
     <h2>Teams</h2>
-    <p class="sub">What the people in the lab did, both sides on one timeline: steps and commands, newest first.</p>
+    <p class="sub">What the players in the lab did, both sides on one timeline: steps and commands, newest first.</p>
+    <div class="sub" id="teams-players"></div>
     <div class="scroll"><table id="teams"></table></div>
   </section>
 
@@ -270,7 +272,7 @@ function runOf(id) {
       plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
       start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
       states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
-      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false, x: {}, info: {} };
+      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], players: {}, playground: false, x: {}, info: {} };
     if (!S.order.includes(id)) S.order.push(id);
   }
   return S.runs[id];
@@ -283,7 +285,7 @@ function resetRunDetail(r, ev) {
     plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
     duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
     states: [], decisions: [], actions: [], respond: ev.respond || null,
-    approvals: {}, teams: [], playground: !!ev.playground, x: {},
+    approvals: {}, teams: [], players: {}, playground: !!ev.playground, x: {},
     // The run_start event whole: what the scenario's run_info says, for its panel.
     info: ev });
 }
@@ -342,12 +344,17 @@ function apply(ev) {
     case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine });
       // A response a person asked for is that person's doing, not the policy's.
       if (ev.by && ev.by !== "soc") r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "countermeasure",
-        text: `${ev.op === "revert" ? "revert " : ""}${ev.id}`, where: ev.machine, ok: ev.ok, who: ev.by });
+        text: `${ev.op === "revert" ? "revert " : ""}${ev.id}`, where: ev.machine, ok: ev.ok, who: ev.by, note: ev.note });
       break;
     // People in the lab: a shell command, a step of the attack run by hand, the defender's mode changed.
-    case "team_command": r.teams.push({ t: ev.guest_t || ev.t, team: ev.team, what: "command", text: ev.cmd, where: ev.node, via: ev.via }); break;
-    case "red_step": r.teams.push({ t: ev.guest_t || ev.t, team: "red", what: "step", text: ev.step, ok: ev.ok, who: ev.operator }); break;
-    case "soc_mode": r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "mode", text: `SOC set to ${ev.mode}`, who: ev.operator }); break;
+    case "team_command": r.teams.push({ t: ev.guest_t || ev.t, team: ev.team, what: "command", text: ev.cmd, where: ev.node, via: ev.via, who: ev.operator, note: ev.note }); break;
+    case "red_step": r.teams.push({ t: ev.guest_t || ev.t, team: "red", what: "step", text: ev.step, ok: ev.ok, who: ev.operator, note: ev.note }); break;
+    case "soc_mode": r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "mode", text: `SOC set to ${ev.mode}`, who: ev.operator, note: ev.note }); break;
+    // A harness at a team's seat: which one, how many calls it made, how it ended.
+    case "player_start": Object.assign(player(r, ev.team), { harness: ev.harness, version: ev.harness_version, model: ev.model }); break;
+    case "player_call": { const p = player(r, ev.team); p.calls++; if (ev.outcome !== "ok") p.failed++; break; }
+    case "player_usage": Object.assign(player(r, ev.team), { turns: ev.turns, cost: ev.cost_usd, stop: ev.stop_reason }); break;
+    case "player_exit": player(r, ev.team).rc = ev.rc; break;
     // A suggestion put to the operator, then its outcome: one entry per request,
     // the later event completing the earlier (which carries the explanation).
     case "approval": {
@@ -1007,12 +1014,32 @@ function renderOperator() {
   });
 }
 const TEAM = { red: "var(--critical)", blue: "var(--s1)", control: "var(--axis)" };
+function player(r, team) { return r.players[team] || (r.players[team] = { calls: 0, failed: 0 }); }
+// Who acted, as the records name them: a harness says so itself ("agent:<name>").
+const actor = name => !name ? "—" : String(name).startsWith("agent:")
+  ? [h("span", { class: "agent" }, "agent"), ` ${String(name).slice(6)}`] : name;
+
+// Who plays each seat, and for a harness what it has done so far.
+function seats(r) {
+  const declared = (r.info && r.info.players) || {};
+  return ["red", "blue"].filter(team => declared[team] || r.players[team]).map(team => {
+    const d = declared[team] || {}, p = r.players[team];
+    if (!p && d.kind !== "agent") return h("div", {}, h("span", { class: "team" }, team), " — a person");
+    const who = [(p && p.harness) || d.harness, p && p.version, (p && p.model) || d.model].filter(Boolean).join(" · ");
+    const did = p ? `${p.calls} call${p.calls === 1 ? "" : "s"}${p.failed ? `, ${p.failed} not carried out` : ""}` : "not started yet";
+    const end = p && p.rc != null ? ` · stopped (exit ${p.rc}${p.stop ? `, ${p.stop}` : ""})` : "";
+    return h("div", {}, h("span", { class: "team" }, team), " — ", h("span", { class: "agent" }, "agent"), ` ${who} · ${did}${end}`);
+  });
+}
+
 function renderTeams() {
   const id = shownRunId(), r = id ? S.runs[id] : null, rows = r ? r.teams : [];
-  $("teams-card").style.display = rows.length ? "" : "none";
-  const sig = `${cur.id}|${id}|${rows.length}`;
-  if (!rows.length || sig === teamSig) return;
+  const who = r ? seats(r) : [];
+  $("teams-card").style.display = rows.length || who.length ? "" : "none";
+  const sig = `${cur.id}|${id}|${rows.length}|${JSON.stringify(r ? r.players : null)}`;
+  if ((!rows.length && !who.length) || sig === teamSig) return;
   teamSig = sig;
+  $("teams-players").replaceChildren(...who);
   const stamp = t => t ? new Date((t - clockSkew) * 1000).toLocaleTimeString() : "—";
   $("teams").replaceChildren(
     h("thead", {}, h("tr", {}, ["time", "team", "what", "", "where", "by"].map((x, i) => h("th", { class: i ? null : "num" }, x)))),
@@ -1021,9 +1048,10 @@ function renderTeams() {
       h("td", {}, h("span", { class: "dot", style: `background:${TEAM[e.team] || "var(--axis)"}` }), h("span", { class: "team" }, ` ${e.team || "?"}`)),
       h("td", {}, e.what),
       h("td", { class: "wrap" }, e.what === "command" ? h("code", {}, e.text) : e.text,
-        e.ok == null ? null : h("span", { class: "muted" }, e.ok ? " — worked" : " — failed")),
+        e.ok == null ? null : h("span", { class: "muted" }, e.ok ? " — worked" : " — failed"),
+        e.note ? h("div", { class: "muted" }, `“${e.note}”`) : null),
       h("td", {}, e.where ? `${e.where}${e.via ? ` (from ${e.via})` : ""}` : "—"),
-      h("td", {}, e.who || "—")))));
+      h("td", {}, actor(e.who))))));
 }
 
 // ── polling ─────────────────────────────────────────────────────────────────

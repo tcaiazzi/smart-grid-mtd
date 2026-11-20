@@ -484,11 +484,13 @@ class Service:
             s = self._suggested.pop(v["request"], None)
             if s is None:
                 continue  # it lapsed between the operator's click and this step
-            who = {"operator": v.get("operator"), "verdict_t": v.get("t")}
+            noted = {"note": v["note"]} if v.get("note") else {}
+            who = {"operator": v.get("operator"), "verdict_t": v.get("t"), **noted}
             if v["verdict"] == "approve":
                 self._close(v["request"], "granted", s, **who)
                 # The SOC proposed it, but it runs on this person's say-so.
-                self.request(s["action"], {**s["ctx"], "by": v.get("operator") or "operator"})
+                by = v.get("operator") or "operator"
+                self.request(s["action"], {**s["ctx"], "by": by, **noted})
                 continue
             self._close(v["request"], "rejected", s, **who)
             self.engine.withdraw([s["action"]], declined=True)
@@ -506,18 +508,20 @@ class Service:
         for o in self.desk.take_orders():
             who = o.get("operator")
             if o["kind"] == "mode":
-                self.set_mode(o["mode"], who)
+                self.set_mode(o["mode"], who, o.get("note"))
             elif o["kind"] == "countermeasure" and o["id"] in self.engine.cms:
-                self.by_hand(o["id"], o["op"], who)
+                self.by_hand(o["id"], o["op"], who, o.get("note"))
 
-    def set_mode(self, mode, operator=None):
+    def set_mode(self, mode, operator=None, note=None):
         """ "advise": every countermeasure waits for a verdict. "auto": the SOC
         runs what its policy decides. What is already waiting keeps waiting."""
         self.approval = "operator" if mode == "advise" else "auto"
-        self.record("mode", mode=mode, operator=operator)
+        self.record("mode", mode=mode, operator=operator, **({"note": note} if note else {}))
 
-    def by_hand(self, action, op, operator=None):
+    def by_hand(self, action, op, operator=None, note=None):
         ctx = {"decided_t": None, "alert_t": None, "by": operator or "operator"}
+        if note:
+            ctx["note"] = note
         if op == "apply":
             # It no longer needs anyone's verdict: the operator just gave it.
             for request, s in list(self._suggested.items()):
@@ -691,10 +695,14 @@ class Service:
             decided_t=ctx.get("decided_t"),
             alert_t=ctx.get("alert_t"),
             commands=commands,
+            **({"note": ctx["note"]} if ctx.get("note") else {}),
             **node_times,
         )
         self._actions.append(
-            {k: (row or {}).get(k) for k in ("t", "id", "machine", "ok", "op", "by", "commands")}
+            {
+                k: (row or {}).get(k)
+                for k in ("t", "id", "machine", "ok", "op", "by", "commands", "note")
+            }
         )
 
 
@@ -830,7 +838,11 @@ def serve(args, g):
     elif args.operator_token or parse_approval(args.approval)[0] == "operator":
         try:
             api = soc_operator.OperatorApi(
-                desk, args.operator_token, args.operator_port, terminal=args.operator_terminal
+                desk,
+                args.operator_token,
+                args.operator_port,
+                terminal=args.operator_terminal,
+                seat=seat_of(args),
             ).start()
         except ValueError as e:
             raise SystemExit(f"--approval {args.approval}: {e} (--operator-token)") from e
@@ -848,6 +860,18 @@ def serve(args, g):
         feed.close()
 
 
+def seat_of(args):
+    """The seat of the team at the console, or None when no team sits there."""
+    if not args.seat_team:
+        return None
+    # seat.py is staged only where a team has a console: a SOC that nobody sits
+    # at must start without it.
+    import seat
+
+    briefing = base64.b64decode(args.briefing_b64).decode() if args.briefing_b64 else ""
+    return seat.Seat(args.seat_team, soc_operator.ACTIONS, briefing=briefing)
+
+
 def main():
     ap = argparse.ArgumentParser(description="SOC analytics: alerts -> attack tree -> response")
     ap.add_argument("--inventory", default=None, help="the SOC's inventory, a JSON file")
@@ -863,6 +887,12 @@ def main():
         default=None,
         help="URL of the operator's web terminal on this node, linked from the console",
     )
+    ap.add_argument(
+        "--seat-team",
+        default=None,
+        help="the team that sits at the console: serves its seat (seat.py) to any player",
+    )
+    ap.add_argument("--briefing-b64", default=None, help="that team's briefing, base64 of text")
     ap.add_argument(
         "--desk",
         default="console",

@@ -132,13 +132,15 @@ def closed_on(iface, *ports):
 @dataclass
 class Extra:
     """What a scenario built on this lab adds to one node: files to stage,
-    host ports to publish ("HOST:GUEST/tcp"), startup commands, and optionally a
-    different node image (e.g. the attacker on its own red-team image)."""
+    host ports to publish ("HOST:GUEST/tcp"), startup commands, optionally a
+    different node image (e.g. the attacker on its own red-team image), and
+    interfaces on links of the scenario's own, after the lab's."""
 
     files: list = field(default_factory=list)
     ports: list = field(default_factory=list)
     startup: list = field(default_factory=list)
     image: str = None
+    ifaces: list = field(default_factory=list)
 
     def merged(self, other):
         """This and ``other`` on the same node: files, ports and startup in
@@ -150,6 +152,7 @@ class Extra:
             self.ports + other.ports,
             self.startup + other.startup,
             other.image or self.image,
+            self.ifaces + other.ifaces,
         )
 
 
@@ -172,6 +175,7 @@ def topology(args, name=LAB_NAME, extras=None, spec=None) -> Topology:
         if dashboard and sensors and h is sensors[0]:
             node.mgmt_port = f"{dashboard}:{DASHBOARD_GUEST_PORT}/tcp"
         node.files = list(node.files) + list(extra.files)
+        node.ifaces = list(node.ifaces) + list(extra.ifaces)
         node.startup = list(node.startup) + list(extra.startup)
         if extra.ports:
             node.mgmt_port = node.published_ports() + list(extra.ports)

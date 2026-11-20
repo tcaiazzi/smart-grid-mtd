@@ -82,6 +82,9 @@ class Node:
     # lab has addressed and configured it; such a node idles on a shell instead
     # and a component starts the service. None keeps the image's.
     entrypoint: Optional[str] = None
+    # A way out of the lab (Kathará's bridged NIC) for a node that publishes
+    # no port: one that dials out, and is never dialled.
+    bridged: bool = False
 
     def published_ports(self) -> List[str]:
         if not self.mgmt_port:
@@ -144,7 +147,7 @@ def build_lab(topo: Topology):
         m = machines[n.name]
         for f in n.ifaces:
             lab.connect_machine_obj_to_link(m, f.link)
-        if n.published_ports():
+        if n.published_ports() or n.bridged:
             m.add_meta("bridged", True)
             for port in n.published_ports():
                 m.add_meta("port", port)
@@ -185,6 +188,7 @@ def to_dict(topo: Topology) -> dict:
                 "files": [g for _h, g in n.files],
                 "mgmt_port": n.mgmt_port,
                 **({"entrypoint": n.entrypoint} if n.entrypoint else {}),
+                **({"bridged": True} if n.bridged else {}),
             }
             for n in topo.nodes
         ],
@@ -211,7 +215,7 @@ def export_lab_conf(topo: Topology, out_dir: str, copy_files: bool = False) -> s
         image = topo.image_of(n)
         if image:
             lines.append(f'{n.name}[image]="{image}"')
-        if n.published_ports():
+        if n.published_ports() or n.bridged:
             lines.append(f'{n.name}[bridged]="true"')
             lines += [f'{n.name}[port]="{port}"' for port in n.published_ports()]
         if n.entrypoint:

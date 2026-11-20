@@ -402,6 +402,7 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertEqual(
             op,
             {
+                "by_kind": {"human": {"answered": 2, "latency_median_s": 6.0}},
                 "suggestions": 3,
                 "suggestions_approved": 1,
                 "suggestions_rejected": 1,

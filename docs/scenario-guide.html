@@ -1080,6 +1080,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
      "/command_audit.sh"
     ],
     [
+     "nodes/common/seat.py",
+     "/seat.py"
+    ],
+    [
      "nodes/common/team-access.sh",
      "/team-access.sh"
     ]
@@ -1124,6 +1128,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
     [
      "nodes/redteam/red_steps.py",
      "/red_steps.py"
+    ],
+    [
+     "nodes/common/seat.py",
+     "/seat.py"
     ],
     [
      "nodes/redteam/steps.py",
@@ -1179,6 +1187,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
     {
      "default": "None",
      "name": "plant_b64"
+    },
+    {
+     "default": "None",
+     "name": "briefing"
     }
    ],
    "plane": "attack"
@@ -1321,6 +1333,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
      "/attack_graph.py"
     ],
     [
+     "nodes/common/seat.py",
+     "/seat.py"
+    ],
+    [
      "nodes/common/soar_kg.py",
      "/soar_kg.py"
     ],
@@ -1392,6 +1408,14 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
     {
      "default": "None",
      "name": "belief_feed"
+    },
+    {
+     "default": "None",
+     "name": "seat_team"
+    },
+    {
+     "default": "None",
+     "name": "briefing"
     }
    ],
    "plane": "defense"
@@ -1642,12 +1666,14 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
   "belief_tree",
   "cert_authority",
   "cert_client",
+  "claude_player",
   "cps_response",
   "dashboard_objects",
   "delivery_detector",
   "ews_maint",
   "exploit_client",
   "grid_sim",
+  "harness_kit",
   "hmi_client",
   "iris_desk",
   "iris_forward",
@@ -1676,6 +1702,9 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
   "red_recon_agent",
   "red_steps",
   "rl_policy",
+  "scripted_player",
+  "seat",
+  "seat_mcp",
   "simple_client",
   "soar_kg",
   "soar_mapping",
@@ -1787,6 +1816,7 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
   "cps-advisor",
   "cps-advisor-dashboard",
   "cps-advisor-lab",
+  "cps-agents",
   "cps-attack",
   "cps-campaign",
   "cps-dashboard",
@@ -1794,6 +1824,7 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
   "cps-image",
   "cps-lab",
   "cps-metrics",
+  "cps-players-image",
   "cps-recon",
   "cps-recon-dashboard",
   "cps-recon-image",

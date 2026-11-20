@@ -207,6 +207,18 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
 # off the way in: what makes the HMI unavailable to its operator.
 HMI_CUTTING = ("block_flow", "isolate_way")
 OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
+AGENT = "agent:"  # how a harness names itself as operator (nodes/common/seat.py)
+MANUAL = "manual"  # the mode of an attack run at the red console (attack.RedConsole)
+# The tools of a seat that act on the lab, as the seat's adapter names them
+# (nodes/players/seat_mcp.py); the others only look.
+ACTING_TOOLS = (
+    "run_step",
+    "shell",
+    "answer_suggestion",
+    "apply_countermeasure",
+    "revert_countermeasure",
+    "set_mode",
+)
 
 
 def _plant_acts(gt, ok_only=False):
@@ -250,6 +262,11 @@ def _explained(decision):
     )
 
 
+def _player_kind(operator):
+    """Who acted, by how the records name them: a harness says so itself."""
+    return "agent" if str(operator or "").startswith(AGENT) else "human"
+
+
 def _operator(resp):
     """How the operator answered the SOC's suggestions, when the SOC advised
     (approval operator:<s>). None otherwise: a run where the SOC decided alone
@@ -258,7 +275,19 @@ def _operator(resp):
     if not rows:
         return None
     closed = {s: [r for r in rows if r.get("state") == s] for s in OPERATOR_OUTCOMES}
+    answered = closed["granted"] + closed["rejected"]
+    by_kind = {}
+    for kind in ("human", "agent"):
+        own = [r for r in answered if _player_kind(r.get("operator")) == kind]
+        if own:
+            # Apart, because the two are not the same measure: a person's
+            # seconds are attention, a harness's are a model's turn.
+            by_kind[kind] = {
+                "answered": len(own),
+                "latency_median_s": _median(r.get("waited_s") for r in own),
+            }
     return {
+        "by_kind": by_kind,
         "suggestions": sum(1 for r in rows if r.get("state") == "requested"),
         "suggestions_approved": len(closed["granted"]),
         "suggestions_rejected": len(closed["rejected"]),
@@ -268,6 +297,51 @@ def _operator(resp):
             r.get("waited_s") for r in closed["granted"] + closed["rejected"]
         ),
     }
+
+
+def _players(out_dir):
+    """One scorecard per team a harness played, from the transcript the seat's
+    adapter kept (player-<team>.jsonl): who played, what it spent, how it
+    behaved. The outcome of the game is in the run's other metrics; this is
+    what tells two harnesses apart when the outcome is the same. A figure the
+    harness did not report stays None."""
+    out = {}
+    for path in sorted(glob.glob(os.path.join(out_dir, "player-*.jsonl"))):
+        rows = _read_jsonl(path)
+        team = os.path.basename(path)[len("player-") : -len(".jsonl")]
+
+        def last(kind, rows=rows):
+            return next((r for r in reversed(rows) if r.get("kind") == kind), {})
+
+        calls = [r for r in rows if r.get("kind") == "player_call"]
+        acting = [r for r in calls if r.get("tool") in ACTING_TOOLS]
+        outcomes = {}
+        for r in calls:
+            outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
+        start, usage, end = last("player_start"), last("player_usage"), last("player_exit")
+        out[team] = {
+            "harness": start.get("harness"),
+            "harness_version": start.get("harness_version"),
+            "model": start.get("model"),
+            "calls": len(calls),
+            "actions": len(acting),
+            "call_latency_median_s": _median(r.get("duration_s") for r in calls),
+            "action_latency_median_s": _median(r.get("duration_s") for r in acting),
+            # Calls the seat did not carry out, by why: a harness that asks
+            # for what does not exist, or keeps asking past its terms.
+            "failed_calls": {k: n for k, n in sorted(outcomes.items()) if k != "ok"},
+            "failed_call_rate": _rate(len(calls) - outcomes.get("ok", 0), len(calls)),
+            "played_s": (
+                round(end["t"] - start["t"], 3) if end.get("t") and start.get("t") else None
+            ),
+            "turns": usage.get("turns"),
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+            "cost_usd": usage.get("cost_usd"),
+            "stop_reason": usage.get("stop_reason"),
+            "exit_code": end.get("rc"),
+        }
+    return out or None
 
 
 def _tree_countermeasures(out_dir):
@@ -385,6 +459,18 @@ def _response(
             else 0.0
         ),
         "operator": _operator(resp),
+        # What was applied or reverted at the console on someone's initiative,
+        # by who that was; the SOC's own actions are not anyone's.
+        "by_hand": {
+            kind: sum(
+                1
+                for r in resp
+                if r.get("kind") == "action"
+                and (r.get("by") or "soc") != "soc"
+                and _player_kind(r.get("by")) == kind
+            )
+            for kind in ("human", "agent")
+        },
         "countermeasure_times": _countermeasure_times(resp, restoring, mitigated_t),
     }
 
@@ -426,6 +512,9 @@ def compute_metrics(out_dir: str) -> dict:
     mode = next((e.get("mode") for e in gt if e.get("kind") == "attack_start"), None)
     attack_end_ev = next((e for e in gt if e.get("kind") == "attack_end"), {})
     planner = bool(mode) and str(mode).startswith("planner:")
+    # An attack that goes by the tree's stages and says how it ended: the
+    # planner's, and one a team ran at the red console.
+    staged = planner or mode == MANUAL
     plan_steps = [e for e in gt if e.get("kind") == "plan_step"]
 
     ts = [fr.get("timestamp", 0) for fr in frames]
@@ -563,9 +652,12 @@ def compute_metrics(out_dir: str) -> dict:
         # Tree-guided attacker (planner driver)
         "planner": planner,
         "attacker_profile": (mode.split(":", 1)[1] if planner else None),
-        "stage_reached": attack_end_ev.get("stage_reached") if planner else None,
-        "attack_succeeded": (bool(attack_end_ev.get("success")) if planner else None),
-        "prevented": (not _plant_acts(gt, ok_only=True) if planner else None),
+        "stage_reached": attack_end_ev.get("stage_reached") if staged else None,
+        "attack_succeeded": (bool(attack_end_ev.get("success")) if staged else None),
+        "prevented": (not _plant_acts(gt, ok_only=True) if staged else None),
+        # The harnesses that played a team's seat, each with what it spent and
+        # how it behaved; None for a run nobody played that way.
+        "players": _players(out_dir),
         "plan_steps": [
             {"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")} for e in plan_steps
         ]

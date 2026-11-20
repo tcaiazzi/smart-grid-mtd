@@ -43,8 +43,11 @@ that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
 Next to it: `nodes/soc/` (the SOC's analytics and its operator console),
 `nodes/redteam/` (the attacker node's brains: the autonomous tree-guided
 attacker `red_agent.py` with its planner, the recon that builds its own tree,
-and the red team's console), `nodes/soar/` (DFIR-IRIS's start-up and the SOC's
-module for it) and `nodes/common/`. The last holds what more than one kind of
+and the red team's console), `nodes/players/` (what runs on a player's node when
+a harness sits at a team's seat: the seat's MCP adapter, the harnesses'
+launchers, the node's firewall — see
+[playing-with-agents.md](playing-with-agents.md)), `nodes/soar/` (DFIR-IRIS's
+start-up and the SOC's module for it) and `nodes/common/`. The last holds what more than one kind of
 node runs:
 
 - what any host a person works on needs: the web terminal and SSH set-up around

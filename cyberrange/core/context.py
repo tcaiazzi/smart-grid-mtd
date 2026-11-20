@@ -62,6 +62,20 @@ def fetch(machine, guest_path: str, dst_path: str) -> None:
     download_file_from_container(machine.api_object, guest_path, dst_path)
 
 
+def push(machine, guest_path: str, data: bytes, mode: int = 0o600) -> None:
+    """Write ``data`` as ``guest_path`` in a deployed Kathará machine, owned by
+    root with ``mode``. For what must reach a node without ever being part of
+    a command line: a secret passed as an argument is in the node's process
+    table, and in every log that keeps the command."""
+    info = tarfile.TarInfo(os.path.basename(guest_path))
+    info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        tar.addfile(info, io.BytesIO(data))
+    if not machine.api_object.put_archive(os.path.dirname(guest_path) or "/", buf.getvalue()):
+        raise OSError(f"could not write {guest_path} in {getattr(machine, 'name', machine)}")
+
+
 def drain(exec_stream) -> None:
     """Exhaust an exec stream so the command runs to completion. Kathará's
     exec streams (IExecStream) define __next__ but not __iter__: no for-loop."""
@@ -168,6 +182,11 @@ class RunContext:
                 raise
             log.warning("could not download %s:%s (%s)", node, guest_path, e)
             return None
+
+    def upload(self, node, guest_path, text, mode=0o600):
+        """Write ``text`` as a file in ``node`` without it passing through a
+        command line (secrets, tokens)."""
+        push(self.machine(node), guest_path, text.encode(), mode)
 
     # Streams
     def open_ground_truth(self, **run_meta):

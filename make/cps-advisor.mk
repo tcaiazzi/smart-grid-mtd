@@ -1,6 +1,7 @@
 # cps-advisor.mk — the cyber-physical lab with a SOC that advises: every
 # countermeasure is put to an operator, who approves or rejects it at the SOC's
-# console; with cps-teams a red team attacks by hand from a console of its own.
+# console; with cps-teams a red team attacks by hand from a console of its own;
+# with cps-agents a harness sits at each of the two seats and nobody has to.
 # Same lab and images as cps.mk (cps-image), whose CPS_* variables for
 # durations, detectors and the attack apply here too.
 
@@ -17,6 +18,22 @@ CPS_BLUE_PORT       ?= 8766
 CPS_BLUE_SHELL_PORT ?= 8767
 CPS_RED_PORT        ?= 8768
 CPS_RED_SHELL_PORT  ?= 8769
+# A harness at a team's seat instead of a person: its name (claude-code |
+# scripted) and the model it runs. cps-teams takes either seat's; cps-agents
+# fills both. ENGAGEMENT_S is how long two harnesses play, at most; MAX_CALLS
+# each one's budget of tool calls (empty: none).
+RED_HARNESS         ?=
+BLUE_HARNESS        ?=
+RED_MODEL           ?=
+BLUE_MODEL          ?=
+ENGAGEMENT_S        ?= 900
+MAX_CALLS           ?=
+# Name servers of the players' nodes (empty: the scenario's default, public ones).
+PLAYER_DNS          ?=
+CPS_AGENTS_OUT      ?= $(OUTPUT_ROOT)/cps-advisor/agents-1
+CPS_PLAYER_FLAGS := $(if $(RED_MODEL),--red-model $(RED_MODEL)) \
+	$(if $(BLUE_MODEL),--blue-model $(BLUE_MODEL)) $(if $(MAX_CALLS),--max-calls $(MAX_CALLS)) \
+	$(if $(PLAYER_DNS),--player-dns $(PLAYER_DNS))
 CPS_ADVISOR_FLAGS := --respond $(CPS_ADVISOR_RESPOND) --approval operator:$(CPS_ADVISOR_TIMEOUT) \
 	--blue-port $(CPS_BLUE_PORT) --blue-shell-port $(CPS_BLUE_SHELL_PORT)
 
@@ -42,4 +59,20 @@ cps-teams:                 ## red team vs blue team on the advisor lab: stays up
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
 		$(CPS_SEED_FLAG) $(CPS_ADVISOR_FLAGS) $(CPS_IT_FLAG) --teams --playground \
-		--red-port $(CPS_RED_PORT) --red-shell-port $(CPS_RED_SHELL_PORT)
+		--red-port $(CPS_RED_PORT) --red-shell-port $(CPS_RED_SHELL_PORT) \
+		$(if $(RED_HARNESS),--red-harness $(RED_HARNESS)) \
+		$(if $(BLUE_HARNESS),--blue-harness $(BLUE_HARNESS)) $(CPS_PLAYER_FLAGS)
+
+cps-players-image:         ## build the images of the players' nodes (the sandbox a harness plays from)
+	docker build -t kathara/player docker/player/
+	docker build -t kathara/player-claude docker/player-claude/
+
+cps-agents:                ## harness vs harness on the advisor lab: plays ENGAGEMENT_S at most, then scores itself
+	$(PYTHON) -m $(M_CPS_ADVISOR_RUN) --out-dir $(CPS_AGENTS_OUT) \
+		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
+		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
+		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_ADVISOR_FLAGS) $(CPS_IT_FLAG) --teams \
+		--red-port $(CPS_RED_PORT) --red-shell-port $(CPS_RED_SHELL_PORT) \
+		--red-harness $(or $(RED_HARNESS),claude-code) \
+		--blue-harness $(or $(BLUE_HARNESS),claude-code) \
+		--engagement-s $(ENGAGEMENT_S) $(CPS_PLAYER_FLAGS) $(PLAYGROUND_FLAG)

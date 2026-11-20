@@ -12,4 +12,11 @@ SOURCES = {
     "scenario (episode options, CLI)": ["cyberrange/scenarios/cps_advisor/*.py"],
     "dashboard panel": ["cyberrange/scenarios/cps_advisor/panel.js"],
 }
-GUEST_MANIFESTS = ("TEAM_FILES", "SOC_CONSOLE_FILES", "RED_FILES")
+GUEST_MANIFESTS = (
+    "TEAM_FILES",
+    "SOC_CONSOLE_FILES",
+    "RED_FILES",
+    "SEAT_FILES",
+    "PLAYER_FILES",
+    "CLAUDE_PLAYER_FILES",
+)

@@ -317,6 +317,32 @@ class Advising(unittest.TestCase):
         )
         self.assertNotIn("block_flow", self.pending(svc))
 
+    def test_the_reason_an_operator_gave_is_on_the_record_of_what_it_caused(self):
+        svc, api, rec, _now = self.suggested()
+        request = self.pending(svc)["block_flow"]["request"]
+        svc.desk.submit(request, "approve", "agent:x", "the write came from the HMI")
+        svc.desk.order("mode", "agent:x", mode="auto", note="no time to answer each one")
+        svc.step()
+        svc.follower.feed(
+            alert("100120", {"kind": "cps_response", "request": api.requests[0][2], "ok": True})
+        )
+        svc.step()
+        granted = next(r for r in rows(rec, "approval") if r["state"] == "granted")
+        self.assertEqual(
+            (granted["note"], rows(rec, "action")[-1]["note"], rows(rec, "mode")[-1]["note"]),
+            (
+                "the write came from the HMI",
+                "the write came from the HMI",
+                "no time to answer each one",
+            ),
+            "a referee reading the run cannot tell why the player acted",
+        )
+        self.assertNotIn(
+            "note",
+            next(r for r in rows(rec, "approval") if r["state"] == "requested"),
+            "a row nobody explained gained an empty reason",
+        )
+
     def test_a_rejected_suggestion_never_runs_and_is_not_proposed_again(self):
         svc, api, rec, now = self.suggested()
         request = self.pending(svc)["block_flow"]["request"]

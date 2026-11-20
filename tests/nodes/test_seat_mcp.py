@@ -1,0 +1,279 @@
+"""The seat's MCP adapter (nodes/players/seat_mcp.py), played against the two
+real consoles on free ports — so that a tool and the route it calls cannot
+drift apart — and once over stdio, as a harness starts it. No Docker, no model.
+
+Run: `.venv/bin/python -m pytest tests/nodes/test_seat_mcp.py`.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from tests.helpers import guest_paths
+
+guest_paths.add(guest_paths.SOC, guest_paths.REDTEAM, guest_paths.PLAYERS)
+
+import red_console as R  # noqa: E402  (flat guest import, needs the path set above)
+import seat  # noqa: E402  (flat guest import, needs the path set above)
+import seat_mcp as M  # noqa: E402  (flat guest import, needs the path set above)
+import soc_operator as O  # noqa: E402  (flat guest import, needs the path set above)
+
+TOKEN = "t0ken"
+STEPS = [
+    {"id": "it_access", "label": "Exploit the web app", "stage": "it_access", "needs": []},
+    {"id": "pivot", "label": "Reach the plant", "stage": "pivot", "needs": ["it_access"]},
+]
+for _s in STEPS:
+    _s["command"] = f"run {_s['id']}"
+
+
+def typed(cmd):
+    return 0, f"ran {cmd}", ""
+
+
+def red_console():
+    place = seat.Seat("red", R.ACTIONS, "tree", "# Red", audit_log=os.devnull, run=typed)
+    bench = R.Bench(STEPS, run=lambda cmd: (0, json.dumps({"phase": cmd.split()[-1], "ok": True})))
+    return R.RedConsole(bench, TOKEN, host="127.0.0.1", seat=place).start()
+
+
+def soc_console(desk):
+    place = seat.Seat("blue", O.ACTIONS, briefing="# Blue", audit_log=os.devnull, run=typed)
+    return O.OperatorApi(desk, TOKEN, host="127.0.0.1", seat=place).start()
+
+
+class Seated(unittest.TestCase):
+    """A player at a console, its transcript in a scratch file."""
+
+    def sit(self, console, **terms):
+        self.addCleanup(console.shutdown)
+        self.transcript = os.path.join(tempfile.mkdtemp(prefix="mcp-"), "player.jsonl")
+        client = M.Seat(f"http://127.0.0.1:{console.port}", TOKEN, "scripted")
+        return M.Player(client, client.wait(5), transcript=self.transcript, **terms)
+
+    def rows(self):
+        with open(self.transcript) as f:
+            return [json.loads(line) for line in f]
+
+
+class TheRedSeat(Seated):
+    def setUp(self):
+        self.console = red_console()
+        self.player = self.sit(self.console)
+
+    def test_a_team_is_shown_its_own_levers_only(self):
+        self.assertEqual(
+            sorted(self.player.tools),
+            ["get_state", "list_steps", "read_briefing", "run_step", "shell", "time_left"],
+            "the red team was offered a tool of the SOC's, or lacks one of its own",
+        )
+
+    def test_a_step_is_run_in_the_agents_name_with_its_reason(self):
+        row, failed = self.player.call("run_step", {"id": "it_access", "note": "the way in"})
+        self.assertFalse(failed)
+        self.assertEqual(
+            (row["ok"], row["operator"], row["note"]),
+            (True, "agent:scripted", "the way in"),
+            "the console's record cannot tell this player from a person",
+        )
+        steps, _failed = self.player.call("list_steps", {})
+        self.assertEqual({s["id"]: s["outcome"] for s in steps}["it_access"], "done")
+
+    def test_the_briefing_and_the_shell_are_the_seats(self):
+        self.assertEqual(self.player.call("read_briefing", {}), ("# Red", False))
+        out, failed = self.player.call("shell", {"cmd": "id"})
+        self.assertEqual((out["stdout"], failed), ("ran id", False))
+
+    def test_every_call_is_on_the_transcript_with_how_it_ended(self):
+        self.player.call("run_step", {"id": "it_access", "note": "first"})
+        self.player.call("run_step", {"id": "no_such_step"})
+        self.player.call("run_step", {})
+        self.player.call("run_step", {"id": 7})
+        with self.assertRaises(KeyError):
+            self.player.call("apply_countermeasure", {"id": "block_flow"})
+        rows = self.rows()
+        self.assertEqual(
+            [(r["tool"], r["outcome"]) for r in rows],
+            [
+                ("run_step", "ok"),
+                ("run_step", "seat_error"),
+                ("run_step", "bad_arguments"),
+                ("run_step", "bad_arguments"),
+                ("apply_countermeasure", "unknown_tool"),
+            ],
+            "the range scores a harness on these outcomes",
+        )
+        self.assertEqual(
+            (rows[0]["id"], rows[0]["note"], rows[0]["team"]), ("it_access", "first", "red")
+        )
+        self.assertTrue(all(r["kind"] == "player_call" and r["duration_s"] >= 0 for r in rows))
+
+    def test_a_wrong_call_is_told_to_the_harness_so_it_can_correct_itself(self):
+        said, failed = self.player.call("run_step", {"step": "pivot"})
+        self.assertTrue(failed)
+        self.assertIn("id is required", said)
+        said, failed = self.player.call("run_step", {"id": "no_such_step"})
+        self.assertEqual((said, failed), ("no such step", True))
+
+
+class TheTerms(Seated):
+    """The budget and the deadline are the adapter's to keep: left to each
+    harness, two harnesses would not have played the same game."""
+
+    def test_past_the_budget_nothing_reaches_the_seat(self):
+        player = self.sit(red_console(), max_calls=2)
+        player.call("run_step", {"id": "it_access"})
+        self.assertEqual(player.call("time_left", {})[0]["calls_left"], 0)
+        said, failed = player.call("run_step", {"id": "pivot"})
+        self.assertTrue(failed)
+        self.assertIn("budget", said)
+        self.assertEqual(self.rows()[-1]["outcome"], "over_budget")
+        steps = {s["id"]: s["outcome"] for s in player.seat.call("GET", "/state")["steps"]}
+        self.assertEqual(steps["pivot"], "ready", "a step ran for a player out of budget")
+
+    def test_past_the_deadline_nothing_reaches_the_seat(self):
+        now = [100.0]
+        player = self.sit(red_console(), deadline=160.0, clock=lambda: now[0])
+        self.assertEqual(player.call("time_left", {})[0]["seconds_left"], 60)
+        now[0] = 161.0
+        said, failed = player.call("run_step", {"id": "it_access"})
+        self.assertTrue(failed)
+        self.assertEqual(self.rows()[-1]["outcome"], "past_deadline")
+        self.assertEqual(player.seat.call("GET", "/state")["history"], [])
+
+    def test_a_seat_that_is_not_up_yet_is_waited_for(self):
+        client = M.Seat("http://127.0.0.1:9", TOKEN, "agent:x")
+        slept = []
+        with self.assertRaises(M.SeatError):
+            client.wait(3, sleep=slept.append, clock=lambda: float(len(slept)))
+        self.assertEqual(len(slept), 3, "the adapter gave up on a console that had not started")
+
+    def test_a_wrong_token_is_not_waited_for(self):
+        console = red_console()
+        self.addCleanup(console.shutdown)
+        client = M.Seat(f"http://127.0.0.1:{console.port}", "wrong", "agent:x")
+        with self.assertRaises(M.SeatError) as refused:
+            client.wait(60, sleep=lambda _s: self.fail("retried a seat that had answered no"))
+        self.assertEqual(refused.exception.outcome, "seat_error")
+
+
+class TheBlueSeat(Seated):
+    def setUp(self):
+        self.desk = O.ApprovalDesk(clock=lambda: 100.0)
+        self.desk.publish({"mode": "advise", "countermeasures": [{"id": "block_flow"}]})
+        self.desk.open("abc", {"action": "block_flow", "due_t": 160.0, "explanation": {}})
+        self.player = self.sit(soc_console(self.desk))
+
+    def test_a_team_is_shown_its_own_levers_only(self):
+        self.assertNotIn("run_step", self.player.tools)
+        for name in (
+            "answer_suggestion",
+            "apply_countermeasure",
+            "revert_countermeasure",
+            "set_mode",
+        ):
+            self.assertIn(name, self.player.tools)
+
+    def test_a_suggestion_is_read_and_answered(self):
+        listed, _failed = self.player.call("list_suggestions", {})
+        self.assertEqual([s["request"] for s in listed["pending"]], ["abc"])
+        args = {"id": "abc", "verdict": "approve", "note": "an unauthorized write"}
+        self.assertFalse(self.player.call("answer_suggestion", args)[1])
+        self.assertEqual(
+            [(v["verdict"], v["operator"], v["note"]) for v in self.desk.take()],
+            [("approve", "agent:scripted", "an unauthorized write")],
+        )
+        self.assertTrue(self.player.call("answer_suggestion", {"id": "abc", "verdict": "maybe"})[1])
+
+    def test_the_levers_reach_the_desk(self):
+        self.assertEqual(self.player.call("list_countermeasures", {})[0], [{"id": "block_flow"}])
+        self.player.call("apply_countermeasure", {"id": "block_flow"})
+        self.player.call("revert_countermeasure", {"id": "block_flow", "note": "too costly"})
+        self.player.call("set_mode", {"mode": "auto"})
+        self.assertEqual(
+            [
+                (o["kind"], o.get("op") or o.get("mode"), o.get("note"))
+                for o in self.desk.take_orders()
+            ],
+            [
+                ("countermeasure", "apply", None),
+                ("countermeasure", "revert", "too costly"),
+                ("mode", "auto", None),
+            ],
+        )
+
+
+class OverStdio(unittest.TestCase):
+    """As a harness runs it: a subprocess, one JSON-RPC message per line."""
+
+    def setUp(self):
+        self.console = red_console()
+        self.addCleanup(self.console.shutdown)
+        self.dir = tempfile.mkdtemp(prefix="mcp-")
+        with open(os.path.join(self.dir, "token"), "w") as f:
+            f.write(TOKEN + "\n")
+
+    def talk(self, *messages, url=None):
+        cmd = [
+            sys.executable,
+            str(guest_paths.PLAYERS / "seat_mcp.py"),
+            "--url",
+            url or f"http://127.0.0.1:{self.console.port}",
+            "--token-file",
+            os.path.join(self.dir, "token"),
+            "--operator",
+            "agent:test",
+            "--wait",
+            "0",
+        ]
+        sent = "".join(json.dumps({"jsonrpc": "2.0", **m}) + "\n" for m in messages)
+        p = subprocess.run(cmd, input=sent, capture_output=True, text=True, timeout=30)
+        return p, [json.loads(line) for line in p.stdout.splitlines()]
+
+    def test_a_session_from_the_handshake_to_a_tool_call(self):
+        hello = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t"}}
+        call = {"name": "run_step", "arguments": {"id": "it_access"}}
+        p, replies = self.talk(
+            {"id": 1, "method": "initialize", "params": hello},
+            {"method": "notifications/initialized"},
+            {"id": 2, "method": "tools/list"},
+            {"id": 3, "method": "tools/call", "params": call},
+            {"id": 4, "method": "tools/call", "params": {"name": "set_mode", "arguments": {}}},
+            {"id": 5, "method": "resources/read", "params": {"uri": "seat://briefing"}},
+            {"id": 6, "method": "sampling/createMessage"},
+            {"id": 7, "method": "ping"},
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(
+            [r["id"] for r in replies],
+            [1, 2, 3, 4, 5, 6, 7],
+            "a notification was answered, or a request was not: the client would hang or desync",
+        )
+        by_id = {r["id"]: r for r in replies}
+        self.assertEqual(by_id[1]["result"]["protocolVersion"], "2025-06-18")
+        self.assertIn("run_step", [t["name"] for t in by_id[2]["result"]["tools"]])
+        done = by_id[3]["result"]
+        self.assertFalse(done["isError"])
+        self.assertTrue(json.loads(done["content"][0]["text"])["ok"])
+        self.assertEqual(by_id[4]["error"]["code"], -32602, "a tool of the other team was called")
+        self.assertEqual(by_id[5]["result"]["contents"][0]["text"], "# Red")
+        self.assertEqual(by_id[6]["error"]["code"], -32601)
+        self.assertEqual(by_id[7]["result"], {})
+
+    def test_a_version_it_does_not_speak_is_answered_with_one_it_does(self):
+        hello = {"protocolVersion": "2099-01-01", "capabilities": {}, "clientInfo": {"name": "t"}}
+        _p, replies = self.talk({"id": 1, "method": "initialize", "params": hello})
+        self.assertEqual(replies[0]["result"]["protocolVersion"], M.PROTOCOLS[0])
+
+    def test_it_does_not_start_at_a_seat_it_cannot_reach(self):
+        p, replies = self.talk({"id": 1, "method": "ping"}, url="http://127.0.0.1:9")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(replies, [], "stdout must carry MCP messages and nothing else")
+        self.assertIn("did not answer", p.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,11 @@ metrics — is the `cps` scenario's (`docs/scenario-cps.md`,
 
 ## 2. Three consoles, served from three places
 
+A team's console is also its **seat**: with `--teams` it serves a player that is
+not a browser as well, so a harness can play either team from a sandboxed node
+of its own (`--red-harness`, `--blue-harness`; see
+[playing-with-agents.md](playing-with-agents.md)).
+
 Each side must see only what its side knows. The ledger holds both the
 attacker's writes and the SOC's decisions, so three filtered views of one page
 would keep the teams apart by convention only. Each console is therefore served

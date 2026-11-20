@@ -17,6 +17,12 @@ produce an over-voltage or a trip.
   response system's suggestions, and decides what to apply.
 - The **referee** watches both teams from a read-only dashboard.
 
+A seat need not be a person's: a harness such as Claude Code can play either
+team, at the same console and under the same rules
+([playing-with-agents.md](playing-with-agents.md)). On the consoles and on the
+referee's dashboard a harness's actions are marked *agent*, each with the reason
+it gave. A person can give a reason too, in the *why* box next to their name.
+
 The SOC here **does not act on its own**: it proposes each countermeasure with its
 explanation and waits for a person to approve it. A suggestion left unanswered expires
 and is not applied.

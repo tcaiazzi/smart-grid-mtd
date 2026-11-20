@@ -351,6 +351,8 @@ class CpsScenario(Scenario):
                 PhaseSpec("attack", OVERHEAD_S["attack"]),
                 PhaseSpec("post_attack", float(args.post_attack_duration), timed=True),
             ]
+        for f in self.features:
+            ph += f.phases(args)
         return ph
 
     def write_structure(self, ctx):

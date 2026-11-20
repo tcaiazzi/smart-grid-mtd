@@ -11,7 +11,8 @@ FakeManager records every call (deploy/undeploy, exec) and answers
 Background execs (stream=True) return a FakeExecStream (next() only, like
 Kathará's). ``fake_downloads``
 patches the core's container download so artifacts come from ``guest_files``
-({(node, guest_path): bytes}) and land in the run directory like real ones.
+({(node, guest_path): bytes}) and land in the run directory like real ones;
+``fake_uploads`` patches the upload and keeps what was written to each node.
 """
 
 import contextlib
@@ -107,3 +108,19 @@ def fake_downloads(guest_files=None):
         yield fetched
     finally:
         core_context.fetch = real
+
+
+@contextlib.contextmanager
+def fake_uploads():
+    """Keep what the run writes into containers: {(node, guest_path): bytes}."""
+    written = {}
+    real = core_context.push
+
+    def fake(machine, guest_path, data, mode=0o600):
+        written[(getattr(machine, "name", str(machine)), guest_path)] = data
+
+    core_context.push = fake
+    try:
+        yield written
+    finally:
+        core_context.push = real
