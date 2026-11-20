@@ -30,6 +30,7 @@ import secrets
 import sys
 import time
 
+from cyberrange.core import paths, runcard
 from cyberrange.core.component import SeatPlayer
 from cyberrange.core.scenario import PhaseSpec
 from cyberrange.core.topology import Iface, Node
@@ -60,6 +61,9 @@ MANAGED_ROLES = ("boundary", "sensor", "hmi")
 ENTRY = {"hmi": attack.VulnApp.SCRIPT}
 TEAMS_FILE = "teams.json"  # where the teams' links are written; host only
 ENGAGEMENT = "engagement"  # the phase two harnesses play each other in
+# What every harness plays through and is first told, whichever it is: the
+# run's card keeps their fingerprints.
+ADAPTER, PLAYER_KIT = "nodes/players/seat_mcp.py", "nodes/players/harness_kit.py"
 # The link between a team's console and its player's node: a network of two
 # addresses, of a range no lab uses (RFC 2544's, never routed).
 SEAT_NETS = {BLUE: "198.18.0.0", RED: "198.18.0.4"}
@@ -239,6 +243,23 @@ class People(Feature):
                 for team in (BLUE, RED)
             }
         return info
+
+    def secret_options(self, args):
+        return ("blue_token", "red_token")
+
+    def run_card(self, scenario, args):
+        """What the players were given, as fingerprints: the seat's adapter and
+        the first message (nodes/players, the same for every harness), and
+        each team's briefing. Two games are comparable when these match."""
+        if not args.teams:
+            return {}
+        card = {
+            "seat_adapter": runcard.file_fingerprint(paths.resolve(ADAPTER)),
+            "player_kit": runcard.file_fingerprint(paths.resolve(PLAYER_KIT)),
+        }
+        for team in (BLUE, RED):
+            card[f"briefing_{team}"] = runcard.fingerprint(self.briefing(scenario, args, team))
+        return card
 
     def model(self, args, team):
         return getattr(args, f"{team}_model", None) or self.players(args)[team].default_model

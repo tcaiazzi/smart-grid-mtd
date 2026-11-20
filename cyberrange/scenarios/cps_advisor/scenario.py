@@ -22,7 +22,6 @@ class CpsAdvisorScenario(CpsScenario):
     name = "cps-advisor"
     lab_name = LAB_NAME
     features = (People(),)
-    DEFAULT_OUT_DIR = "output/cps-advisor/run-1"
     DEFAULT_RESPOND = "solver"  # the policy that says what a choice costs and what else it weighed
     DEFAULT_APPROVAL = "operator:120"
     APPROVAL_HELP = (

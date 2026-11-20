@@ -217,9 +217,13 @@ class Campaign(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, f)), f)
         with open(os.path.join(d, "runs", "manual-hijack-s1", "metrics.json")) as f:
             m = json.load(f)
+        card = m["run"].pop("card")
         self.assertEqual(
             m["run"], {"run_id": "manual-hijack-s1", "mode": "manual-hijack", "seed": 1}
         )
+        self.assertIn("commit", card, "a scored run does not say what code it was made with")
+        with open(os.path.join(d, "campaign.json")) as f:
+            self.assertIn("commit", json.load(f)["code"])
 
     def test_resume_skips_scored_runs(self):
         cc.run_campaign(

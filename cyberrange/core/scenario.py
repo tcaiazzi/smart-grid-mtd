@@ -73,13 +73,44 @@ class Scenario:
     def run_info(self, args):
         return {"seed": getattr(args, "seed", None)}
 
+    # ── the run's record ─────────────────────────────────────────────────────
+    #: True for a scenario whose run owns its output directory. A standalone
+    #: run is then given a new one unless told where to go, and refuses one
+    #: that already holds a run. False for a scenario that puts several runs
+    #: in one directory on purpose (mqtt-mtd, each under its own prefix).
+    one_run_per_dir = False
+    #: Files the scenario writes into the run directory that describe the lab
+    #: (write_structure): fingerprinted on the run's card.
+    structure_files = ()
+
+    def run_card(self, args):
+        """What this scenario adds to the run's card (core/runcard.py): flat
+        values that tell whether two runs ran the same thing."""
+        return {}
+
+    def secret_options(self, args):
+        """Names of the options whose value must not be kept with the run."""
+        return ()
+
+    def report(self, metrics):
+        """The run's metrics as text (metrics.md), or None for none."""
+        return None
+
+    def headline(self, card, metrics):
+        """One line on how a finished run went, for a list of runs
+        (``python -m cyberrange.core runs``); "" for nothing to say."""
+        return ""
+
     def out_dir(self, args):
         return args.out_dir
 
     def run_id(self, args):
-        return getattr(args, "run_id", None) or os.path.basename(
-            os.path.normpath(self.out_dir(args))
-        )
+        given = getattr(args, "run_id", None)
+        if given:
+            return given
+        # Before a run has claimed its directory there is none to name it by.
+        out_dir = self.out_dir(args)
+        return os.path.basename(os.path.normpath(out_dir)) if out_dir else self.name
 
     def prepare(self, args):
         pass

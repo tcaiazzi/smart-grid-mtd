@@ -94,6 +94,7 @@ class OtSensor(GuestAgent):
             plane=PLANE,
             name="ot_sensor",
             artifacts=[Artifact(node, self.TELEMETRY, f"{node}.telemetry.jsonl")],
+            watch="ot_sensor.py",
         )
 
     def telemetry(self):
@@ -295,6 +296,7 @@ class SocAnalytics(GuestAgent):
             plane=PLANE,
             name="soc_analytics",
             artifacts=artifacts,
+            watch="soc_analytics.py",
         )
 
     def telemetry(self):

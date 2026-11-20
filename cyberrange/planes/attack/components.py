@@ -515,6 +515,7 @@ class RedConsole(GuestAgent):
             plane=PLANE,
             name="red_console",
             artifacts=[Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")],
+            watch="red_console.py",
         )
         self._cursor = None
         self._started = False

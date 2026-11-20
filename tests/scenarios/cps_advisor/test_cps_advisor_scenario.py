@@ -44,13 +44,15 @@ class Options(unittest.TestCase):
     def test_it_advises_by_default(self):
         self.assertEqual(registry.get("cps-advisor").name, "cps-advisor")
         self.assertEqual((self.args.respond, self.args.approval), ("solver", "operator:120"))
-        self.assertEqual(self.args.out_dir, "output/cps-advisor/run-1")
+        self.assertIsNone(
+            self.args.out_dir, "a run is given a directory of its own, not a fixed one"
+        )
         self.s.validate(self.args)
 
     def test_the_cps_defaults_are_untouched(self):
         cps = default_args(cps_scenario.CpsScenario())
         self.assertEqual((cps.respond, cps.approval), ("off", "auto"))
-        self.assertEqual(cps.out_dir, "output/cps/run-1")
+        self.assertIsNone(cps.out_dir, "a run is given a directory of its own, not a fixed one")
 
     def test_only_an_operator_may_decide_here(self):
         for approval in ("auto", "deny", "delay:5", "operator:0", "operator:x"):

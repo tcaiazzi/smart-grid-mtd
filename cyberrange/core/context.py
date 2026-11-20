@@ -139,6 +139,7 @@ class RunContext:
         self.components = []
         self.gt = None
         self._extra_artifacts = []
+        self.reported_down = set()
 
     # Seeds
     @property
@@ -222,6 +223,36 @@ class RunContext:
         component.start(self)
         self.components.append(component)
         return component
+
+    def down(self):
+        """The essential components that are not running, by name; each is
+        also put on the ledger as ``component_down``, once."""
+        out = []
+        for c in self.components:
+            alive = getattr(c, "alive", None)
+            try:
+                if alive is None or alive(self):
+                    continue
+            except Exception as e:  # a node that does not answer is not a dead component
+                log.debug("could not check %r: %s", c, e)
+                continue
+            out.append(c.name)
+            if c.name not in self.reported_down:
+                self.reported_down.add(c.name)
+                self.emit("component_down", component=c.name, node=getattr(c, "node", None))
+        return out
+
+    def require_alive(self):
+        """Fail the run now if an essential component has died: going on would
+        spend the rest of the episode measuring a lab that is not the one meant."""
+        down = self.down()
+        if down:
+            # Imported here: lifecycle imports this module.
+            from cyberrange.core.lifecycle import ComponentDown
+
+            raise ComponentDown(
+                f"not running: {', '.join(down)}. Their console logs are with the run's artifacts."
+            )
 
     def stop_all(self):
         for c in reversed(self.components):

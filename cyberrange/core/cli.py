@@ -30,6 +30,18 @@ def build_parser(scenario, description=None):
         help="progress ledger path (default <out-dir>/progress.jsonl)",
     )
     common.add_argument(
+        "--out-root",
+        default="output",
+        help="where a run without --out-dir gets a directory of its own: "
+        "<out-root>/<scenario>/runs/<date-time>[-name], with 'latest' pointing at it",
+    )
+    common.add_argument("--run-name", default=None, help="a name appended to that directory's")
+    common.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="run into an --out-dir that already holds a run, emptying it first",
+    )
+    common.add_argument(
         "--run-id", default=None, help="run id on the ledger (default: the output directory's name)"
     )
     common.add_argument(

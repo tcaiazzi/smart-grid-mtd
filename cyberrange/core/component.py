@@ -70,12 +70,37 @@ class GuestAgent(Component):
     """A process launched in one container, its output captured to a console log."""
 
     def __init__(
-        self, node, command, console_log, plane="core", name=None, artifacts=(), wait=False
+        self,
+        node,
+        command,
+        console_log,
+        plane="core",
+        name=None,
+        artifacts=(),
+        wait=False,
+        watch=None,
     ):
         self.node, self.command, self.console_log = node, command, console_log
         self.plane, self.name = plane, name or console_log.rsplit(".", 1)[0]
         self._artifacts = list(artifacts)
         self.wait = wait
+        # A fragment of the process's command line (its script's name), for an
+        # agent the run cannot do without: the run fails if it is found dead.
+        # None for one that may end by itself.
+        self.watch = watch
+
+    def alive(self, ctx):
+        """Whether the agent's process is running; always true for an agent
+        nobody asked to watch."""
+        if not self.watch:
+            return True
+        # The first letter in brackets: the pattern then does not match the
+        # command line of the search itself.
+        pattern = f"[{self.watch[0]}]{self.watch[1:]}"
+        _out, _err, rc = ctx.run(self.node, f"pgrep -f {pattern}")
+        # 1 is pgrep's "nothing matched". Any other failure (a node without
+        # pgrep) says nothing about the agent, and must not fail the run.
+        return rc != 1
 
     def start(self, ctx):
         ctx.exec(self.node, self.command, console_log=self.console_log, wait=self.wait)

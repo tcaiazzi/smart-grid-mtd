@@ -22,7 +22,6 @@ class CpsReconScenario(CpsScenario):
     lab_name = LAB_NAME
     features = (Recon(),)
     REDTEAM_IMAGE = REDTEAM_IMAGE
-    DEFAULT_OUT_DIR = "output/cps-recon/run-1"
 
     def panel_js(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.js")

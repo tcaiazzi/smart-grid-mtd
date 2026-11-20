@@ -4,6 +4,8 @@ scenarios                    list the registered scenarios
 export <scenario> --out DIR  write the scenario's default topology as a
                              Kathará lab dir (lab.conf + .startup files)
 loc [--markdown FILE]        platform vs scenario code size
+runs [--root DIR] [--scenario S]
+                             the runs kept under DIR, one line each
 """
 
 import argparse
@@ -29,6 +31,9 @@ def main(argv=None):
     lc = sub.add_parser("loc", help="platform vs scenario code size")
     lc.add_argument("--markdown", default=None, help="also write the table here")
     lc.add_argument("--json", action="store_true")
+    rn = sub.add_parser("runs", help="the runs kept under a directory")
+    rn.add_argument("--root", default="output")
+    rn.add_argument("--scenario", default=None, choices=registry.names())
     args = ap.parse_args(argv)
 
     if args.cmd == "scenarios":
@@ -42,6 +47,13 @@ def main(argv=None):
         s = registry.get(args.scenario)
         path = export_lab_conf(s.topology(default_args(s)), args.out, copy_files=args.copy_files)
         print(path)
+    elif args.cmd == "runs":
+        from cyberrange.core import runcard
+
+        def headline(name, card, metrics):
+            return registry.get(name).headline(card, metrics) if name in registry.names() else ""
+
+        print(runcard.format_runs(runcard.runs(args.root, args.scenario), headline))
     elif args.cmd == "loc":
         from cyberrange.core import loc
 

@@ -11,6 +11,14 @@
 PYTHON ?= .venv/bin/python
 
 OUTPUT_ROOT      ?= output
+# Where a single run writes: a directory of its own under OUTPUT_ROOT
+# (<scenario>/runs/<date-time>[-RUN_NAME], with <scenario>/latest pointing at
+# it) unless the scenario's *_OUT variable names one. A named directory that
+# already holds a run is refused; OVERWRITE=1 empties it first.
+RUN_NAME         ?=
+OVERWRITE        ?=
+run_dir = $(if $(1),--out-dir $(1),--out-root $(OUTPUT_ROOT)) \
+	$(if $(RUN_NAME),--run-name $(RUN_NAME)) $(if $(OVERWRITE),--overwrite)
 SEED             ?=
 SEED_FLAG        := $(if $(SEED),--seed $(SEED))
 # PLAYGROUND=1 keeps a single run's lab up after its episode, until Ctrl-C.
@@ -76,6 +84,9 @@ check: lint                ## before calling a change done: lint, the whole suit
 
 lab-conf:                  ## export SCENARIO's topology as a Kathará lab dir (lab.conf + .startup)
 	$(PYTHON) -m $(M_CORE) export $(SCENARIO) --out $(OUTPUT_ROOT)/labconf/$(SCENARIO)
+
+runs:                      ## list the runs kept under OUTPUT_ROOT, one line each (RUNS_OF=<scenario> for one scenario's)
+	$(PYTHON) -m $(M_CORE) runs --root $(OUTPUT_ROOT) $(if $(RUNS_OF),--scenario $(RUNS_OF))
 
 platform-loc:              ## lines of code: platform core vs per-plane components vs each scenario
 	$(PYTHON) -m $(M_CORE) loc --markdown $(OUTPUT_ROOT)/platform-loc.md

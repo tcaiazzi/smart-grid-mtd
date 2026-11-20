@@ -165,7 +165,7 @@ make cps-teams          # terminal 2: red against blue, up until Ctrl-C
 ```
 
 The run prints each team's links as they become usable and writes them to
-`output/cps-advisor/run-1/teams.json`:
+`output/cps-advisor/latest/teams.json`:
 
 ```
 blue team console: http://127.0.0.1:8766/#token=…
@@ -191,7 +191,7 @@ Without a red team, `make cps-advisor PLAYGROUND=1` runs the scripted attack
 | `CPS_ADVISOR_POST` | `180` | `cps-advisor` only: post-attack observation |
 | `CPS_BLUE_PORT`, `CPS_BLUE_SHELL_PORT` | `8766`, `8767` | host ports of the SOC console and the blue shell |
 | `CPS_RED_PORT`, `CPS_RED_SHELL_PORT` | `8768`, `8769` | host ports of the red console and the red shell |
-| `CPS_ADVISOR_OUT` | `output/cps-advisor/run-1` | run directory |
+| `CPS_ADVISOR_OUT` | a new one per run, under `output/cps-advisor/runs/` | run directory |
 
 The `CPS_*` variables of the `cps` scenario for durations, detectors, the
 scripted attack and IT telemetry apply unchanged. On the command line
@@ -220,7 +220,7 @@ step is the `attack_start`, each step a `red_step`, its Modbus writes the usual
 `modbus_write`, and every command typed in the red shell a `command`. On the
 ledger the control view also gets `team_command` (both teams) and `red_step`.
 
-`make cps-metrics CPS_OUT=output/cps-advisor/run-1` scores the run as a `cps`
+`make cps-metrics CPS_RUN=output/cps-advisor/latest` scores the run as a `cps`
 run, and adds under `response.operator`: `suggestions`,
 `suggestions_approved`, `suggestions_rejected`, `suggestions_expired`,
 `operator_latency_median_s`.
