@@ -26,6 +26,8 @@ class Harness:
     # of the host that enter the player's node.
     secret_env: Tuple[str, ...] = ()
     default_model: Optional[str] = None  # when the run names none; None: the harness's own
+    # The teams it can play; empty: any. A fixed policy is one side's.
+    seats: Tuple[str, ...] = ()
 
     def missing(self, env=None) -> list:
         """The secrets one of which this harness needs, when the host holds

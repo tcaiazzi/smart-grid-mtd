@@ -20,6 +20,7 @@ itself — the lab, the attack, the countermeasures — see
 - [4. What is the same for every harness](#4-what-is-the-same-for-every-harness)
 - [5. What is measured](#5-what-is-measured)
 - [6. Adding a harness](#6-adding-a-harness)
+- [7. Benchmarking harnesses](#7-benchmarking-harnesses)
 
 ---
 
@@ -54,6 +55,8 @@ The harnesses available today:
 |---|---|---|
 | `claude-code` | Claude Code, headless (`claude --print`) | `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` |
 | `scripted` | no model: red runs the attack's steps in order, blue approves every suggestion | nothing |
+| `scripted-loud`, `-quiet`, `-idle` | scripted attackers of graded strength (red seat only), see [§7](#7-benchmarking-harnesses) | nothing |
+| `scripted-fast`, `-slow`, `-absent` | scripted defenders of graded strength (blue seat only) | nothing |
 
 To play Claude Code on a **Claude subscription** instead of an API key, run
 `claude setup-token` once on your machine: it opens the browser, and prints a
@@ -242,3 +245,70 @@ The launcher's contract (`nodes/players/harness_kit.py` does the common part):
 `nodes/players/scripted_player.py` shows a player with no MCP client at all.
 Read the harness's options from the `--help` of the version the image installs,
 not from memory, and raise the two together.
+
+## 7. Benchmarking harnesses
+
+One game says nothing about a harness: the same harness against the same
+defender lands its attack in one run and not in the next. A benchmark is a
+grid, and what it holds still:
+
+```
+harness[:model]  ×  side  ×  opponent  ×  seed
+```
+
+```sh
+make cps-bench DRY=1 BENCH_HARNESS=claude-code      # list the games and the time they take
+make cps-bench BENCH_HARNESS=claude-code BENCH_SEEDS=1-3
+make cps-bench BENCH=mine BENCH_HARNESS=claude-code:<model-a>,claude-code:<model-b> BENCH_SIDES=red
+```
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `BENCH` | the campaign's name; reuse it to resume | date and time |
+| `BENCH_HARNESS` | the harnesses under test, comma-separated, each `<name>[:<model>]` | `claude-code` |
+| `BENCH_SIDES` | the seats each one is tried at | `red,blue` |
+| `BENCH_SEEDS` | the seeds, e.g. `1-5` or `1,3,7` | `1-3` |
+| `BENCH_OPPONENTS` | which scripted opponents | all three of the other side |
+| `BENCH_ENGAGEMENT_S` | each game's length | `300` |
+| `BENCH_MAX_CALLS` | each harness's budget of tool calls | `60` |
+
+**The opponent is always a scripted one**, so that two harnesses are compared
+against the same play. There are three of each side, because one opponent
+measures one thing: against a defender that approves everything within two
+seconds a quiet attack never has the time to work, and only speed would count.
+
+| A harness playing… | meets | which |
+|---|---|---|
+| red | `scripted-fast` | approves every suggestion as soon as it sees it |
+| | `scripted-slow` | approves each one after it has waited 20 seconds |
+| | `scripted-absent` | answers nothing: the suggestions expire unapplied |
+| blue | `scripted-loud` | the attack's steps in order, as each becomes ready |
+| | `scripted-quiet` | the same, the least noticeable ready step first |
+| | `scripted-idle` | no attack at all: what the defender does with nothing to defend |
+
+With the defaults that is six games per harness and seed, of about six minutes
+each. Games run one at a time: a lab publishes fixed host ports. A failed game
+is retried; a game whose essential services died counts as failed, not as a
+result.
+
+**What it leaves**, under `output/campaigns/<BENCH>/`:
+
+| File | What it is |
+|---|---|
+| `runs/<side>-<harness>-vs-<opponent>-s<seed>/` | one game: its artifacts, `run.json`, `metrics.json` |
+| `summary.md` | the cps tables per cell (detection, impact, response), then one table per side with the columns that matter for it, mean [95% CI] |
+| `harness.csv` | that table as data |
+| `ci.csv` | mean and 95% CI of **every** figure of the scorecard and of the run's metrics, per cell |
+| `campaign.json` | the grid, the options, and the commit the games were made with |
+
+On `make dashboard` the campaign's results have a **Harnesses** tab with the same
+table, refreshed after every game.
+
+Two results are comparable when their games were played under the same terms.
+Each game's `run.json` holds the fingerprints of what the players were given —
+the seat's adapter, the first message, each team's briefing — and its
+`metrics.json` carries them under `run.card`: compare those before comparing
+numbers across campaigns.
+
+On a Claude subscription a benchmark draws on your plan's usage limits for the
+whole of it; `BENCH_MAX_CALLS` and `BENCH_ENGAGEMENT_S` are what bound a game.

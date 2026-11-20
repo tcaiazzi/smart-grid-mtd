@@ -57,6 +57,15 @@ class Options(unittest.TestCase):
         self.assertIn("--playground", self.refused(teams=True, red_harness="scripted"))
         self.s.validate(default_args(self.s, teams=True, red_harness="scripted", playground=True))
 
+    def test_a_policy_of_one_side_is_not_seated_at_the_other(self):
+        why = self.refused(teams=True, red_harness="scripted-fast", blue_harness="scripted")
+        self.assertIn("blue team only", why)
+        self.s.validate(
+            default_args(
+                self.s, teams=True, red_harness="scripted-quiet", blue_harness="scripted-slow"
+            )
+        )
+
     def test_a_harness_whose_secret_the_host_lacks_is_refused_before_the_lab_starts(self):
         with mock.patch.dict(os.environ, clear=False) as env:
             env.pop("ANTHROPIC_API_KEY", None)
@@ -121,7 +130,7 @@ class TheRegistry(unittest.TestCase):
                 self.assertEqual(h.name, name)
                 staged = {guest for _host, guest in PLAYER_FILES + list(h.files)}
                 self.assertIn(
-                    h.launcher.split()[-1],
+                    next(word for word in h.launcher.split() if word.startswith("/")),
                     staged,
                     f"{name}'s launcher is not copied onto its node: the player would not start",
                 )

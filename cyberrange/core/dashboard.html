@@ -374,7 +374,8 @@ function apply(ev) {
     case "run_failed": r.status = "failed"; break;
     case "run_metrics": r.status = "ok"; r.metrics = ev.metrics; r.end_t = r.end_t ?? ev.t;
       if (r.start_t && r.duration == null) r.duration = ev.t - r.start_t; break;
-    case "aggregate": S.aggregate = { detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
+    // Whole: a scenario's own tabs read keys of its own (panel().results), which the page does not know.
+    case "aggregate": S.aggregate = { ...ev, detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
     case "campaign_end": S.ended = ev; break;
   }
   // The scenario folds the event kinds only it knows into run.x, after the page

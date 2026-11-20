@@ -63,6 +63,28 @@ cps-teams:                 ## red team vs blue team on the advisor lab: stays up
 		$(if $(RED_HARNESS),--red-harness $(RED_HARNESS)) \
 		$(if $(BLUE_HARNESS),--blue-harness $(BLUE_HARNESS)) $(CPS_PLAYER_FLAGS)
 
+# The benchmark (cps-bench): the harnesses under test, each <name>[:<model>],
+# the seats they are tried at, the seeds, and optionally which of the scripted
+# opponents (default: all three of the other side). BENCH_ENGAGEMENT_S is each
+# game's length, BENCH_MAX_CALLS each harness's budget of tool calls.
+BENCH               ?= $(shell date +%Y%m%d-%H%M)
+BENCH_HARNESS       ?= claude-code
+BENCH_SIDES         ?= red,blue
+BENCH_SEEDS         ?= 1-3
+BENCH_OPPONENTS     ?=
+BENCH_ENGAGEMENT_S  ?= 300
+BENCH_MAX_CALLS     ?= 60
+
+cps-bench:                 ## benchmark harnesses: each one as red and blue vs graded scripted opponents, over seeds (DRY=1 lists the games)
+	$(PYTHON) -m $(M_CPS_BENCH) --name $(BENCH) --harness $(BENCH_HARNESS) \
+		--sides $(BENCH_SIDES) --seeds $(BENCH_SEEDS) \
+		$(if $(BENCH_OPPONENTS),--opponents $(BENCH_OPPONENTS)) \
+		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
+		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
+		--respond $(CPS_ADVISOR_RESPOND) --approval operator:$(CPS_ADVISOR_TIMEOUT) \
+		--engagement-s $(BENCH_ENGAGEMENT_S) --max-calls $(BENCH_MAX_CALLS) \
+		$(if $(PLAYER_DNS),--player-dns $(PLAYER_DNS)) $(CPS_IT_FLAG) $(if $(DRY),--dry-run)
+
 cps-players-image:         ## build the images of the players' nodes (the sandbox a harness plays from)
 	docker build -t kathara/player docker/player/
 	docker build -t kathara/player-claude docker/player-claude/

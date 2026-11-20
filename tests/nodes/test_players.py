@@ -170,6 +170,91 @@ class TheScriptedPlayer(unittest.TestCase):
         )
 
 
+class TheGradedOpponents(TheScriptedPlayer):
+    """One opponent measures one thing. Against a defender that approves
+    everything at once a quiet attack never has time to work, and only speed
+    would count."""
+
+    def steps_console(self):
+        self.ran = []
+        steps = [
+            {"id": "access", "stage": "it_access", "needs": [], "detectability": 0.4},
+            {"id": "loud_hit", "stage": "impact", "needs": ["access"], "detectability": 0.9},
+            {"id": "quiet_hit", "stage": "impact", "needs": ["access"], "detectability": 0.1},
+        ]
+        for s in steps:
+            s["command"] = f"run {s['id']}"
+
+        def run(cmd):
+            self.ran.append(cmd.split()[-1])
+            return 0, json.dumps({"phase": "x", "ok": True})
+
+        place = seat.Seat("red", R.ACTIONS, "tree", audit_log=os.devnull)
+        return R.RedConsole(R.Bench(steps, run=run), TOKEN, host="127.0.0.1", seat=place).start()
+
+    def test_the_quiet_attacker_takes_the_least_noticeable_step_first(self):
+        player = self.player(self.steps_console())
+        scripted_player.play(player, sleep=lambda _s: None, policy="quiet")
+        self.assertEqual(self.ran, ["access", "quiet_hit", "loud_hit"])
+        loud = self.player(self.steps_console())
+        scripted_player.play(loud, sleep=lambda _s: None, policy="loud")
+        self.assertEqual(self.ran, ["access", "loud_hit", "quiet_hit"])
+
+    def test_the_idle_attacker_attacks_nothing_and_stays_until_the_end(self):
+        now = [100.0]
+        player = self.player(self.steps_console(), deadline=130.0, clock=lambda: now[0])
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        self.assertEqual(scripted_player.play(player, sleep=sleep, policy="idle"), "out_of_terms")
+        self.assertEqual(self.ran, [], "the attacker that is there to attack nothing ran a step")
+        self.assertGreaterEqual(now[0], 130.0, "it left an engagement the other side is still in")
+
+    def blue_seat(self, now, **kw):
+        self.desk = O.ApprovalDesk(clock=lambda: now[0])
+        self.desk.publish({"mode": "advise", "countermeasures": [{"id": "block_flow"}]})
+        self.desk.open("abc", {"action": "block_flow", "requested_t": now[0]})
+        place = seat.Seat("blue", O.ACTIONS, audit_log=os.devnull)
+        console = O.OperatorApi(self.desk, TOKEN, host="127.0.0.1", seat=place).start()
+        return self.player(console, clock=lambda: now[0], **kw)
+
+    def test_the_slow_defender_lets_a_suggestion_wait_before_approving_it(self):
+        now, answered_at = [100.0], []
+        player = self.blue_seat(now, deadline=160.0)
+
+        def sleep(seconds):
+            now[0] += 6.0
+            if self.desk.take():
+                answered_at.append(now[0])
+
+        scripted_player.play(player, sleep=sleep, policy="slow")
+        self.assertEqual(len(answered_at), 1)
+        self.assertGreaterEqual(
+            answered_at[0] - 100.0,
+            scripted_player.SLOW_S,
+            "the slow defender answered as fast as the fast one: the two grade nothing apart",
+        )
+
+    def test_the_absent_defender_answers_nothing(self):
+        now = [100.0]
+        player = self.blue_seat(now, deadline=130.0)
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        self.assertEqual(scripted_player.play(player, sleep=sleep, policy="absent"), "out_of_terms")
+        self.assertEqual(self.desk.take(), [])
+
+    def test_a_policy_of_the_other_side_is_refused(self):
+        player = self.player(self.steps_console())
+        self.assertEqual(
+            scripted_player.play(player, sleep=lambda _s: None, policy="fast"),
+            "fast_is_not_a_red_policy",
+        )
+        self.assertEqual(self.ran, [])
+
+
 class TheClaudeLauncher(unittest.TestCase):
     def test_the_harness_is_left_only_the_seat(self):
         key = {"ANTHROPIC_API_KEY": "k"}

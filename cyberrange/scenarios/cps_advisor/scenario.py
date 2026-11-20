@@ -5,9 +5,11 @@ difference in who decides: the SOC advises an operator, who approves or rejects
 each countermeasure at the SOC's console; with --teams a red team attacks and a
 blue team defends. All of it is the People feature (feature.py).
 
-Why a scenario of its own and not an option of cps: a run here needs people,
-so it is not a unit of a campaign, and its lab publishes ports the cps lab
-does not. Under its own lab name the two can also be up side by side.
+Why a scenario of its own and not an option of cps: its lab publishes ports the
+cps lab does not, and a run with a person at a seat waits for that person — it
+is not a unit of a campaign. With a harness at both seats it is: campaign.py
+benchmarks harnesses that way. Under its own lab name this scenario and cps can
+also be up side by side.
 """
 
 import os

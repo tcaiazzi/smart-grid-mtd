@@ -48,6 +48,7 @@ M_CPS_RESPONDER   := cyberrange.scenarios.cps.responder
 M_CPS_METRICS     := cyberrange.scenarios.cps.metrics
 # CPS advisor scenario
 M_CPS_ADVISOR_RUN := cyberrange.scenarios.cps_advisor.cli
+M_CPS_BENCH       := cyberrange.scenarios.cps_advisor.campaign
 M_CPS_RECON_RUN   := cyberrange.scenarios.cps_recon.cli
 M_CPS_SOC_RUN     := cyberrange.scenarios.cps_soc.cli
 

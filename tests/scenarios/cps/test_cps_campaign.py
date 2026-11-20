@@ -161,6 +161,21 @@ class PlannerGrid(unittest.TestCase):
             cc.parse_modes("planner:sneaky")
 
 
+class CommandLine(unittest.TestCase):
+    def test_the_campaigns_directory_is_its_own_not_a_single_runs(self):
+        cfg = cc.parse_args(["--name", "t", "--seeds", "1"])
+        self.assertEqual(
+            cfg.out_root,
+            "output/campaigns",
+            "a run's own --out-root replaced the campaign's: the campaign is written among "
+            "the single runs",
+        )
+        self.assertEqual(
+            cc.parse_args(["--out-root", "/tmp/x", "--respond", "rules"]).out_root, "/tmp/x"
+        )
+        self.assertEqual(cc.parse_args(["--respond", "rules"]).respond, "rules")
+
+
 class Campaign(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="campaign-")

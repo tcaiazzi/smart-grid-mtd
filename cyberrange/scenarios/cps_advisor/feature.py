@@ -186,6 +186,11 @@ class People(Feature):
                 "teams only with --teams"
             )
         for team, harness in players.items():
+            if harness.seats and team not in harness.seats:
+                raise SystemExit(
+                    f"--{team}-harness {harness.name}: it plays the "
+                    f"{' or '.join(harness.seats)} team only"
+                )
             missing = harness.missing()
             if missing:
                 raise SystemExit(
