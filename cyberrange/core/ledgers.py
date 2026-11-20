@@ -10,6 +10,7 @@ two answer different questions: this one, what a run recorded; the other, who
 may ask for it. A ledger is only ever read, so nothing here can disturb a lab.
 """
 
+import bisect
 import json
 import os
 import re
@@ -29,6 +30,11 @@ LEDGER_NAME = "progress.jsonl"
 # An unfinished ledger whose file has not been touched this long is "interrupted".
 # The writer touches it every progress.HEARTBEAT_S even when it has nothing to say.
 STALE_S = 30.0
+# The tree under the root is walked for new ledgers this often at most: it also
+# holds captures and datasets, and the page asks for the list every few seconds.
+DISCOVER_TTL_S = 10.0
+# Events served per request, by default and at most: a long run is read in pages.
+EVENTS_PAGE, EVENTS_PAGE_MAX = 2000, 10000
 
 
 class _Ledger:
@@ -40,14 +46,25 @@ class _Ledger:
         self.offset = 0
         self.tail = b""
         self.events = []
+        self.inode = None
+        self.summary = None  # (what it was computed from, the summary)
+
+    @property
+    def gen(self):
+        """Names this incarnation of the file: a reader holding events of
+        another one must drop them, their seq numbers mean something else."""
+        first = self.events[0].get("t") if self.events else None
+        return f"{self.inode}-{first}"
 
     def refresh(self):
         try:
-            size = os.path.getsize(self.path)
+            st = os.stat(self.path)
         except OSError:
             return
-        if size < self.offset:  # truncated / rewritten
+        size = st.st_size
+        if size < self.offset or st.st_ino != self.inode:  # truncated / replaced
             self.offset, self.tail, self.events = 0, b"", []
+            self.inode = st.st_ino
         if size == self.offset:
             return
         with open(self.path, "rb") as f:
@@ -118,8 +135,15 @@ class LedgerStore:
         self._ledgers = {}  # id (relative path) -> _Ledger
         self._structures = {}  # (run dir, mtimes) -> loaded structure
         self._rebuilt = {}  # scenario name -> structure
+        self._walked = None  # when the root was last walked (monotonic)
 
-    def discover(self):
+    def discover(self, force=False):
+        """Walk the root for ledgers; within DISCOVER_TTL_S of the last walk
+        the known ones stand, unless ``force`` (an id nobody has seen yet)."""
+        now = time.monotonic()
+        if not force and self._walked is not None and now - self._walked < DISCOVER_TTL_S:
+            return
+        self._walked = now
         found = {}
         for dirpath, _dirs, files in os.walk(self.root):
             if LEDGER_NAME in files:
@@ -132,46 +156,58 @@ class LedgerStore:
             for lid in list(self._ledgers):
                 if lid not in found:
                     del self._ledgers[lid]
-        return found
 
     def get(self, lid):
-        with self._lock:
-            led = self._ledgers.get(lid)
-            if led is not None:
-                led.refresh()
-            return led
+        """The ledger of this id, read up to date; a new one is looked for once."""
+        for attempt in (0, 1):
+            with self._lock:
+                led = self._ledgers.get(lid)
+                if led is not None:
+                    led.refresh()
+                    return led
+            if attempt == 0:
+                self.discover(force=True)
+        return None
 
     def listing(self, now=None):
         self.discover()
         out = []
         with self._lock:
             items = list(self._ledgers.items())
+        clock = time.time() if now is None else now
         for lid, led in items:
-            with self._lock:
-                led.refresh()
-                events = list(led.events)
             try:
                 mtime = os.path.getmtime(led.path)
             except OSError:
                 continue
-            item = {"id": lid, **summarize(events, mtime, now)}
+            with self._lock:
+                led.refresh()
+                # A ledger that has not changed is not summarised again.
+                key = (led.gen, len(led.events), mtime, clock - mtime < STALE_S)
+                if led.summary is None or led.summary[0] != key:
+                    led.summary = (key, summarize(led.events, mtime, clock))
+                item = {"id": lid, **led.summary[1]}
             if self.scenario and item.get("scenario") != self.scenario:
                 continue
             out.append(item)
         out.sort(key=lambda x: (x["status"] != "running", -(x["last_t"] or x["mtime"])))
         return out
 
-    def events(self, lid, since=0):
+    def events(self, lid, since=0, limit=EVENTS_PAGE):
+        """One page of a ledger: {"gen", "next", "total", "events"}. ``next``
+        is the seq to ask for next and never passes ``total``, the seq after
+        the last event — so a reader ahead of the file learns it."""
         led = self.get(lid)
         if led is None:
-            self.discover()
-            led = self.get(lid)
-        if led is None:
             return None
+        limit = max(1, min(limit or EVENTS_PAGE, EVENTS_PAGE_MAX))
         with self._lock:
-            evs = [e for e in led.events if e.get("seq", 0) >= since]
-        nxt = (evs[-1].get("seq", since) + 1) if evs else since
-        return {"next": nxt, "events": evs}
+            start = bisect.bisect_left(led.events, since, key=lambda e: e.get("seq", 0))
+            evs = led.events[start : start + limit]
+            total = led.events[-1].get("seq", len(led.events) - 1) + 1 if led.events else 0
+            gen = led.gen
+        nxt = evs[-1].get("seq", since) + 1 if evs else min(since, total)
+        return {"gen": gen, "next": nxt, "total": total, "events": evs}
 
     # ── run structure (kg.json / tree.json) ─────────────────────────────────
     def run_dir(self, lid, run_id):
@@ -183,9 +219,6 @@ class LedgerStore:
         if not run_id:
             return None
         led = self.get(lid)
-        if led is None:
-            self.discover()
-            led = self.get(lid)
         if led is None:
             return None
         with self._lock:

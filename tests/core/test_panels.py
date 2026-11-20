@@ -15,6 +15,7 @@ Run: `.venv/bin/python -m pytest tests/core/test_panels.py`
 """
 
 import json
+import os
 import shutil
 import subprocess
 import unittest
@@ -61,11 +62,25 @@ GRAPH_OPTIONAL = {"options", "origin"}
 DRAW_HARNESS = (Path(__file__).parent / "panel_draw_harness.js").read_text()
 
 
+def run_node(script):
+    """Run a script under node, handed over on stdin: every panel in one script
+    is longer than the operating system lets a single argument be. The drawing
+    harness loads the page's libraries from the files named in the environment,
+    in the order VENDOR.json lists them (a library after the one it needs)."""
+    from cyberrange.core.dashboard import VENDOR_DIR, vendored
+
+    env = {
+        **os.environ,
+        "DASHBOARD_VENDOR_FILES": json.dumps([os.path.join(VENDOR_DIR, f) for f in vendored()]),
+    }
+    return subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, env=env)
+
+
 @unittest.skipIf(NODE is None, "node is not installed; the panel contract is unchecked")
 class PanelsLoad(unittest.TestCase):
     def _run(self, sources):
         script = HARNESS % "\n".join(sources)
-        result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+        result = run_node(script)
         self.assertEqual(
             0,
             result.returncode,
@@ -128,7 +143,7 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
 }
 console.log(JSON.stringify(out));""",
             )
-            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
             spec = json.loads(result.stdout).get(name)
             if spec is False:  # this scenario draws no queue of its own
@@ -154,7 +169,7 @@ console.log(JSON.stringify(out));""",
                 "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
                 "panel.graph ? Object.keys(panel.graph).sort() : []",
             )
-            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            result = run_node(script)
             keys = set(json.loads(result.stdout).get(name, []))
             if not keys:
                 continue
@@ -181,7 +196,7 @@ console.log(JSON.stringify(out));""",
                 "(panel.cards || [])"
                 ".map(c => ({ id: c.id, title: c.title, render: typeof c.render }))",
             )
-            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
             cards = json.loads(result.stdout).get(name, [])
             with self.subTest(scenario=name):
@@ -202,7 +217,7 @@ console.log(JSON.stringify(out));""",
                 "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
                 "{ views: panel.views || [], cards: (panel.cards || []).map(c => c.id) }",
             )
-            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
             got = json.loads(result.stdout).get(name)
             if not got or not got["views"]:
@@ -234,11 +249,7 @@ console.log(JSON.stringify(out));""",
         for label, chunk in [(n, [src]) for n, src in zip(registry.names(), sources)] + [
             ("all panels", sources)
         ]:
-            result = subprocess.run(
-                [NODE, "-e", DRAW_HARNESS.replace("/* PANELS */", "\n".join(chunk))],
-                capture_output=True,
-                text=True,
-            )
+            result = run_node(DRAW_HARNESS.replace("/* PANELS */", "\n".join(chunk)))
             with self.subTest(panels=label):
                 self.assertEqual(0, result.returncode, result.stderr.strip())
                 failures = {k: v for k, v in json.loads(result.stdout).items() if v}
@@ -261,7 +272,7 @@ console.log(JSON.stringify(out));""",
                 "panel.results ? { tabs: panel.results.tabs, render: typeof panel.results.render }"
                 " : null",
             )
-            result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+            result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
             results = json.loads(result.stdout).get(name)
             if results is None:

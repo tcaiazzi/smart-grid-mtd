@@ -10,8 +10,10 @@ is served.
 Run: `.venv/bin/python -m unittest tests.test_dashboard`.
 """
 
+import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 import unittest
@@ -20,7 +22,7 @@ import urllib.parse
 import urllib.request
 
 
-from cyberrange.core.dashboard import PAGE, ProgressDashboard  # noqa: E402
+from cyberrange.core.dashboard import PAGE, VENDOR_DIR, ProgressDashboard  # noqa: E402
 from cyberrange.core.ledgers import summarize  # noqa: E402
 from cyberrange.core.progress import ProgressLog  # noqa: E402
 
@@ -103,7 +105,8 @@ class Server(_Fixture):
         self.assertEqual(res["next"], n)
         self.assertEqual([e["seq"] for e in res["events"]], list(range(n)))
         res2 = json.loads(self.get(q + f"&since={res['next']}")[2])
-        self.assertEqual(res2, {"next": n, "events": []})
+        self.assertEqual((res2["next"], res2["total"], res2["events"]), (n, n, []))
+        self.assertEqual(res2["gen"], res["gen"], "an unchanged file was reported as replaced")
         log = ProgressLog(self.live)  # the campaign moves on
         log.emit("aggregate", detection=[], impact=[])
         log.close()
@@ -112,6 +115,76 @@ class Server(_Fixture):
         res3 = json.loads(self.get(q + f"&since={n}")[2])
         self.assertEqual([e["kind"] for e in res3["events"]], ["aggregate"])
         self.assertEqual(res3["next"], n + 1)
+
+    def test_a_long_ledger_is_read_in_pages(self):
+        lid = os.path.join("campaigns", "finished", "progress.jsonl")
+        q = f"/api/events?id={urllib.request.quote(lid)}&limit=2"
+        total = json.loads(self.get(q)[2])["total"]
+        self.assertGreater(total, 4, "the fixture is too short to need three pages")
+        seen, since = [], 0
+        for _ in range(total):
+            res = json.loads(self.get(q + f"&since={since}")[2])
+            self.assertLessEqual(len(res["events"]), 2)
+            seen += [e["seq"] for e in res["events"]]
+            since = res["next"]
+            if since >= res["total"]:
+                break
+        self.assertEqual(seen, list(range(total)), "paging lost or repeated an event")
+
+    def test_a_reader_ahead_of_the_file_is_told_where_it_ends(self):
+        lid = os.path.join("campaigns", "live", "progress.jsonl")
+        res = json.loads(self.get(f"/api/events?id={urllib.request.quote(lid)}&since=9999")[2])
+        self.assertEqual(res["events"], [])
+        self.assertEqual(
+            res["next"], res["total"], "a reader past the end would wait there for ever"
+        )
+
+    def test_a_rewritten_ledger_is_a_new_generation(self):
+        lid = os.path.join("campaigns", "live", "progress.jsonl")
+        q = f"/api/events?id={urllib.request.quote(lid)}"
+        before = json.loads(self.get(q)[2])
+        os.rename(self.live, self.live + ".old")  # kept, so its inode is not reused
+        log = ProgressLog(self.live)
+        log.emit("campaign_start", name="live", grid=GRID, planned_run_s={})
+        log.close()
+        after = json.loads(self.get(q + f"&since={before['next']}")[2])
+        self.assertNotEqual(
+            after["gen"], before["gen"], "the page would merge two campaigns into one"
+        )
+        self.assertLess(after["next"], before["next"])
+
+    def test_a_nan_in_a_ledger_does_not_reach_the_browser(self):
+        """JSON.parse rejects a bare NaN: one in a ledger would freeze its page."""
+        with open(self.live, "a") as f:
+            f.write('{"seq": 50, "t": 1.0, "kind": "run_metrics", "metrics": {"x": NaN}}\n')
+        lid = os.path.join("campaigns", "live", "progress.jsonl")
+        body = self.get(f"/api/events?id={urllib.request.quote(lid)}")[2]
+
+        def refuse(token):
+            raise AssertionError(f"the server sent {token}, which no browser parses")
+
+        res = json.loads(body, parse_constant=refuse)
+        self.assertEqual(res["events"][-1]["metrics"], {"x": None})
+
+    def test_the_root_is_not_walked_on_every_listing(self):
+        from unittest import mock
+
+        from cyberrange.core import ledgers
+
+        with mock.patch.object(ledgers.os, "walk", wraps=os.walk) as walk:
+            self.ledgers()
+            self.ledgers()
+        self.assertLessEqual(walk.call_count, 1, "every poll of the page walks the whole root")
+
+    def test_a_ledger_written_after_the_last_walk_is_served_by_id(self):
+        self.ledgers()
+        path = os.path.join(self.root, "late", "progress.jsonl")
+        log = ProgressLog(path)
+        log.bind(run_id="late").emit("run_start", mode="m", seed=1, phases=[])
+        log.close()
+        lid = os.path.join("late", "progress.jsonl")
+        res = json.loads(self.get(f"/api/events?id={urllib.request.quote(lid)}")[2])
+        self.assertEqual([e["kind"] for e in res["events"]], ["run_start"])
 
     def test_only_discovered_ledgers_are_served(self):
         for bad in (
@@ -142,6 +215,70 @@ class Server(_Fixture):
             b'id="g-live"',
         ):
             self.assertIn(control, body, "a run could no longer be replayed fact by fact")
+
+
+class Vendored(_Fixture):
+    """The page's libraries are files of this repository, served by this server:
+    a lab host may have no internet access, and a library fetched from elsewhere
+    could send what the page only reads."""
+
+    def manifest(self):
+        with open(os.path.join(VENDOR_DIR, "VENDOR.json")) as f:
+            return json.load(f)["files"]
+
+    def test_every_vendored_file_is_the_release_it_claims_to_be(self):
+        for entry in self.manifest():
+            with self.subTest(file=entry["file"]):
+                with open(os.path.join(VENDOR_DIR, entry["file"]), "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                self.assertEqual(
+                    digest,
+                    entry["sha256"],
+                    f"{entry['file']} is not the {entry['version']} build VENDOR.json pins: "
+                    "it was edited, or replaced without recording the new release",
+                )
+                self.assertTrue(
+                    os.path.isfile(os.path.join(VENDOR_DIR, entry["license_file"])),
+                    f"{entry['file']} is redistributed without its licence",
+                )
+
+    def test_the_page_loads_only_its_panels_and_vendored_files(self):
+        _status, _ctype, body = self.get("/")
+        srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"', body.decode())
+        allowed = {f"vendor/{e['file']}?v={e['version']}" for e in self.manifest()} | {"graph.js"}
+        self.assertTrue(srcs, "the page loads no script at all")
+        self.assertLessEqual(set(srcs), allowed, "the page loads a script nobody pinned")
+        for src in srcs:
+            status, ctype, _body = self.get("/" + src)
+            self.assertEqual(status, 200, src)
+            self.assertIn("javascript", ctype, src)
+
+    def test_a_vendored_file_is_kept_by_the_browser(self):
+        name = self.manifest()[0]["file"]
+        with urllib.request.urlopen(f"{self.base}/vendor/{name}", timeout=5) as r:
+            self.assertIn("immutable", r.headers.get("Cache-Control", ""))
+
+    def test_only_listed_files_are_served(self):
+        for bad in ("VENDOR.json", "d3.LICENSE", "../dashboard.py", "..%2Fdashboard.py", "nope.js"):
+            with self.assertRaises(urllib.error.HTTPError, msg=bad) as cm:
+                self.get("/vendor/" + bad)
+            self.assertEqual(cm.exception.code, 404, bad)
+
+    def test_the_page_fetches_through_one_door(self):
+        """D3 can fetch on its own (d3.json and friends): the page's single
+        fetch() is what test_the_page_only_ever_reads vouches for."""
+        from cyberrange.core.dashboard import scenario_panels
+
+        with open(PAGE) as f:
+            sources = {"dashboard.html": f.read()}
+        sources["panels"] = b"\n".join(scenario_panels()).decode()
+        self.assertEqual(sources["dashboard.html"].count("fetch("), 1)
+        self.assertEqual(sources["panels"].count("fetch("), 0, "a panel talks to a server itself")
+        for where, text in sources.items():
+            for call in ("d3.json(", "d3.text(", "d3.csv(", "d3.tsv(", "d3.dsv(", "d3.blob("):
+                self.assertNotIn(call, text, f"{where} fetches around the page's getJSON")
+            for call in ("d3.buffer(", "d3.image(", "d3.html(", "d3.xml(", "d3.svg("):
+                self.assertNotIn(call, text, f"{where} fetches around the page's getJSON")
 
 
 class Structure(_Fixture):

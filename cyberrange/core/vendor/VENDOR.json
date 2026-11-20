@@ -1,0 +1,24 @@
+{
+  "about": "Third-party libraries the dashboard page loads, served by cyberrange/core/dashboard.py at /vendor/<file>. Copied here unmodified so the page works where a lab has no internet access. To change one: replace the file with the release's own build, update version, source and sha256 below, and check docs/platform.md (section 5) for what the page uses of it.",
+  "files": [
+    {
+      "file": "d3.min.js",
+      "name": "D3",
+      "version": "7.9.2",
+      "license": "ISC",
+      "license_file": "d3.LICENSE",
+      "source": "https://registry.npmjs.org/d3/-/d3-7.9.2.tgz (package/dist/d3.min.js)",
+      "sha256": "912111098ea99503a6f4967361d2bbdc9dbf58cf9c678c8e27e5b02d1a07f0c1"
+    },
+    {
+      "file": "plot.umd.min.js",
+      "name": "Observable Plot",
+      "version": "0.6.19",
+      "license": "ISC",
+      "license_file": "plot.LICENSE",
+      "source": "https://registry.npmjs.org/@observablehq/plot/-/plot-0.6.19.tgz (package/dist/plot.umd.min.js)",
+      "sha256": "0c1f1a0f0ea13cc8fc143bf014dd14ca90abb92d06f9e22a28bb76e42000d131",
+      "needs": ["d3.min.js"]
+    }
+  ]
+}

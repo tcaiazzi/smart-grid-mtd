@@ -4,13 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Experiment Progress</title>
+<link rel="icon" href="data:,">
 <!--
   Progress dashboard of the platform (every scenario), served by
   cyberrange/core/dashboard.py. It follows the progress ledgers (progress.jsonl)
   written by the core run lifecycle and campaign runner: polls
   /api/ledgers for the list and /api/events for the selected one, and folds
   every event through one reducer (apply()) — a finished campaign and a live
-  one are shown by the same code. Self-contained on purpose: no CDN.
+  one are shown by the same code. Nothing is loaded from another host: a lab
+  machine may have no internet access, so the libraries (D3, Observable Plot)
+  are files of this repository, served from /vendor/.
 -->
 <style>
 :root {
@@ -166,6 +169,7 @@ td.wrap { white-space: normal; min-width: 280px; }
   <header>
     <h1>Experiment progress</h1>
     <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
+    <span class="badge" id="net" title="When this page last heard from its server. The view is only as fresh as this."></span>
     <span class="spacer"></span>
     <span class="tabs viewtabs" id="views" role="group" aria-label="View"></span>
     <label class="sub" style="margin:0" for="ledger">Experiment</label>
@@ -253,6 +257,10 @@ td.wrap { white-space: normal; min-width: 280px; }
   </div>
 </main>
 
+<!-- The libraries are this server's own files (vendor/VENDOR.json); the version in the
+     URL lets the browser keep them until one changes. Plot reads the global d3. -->
+<script src="vendor/d3.min.js?v=7.9.2"></script>
+<script src="vendor/plot.umd.min.js?v=0.6.19"></script>
 <script src="graph.js"></script>
 <script>
 "use strict";
@@ -438,7 +446,7 @@ function dur(s) {
   return hh ? `${hh}h ${String(mm).padStart(2, "0")}m` : `${mm}:${String(ss).padStart(2, "0")}`;
 }
 function clock(t) { return t ? new Date((t - clockSkew) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"; }
-function num(v, d = 3) { return v == null ? "—" : (typeof v === "number" ? +v.toFixed(d) : v); }
+function num(v, d = 3) { return v == null || Number.isNaN(v) ? "—" : (typeof v === "number" && isFinite(v) ? +v.toFixed(d) : v); }
 const STATUS = {
   running: ["var(--s1)", "running"], scoring: ["var(--s1)", "scoring"], pending: ["var(--axis)", "pending"],
   ok: ["var(--good)", "done"], skipped: ["var(--good)", "done (resumed)"], failed: ["var(--critical)", "failed"],
@@ -1055,11 +1063,27 @@ function renderTeams() {
 }
 
 // ── polling ─────────────────────────────────────────────────────────────────
-async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); }
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  try { return await r.json(); } catch (e) { throw new Error("the server's answer is not valid JSON"); }
+}
+// What the polls came to. A view that has stopped refreshing looks exactly like
+// a run where nothing happens, so the header says which of the two it is.
+const net = { okAt: null, errors: {}, loading: null };
+const EVENTS_PAGE = 2000, PAGES_PER_POLL = 500;
+function renderNet() {
+  const at = net.okAt ? new Date(net.okAt).toLocaleTimeString([], { hour12: false }) : null;
+  const why = Object.values(net.errors).find(Boolean);
+  const [colour, text] = why ? ["var(--critical)", `not updating${at ? `, showing data from ${at}` : ""} (${why})`]
+    : net.loading ? ["var(--warning)", `loading ${net.loading.n} / ${net.loading.total} events`]
+    : ["var(--good)", at ? `updated ${at}` : "connecting"];
+  $("net").replaceChildren(h("span", { class: "dot", style: `background:${colour}` }), text);
+}
 
 function select(id) {
   if (id === cur.id) return;
-  cur = { id, since: 0 }; S = fresh(); selectedRun = null; gTime = null; setPlaying(false);
+  cur = { id, since: 0, gen: null }; S = fresh(); selectedRun = null; gTime = null; setPlaying(false);
   try { history.replaceState(null, "", `#${encodeURIComponent(id)}`); } catch (e) {}
 }
 
@@ -1069,33 +1093,54 @@ async function pollLedgers() {
     clockSkew = res.now - Date.now() / 1000;
     ledgers = res.ledgers;
     const sel = $("ledger");
-    sel.replaceChildren(...ledgers.map(l => {
+    const options = ledgers.map(l => {
       const st = (STATUS[l.status] || [null, l.status])[1];
       const prog = l.kind === "campaign" ? ` · ${l.done}/${l.total}` : "";
-      return h("option", { value: l.id }, `${l.scenario || "run"} · ${l.kind === "campaign" ? "campaign" : "run"} ${l.name || l.id}${prog} · ${st}`);
-    }));
+      return [l.id, `${l.scenario || "run"} · ${l.kind === "campaign" ? "campaign" : "run"} ${l.name || l.id}${prog} · ${st}`];
+    });
+    // Rebuilt only when it reads differently: rebuilding closes the list under the reader.
+    const sig = JSON.stringify(options);
+    if (sel.dataset.sig !== sig) {
+      sel.dataset.sig = sig;
+      sel.replaceChildren(...options.map(([value, text]) => h("option", { value }, text)));
+      if (cur.id) sel.value = cur.id;
+    }
     const want = cur.id || decodeURIComponent(location.hash.slice(1)) || ledgers[0]?.id;
     if (want && ledgers.some(l => l.id === want)) { select(want); sel.value = want; }
     else if (ledgers[0]) { select(ledgers[0].id); sel.value = ledgers[0].id; }
-  } catch (e) { /* server restarting: keep the last view */ }
+    net.errors.ledgers = null; net.okAt = Date.now();
+  } catch (e) { net.errors.ledgers = e.message; }  // the last view stays, marked as stale
 }
 
 async function pollEvents() {
   if (!cur.id) return;
   try {
-    const id = cur.id, res = await getJSON(`/api/events?id=${encodeURIComponent(id)}&since=${cur.since}`);
-    if (id !== cur.id) return;
-    if (res.next < cur.since) { S = fresh(); cur.since = 0; return; }
-    // An event the page cannot fold is skipped, not retried: retrying it would
-    // stall this ledger on it forever and re-apply the events before it.
-    for (const ev of res.events) {
-      try { apply(ev); } catch (e) { console.error("event", ev.seq, ev.kind, e); }
+    // A long ledger comes in pages: read on until the file's end.
+    for (let page = 0; page < PAGES_PER_POLL; page++) {
+      const id = cur.id;
+      const res = await getJSON(`/api/events?id=${encodeURIComponent(id)}&since=${cur.since}&limit=${EVENTS_PAGE}`);
+      if (id !== cur.id) return;
+      // The file was replaced or cut short: what was folded belongs to another
+      // run, and its seq numbers no longer line up with the server's.
+      if ((cur.gen != null && res.gen !== cur.gen) || res.next < cur.since) {
+        S = fresh(); cur = { id, since: 0, gen: res.gen };
+        continue;
+      }
+      // An event the page cannot fold is skipped, not retried: retrying it would
+      // stall this ledger on it forever and re-apply the events before it.
+      for (const ev of res.events) {
+        try { apply(ev); } catch (e) { console.error("event", ev.seq, ev.kind, e); }
+      }
+      cur.since = res.next; cur.gen = res.gen;
+      net.loading = res.next < res.total ? { n: res.next, total: res.total } : null;
+      if (!net.loading) break;
+      renderNet();
     }
-    cur.since = res.next;
-  } catch (e) { /* keep the frame */ }
+    net.errors.events = null; net.okAt = Date.now();
+  } catch (e) { net.errors.events = e.message; }  // the frame stays, marked as stale
 }
 
-$("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
+$("ledger").addEventListener("change", e => { select(e.target.value); });
 document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
 $("g-time").addEventListener("input", e => {
   const r = shownRun(); if (!r) return;
@@ -1133,12 +1178,18 @@ try { const th = localStorage.getItem("platform-dash-theme"); if (th) document.d
 window.addEventListener("resize", () => renderDetail());
 
 (async function loop() {
-  await pollLedgers(); await pollEvents(); render();
-  let tick = 0;
+  await pollLedgers(); await pollEvents(); render(); renderNet();
+  let tick = 0, busy = false;
   setInterval(async () => {
     tick++;
-    if (tick % 5 === 0) await pollLedgers();
-    await pollEvents(); render();
+    // A poll still reading a long ledger is not joined by a second one: the two
+    // would fold the same events twice.
+    if (busy) return;
+    busy = true;
+    try {
+      if (tick % 5 === 0) await pollLedgers();
+      await pollEvents(); render();
+    } finally { busy = false; renderNet(); }
   }, 1000);
 })();
 </script>

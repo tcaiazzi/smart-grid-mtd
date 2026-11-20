@@ -597,16 +597,10 @@ class ExampleSkeleton(_Skeleton, unittest.TestCase):
         from tests.core import test_panels
 
         [panel] = [f["content"] for f in self.out["files"] if f["path"].endswith("panel.js")]
-        shape = subprocess.run(
-            [NODE, "-e", test_panels.HARNESS % panel], capture_output=True, text=True
-        )
+        shape = test_panels.run_node(test_panels.HARNESS % panel)
         self.assertEqual(0, shape.returncode, shape.stderr)
         self.assertEqual({"guide-probe": ["cards"]}, json.loads(shape.stdout))
-        drawn = subprocess.run(
-            [NODE, "-e", test_panels.DRAW_HARNESS.replace("/* PANELS */", panel)],
-            capture_output=True,
-            text=True,
-        )
+        drawn = test_panels.run_node(test_panels.DRAW_HARNESS.replace("/* PANELS */", panel))
         self.assertEqual(0, drawn.returncode, drawn.stderr)
         self.assertEqual({}, {k: v for k, v in json.loads(drawn.stdout).items() if v})
 
@@ -656,8 +650,7 @@ class VariantSkeleton(_Skeleton, unittest.TestCase):
 
         cps = (REPO_ROOT / "cyberrange/scenarios/cps/panel.js").read_text()
         [panel] = [f["content"] for f in self.out["files"] if f["path"].endswith("panel.js")]
-        script = test_panels.HARNESS % "\n".join([cps, panel])
-        result = subprocess.run([NODE, "-e", script], capture_output=True, text=True)
+        result = test_panels.run_node(test_panels.HARNESS % "\n".join([cps, panel]))
         self.assertEqual(0, result.returncode, result.stderr)
         registered = json.loads(result.stdout)
         self.assertIn("guide-probe", registered)

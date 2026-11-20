@@ -5,25 +5,55 @@
 // failures each panel's hooks raised from the JSON printed at the end.
 globalThis.window = globalThis;
 window.CyberRangePanels = {};
+// The page's libraries, the very files it serves: each is handed no module
+// system, so it defines its global (d3, Plot) as it does under a script tag.
+for (const file of JSON.parse(process.env.DASHBOARD_VENDOR_FILES))
+  new Function("exports", "module", "define", require("fs").readFileSync(file, "utf8")).call(globalThis);
+// An element with what the panels, d3 and Plot ask of one. Plot draws on it for
+// real, so a chart given a wrong option or a missing channel throws here too.
 class El {
-  constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.style = {};
-    this.dataset = {}; this.textContent = ""; this.clientWidth = 800; this.offsetWidth = 120; }
+  constructor(tag, ns) { this.tag = this.tagName = tag; this.namespaceURI = ns; this.children = []; this.attrs = {};
+    this.dataset = {}; this.textContent = ""; this.clientWidth = 800; this.offsetWidth = 120;
+    this.parentNode = null; this.ownerDocument = globalThis.document;
+    this.style = { setProperty(k, v) { this[k] = v; }, removeProperty(k) { delete this[k]; } };
+    this.classList = { add() {}, remove() {}, toggle() {}, contains: () => false }; }
+  get childNodes() { return this.children; }
+  get firstChild() { return this.children[0] || null; }
+  get nextSibling() { return null; }
   // As the DOM does: a null handed to append() becomes the text "null".
-  append(...k) { for (const c of k) this.children.push(c == null ? String(c) : c); }
+  append(...k) { for (const c of k) { this.children.push(c == null ? String(c) : c); if (c instanceof El) c.parentNode = this; } }
   appendChild(c) { this.append(c); return c; }
   replaceChildren(...k) { this.children = []; this.append(...k); }
-  insertBefore(c) { this.append(c); return c; }
+  insertBefore(c, ref) {
+    const i = ref ? this.children.indexOf(ref) : -1;
+    if (i < 0) this.children.push(c); else this.children.splice(i, 0, c);
+    if (c instanceof El) c.parentNode = this;
+    return c;
+  }
+  removeChild(c) { this.children = this.children.filter(x => x !== c); return c; }
+  remove() { this.parentNode?.removeChild(this); }
   setAttribute(k, v) { this.attrs[k] = String(v); }
+  setAttributeNS(ns, k, v) { this.attrs[k] = String(v); }
+  getAttribute(k) { return this.attrs[k] ?? null; }
+  hasAttribute(k) { return k in this.attrs; }
+  removeAttribute(k) { delete this.attrs[k]; }
+  removeAttributeNS(ns, k) { delete this.attrs[k]; }
   addEventListener() {}
-  remove() {}
+  removeEventListener() {}
+  dispatchEvent() { return true; }
   querySelector() { return null; }
   querySelectorAll() { return []; }
+  matches() { return false; }
   closest() { return null; }
+  cloneNode() { return new El(this.tag, this.namespaceURI); }
   getBoundingClientRect() { return { left: 0, top: 0, width: 800, height: 300 }; }
 }
 globalThis.Node = El;
-globalThis.document = { createElementNS: (ns, t) => new El(t), createElement: t => new El(t),
-  documentElement: { dataset: {} } };
+const XHTML = "http://www.w3.org/1999/xhtml";
+globalThis.document = { createElementNS: (ns, t) => new El(t, ns), createElement: t => new El(t, XHTML),
+  createTextNode: t => String(t), createDocumentFragment: () => new El("#fragment"),
+  documentElement: { dataset: {}, namespaceURI: XHTML } };
+document.documentElement.ownerDocument = document;
 const els = {};
 globalThis.$ = id => els[id] || (els[id] = new El("div"));
 globalThis.h = (tag, attrs, ...kids) => {

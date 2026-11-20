@@ -92,6 +92,18 @@ class Ledger(unittest.TestCase):
         self.assertGreater(evs[1]["t"], 1.0, "the ledger's clock was replaced by the guest's")
         self.assertEqual(evs[1]["action"], "hop")
 
+    def test_a_metric_that_is_not_a_number_is_written_as_null(self):
+        log = ProgressLog(self.path)
+        log.emit("run_metrics", metrics={"latency": float("nan"), "peaks": [float("inf"), 1.5]})
+        log.close()
+        with open(self.path) as f:
+            line = f.read()
+        self.assertNotIn("NaN", line, "a browser cannot parse this ledger line")
+        self.assertNotIn("Infinity", line, "a browser cannot parse this ledger line")
+        self.assertEqual(
+            read_events(self.path)[0]["metrics"], {"latency": None, "peaks": [None, 1.5]}
+        )
+
     def test_threads_do_not_interleave(self):
         log = ProgressLog(self.path)
         ts = [

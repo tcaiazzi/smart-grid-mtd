@@ -13,8 +13,12 @@ ThreadingHTTPServer, the page polls, no CDN), but over files on the host.
 Endpoints:
   GET /                         the page
   GET /graph.js                 topology / knowledge-graph / attack-tree drawing
+  GET /vendor/<file>            a library the page loads, if vendor/VENDOR.json lists it
   GET /api/ledgers              [{id, kind, name, status, …}] newest first
-  GET /api/events?id=&since=    {"next": seq, "events": [...]} (seq >= since)
+  GET /api/events?id=&since=&limit=
+                                {"gen", "next", "total", "events"}: one page of the
+                                events with seq >= since; `gen` changes when the
+                                file is replaced, and the reader starts over
   GET /api/structure?id=&run=   {"source": "recorded"|"rebuilt", "kg", "tree"}
                                 — a run's kg.json / tree.json, when its scenario
                                 records a structure; rebuilt from the current
@@ -36,9 +40,23 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from cyberrange.core import registry
-from cyberrange.core.ledgers import LedgerStore
+from cyberrange.core.ledgers import EVENTS_PAGE, LedgerStore
+from cyberrange.core.progress import dumps
 
-PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+HERE = os.path.dirname(os.path.abspath(__file__))
+PAGE = os.path.join(HERE, "dashboard.html")
+VENDOR_DIR = os.path.join(HERE, "vendor")
+# A vendored file never changes under its versioned URL, so the browser keeps it.
+CACHE_FOREVER = "public, max-age=31536000, immutable"
+
+
+def vendored():
+    """{file name: entry} of the libraries the page may load (vendor/VENDOR.json).
+
+    The manifest is the whitelist: a name is looked up in it, never joined into
+    a path, so the route serves these files and nothing else."""
+    with open(os.path.join(VENDOR_DIR, "VENDOR.json")) as f:
+        return {entry["file"]: entry for entry in json.load(f)["files"]}
 
 
 def scenario_panels():
@@ -63,6 +81,7 @@ class ProgressDashboard:
     def __init__(self, root, port=8765, host="127.0.0.1", page=PAGE, scenario=None):
         self.store = LedgerStore(root, scenario=scenario)
         self.page = page
+        self.vendor = vendored()
         self.httpd = ThreadingHTTPServer((host, port), self._handler())
         self.httpd.daemon_threads = True
 
@@ -74,16 +93,24 @@ class ProgressDashboard:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
-            def _send(self, body, ctype, code=200):
+            def _send(self, body, ctype, code=200, cache="no-store"):
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
+                self.send_header("Cache-Control", cache)
                 self.end_headers()
                 self.wfile.write(body)
 
             def _json(self, obj):
-                self._send(json.dumps(obj).encode(), "application/json")
+                # Ledgers written by other tools, and structure files, may hold a NaN.
+                self._send(dumps(obj).encode(), "application/json")
+
+            @staticmethod
+            def _int(q, name, default):
+                try:
+                    return max(0, int(q.get(name, [default])[0]))
+                except ValueError:
+                    return default
 
             def do_GET(self):
                 url = urlparse(self.path)
@@ -100,6 +127,18 @@ class ProgressDashboard:
                         self._send(b"\n".join(panels), "text/javascript; charset=utf-8")
                     else:
                         self.send_error(404, "no scenario declares a panel")
+                elif url.path.startswith("/vendor/"):
+                    name = url.path[len("/vendor/") :]
+                    if name not in server.vendor:
+                        self.send_error(404, "not a vendored file")
+                        return
+                    try:
+                        with open(os.path.join(VENDOR_DIR, name), "rb") as f:
+                            self._send(
+                                f.read(), "text/javascript; charset=utf-8", cache=CACHE_FOREVER
+                            )
+                    except OSError:
+                        self.send_error(404, "vendored file missing")
                 elif url.path == "/api/structure":
                     res = server.store.structure(q.get("id", [""])[0], q.get("run", [""])[0])
                     if res is None:
@@ -118,11 +157,9 @@ class ProgressDashboard:
                     )
                 elif url.path == "/api/events":
                     lid = q.get("id", [""])[0]
-                    try:
-                        since = max(0, int(q.get("since", ["0"])[0]))
-                    except ValueError:
-                        since = 0
-                    res = server.store.events(lid, since)
+                    since = self._int(q, "since", 0)
+                    limit = self._int(q, "limit", EVENTS_PAGE)
+                    res = server.store.events(lid, since, limit)
                     if res is None:
                         self.send_error(404, "unknown ledger")
                     else:

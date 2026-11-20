@@ -18,12 +18,33 @@ emits nothing for twenty minutes) from one that died. Host-side, stdlib only.
 """
 
 import json
+import math
 import os
 import threading
 import time
 
 
 HEARTBEAT_S = 10.0  # well under the reader's staleness threshold (ledgers.STALE_S)
+
+
+def finite(obj):
+    """``obj`` with every NaN and infinity replaced by None, containers copied."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [finite(v) for v in obj]
+    return obj
+
+
+def dumps(obj, **kw):
+    """Strict JSON: a browser's parser rejects the bare NaN that json.dumps
+    writes, and the page reading it would stop updating without a word."""
+    try:
+        return json.dumps(obj, allow_nan=False, **kw)
+    except ValueError:
+        return json.dumps(finite(obj), allow_nan=False, **kw)
 
 
 class ProgressLog:
@@ -57,7 +78,7 @@ class ProgressLog:
             # The ledger's keys win: readers page on `seq`, so a mirrored guest
             # event carrying its own would be skipped or re-sent forever.
             ev = {**fields, "seq": self._seq, "t": round(time.time(), 3), "kind": kind}
-            self._file.write(json.dumps(ev, default=str) + "\n")
+            self._file.write(dumps(ev, default=str) + "\n")
             self._seq += 1
         return ev
 

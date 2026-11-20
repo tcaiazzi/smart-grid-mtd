@@ -58,6 +58,10 @@ EXEMPT = {
     # A cross-scenario illustration, not part of either scenario's cost.
     "tools/plot_architecture.py",
     "tools/plot_architecture.py",
+    # Third-party libraries of the dashboard page, pinned in
+    # cyberrange/core/vendor/VENDOR.json: not code this project wrote.
+    "cyberrange/core/vendor/d3.min.js",
+    "cyberrange/core/vendor/plot.umd.min.js",
 }
 
 
