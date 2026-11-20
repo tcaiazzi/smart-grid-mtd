@@ -254,6 +254,34 @@ def expected_response(gt):
     return want
 
 
+def justified_response(gt):
+    """Kinds of countermeasure the attack gave cause for without making them
+    necessary: the attacker took the engineering workstation, or got between
+    the PLC and the engine, and then reached the plant another way. Taking that
+    host off the link was no over-response — the attacker was on it — but a
+    defence that stopped the attack without doing so was not wrong either.
+
+    A stage is read from wherever the attack's driver wrote it: the scripted
+    one records it by name, the planner and the red console as a step."""
+
+    def reached(stage):
+        return any(
+            e.get("ok")
+            and (
+                e.get("kind") == stage
+                or (e.get("kind") in ("plan_step", "red_step") and e.get("stage") == stage)
+            )
+            for e in gt
+        )
+
+    out = set()
+    if reached("ot_foothold"):
+        out.add("isolate_ot_host")
+    if reached("ot_aitm"):
+        out |= {"isolate_ot_host", "repair_arp"}
+    return out
+
+
 def _explained(decision):
     acts = [a for a in decision.get("actions") or [] if a != "notify"]
     covers = decision.get("covers") or {}
@@ -433,7 +461,8 @@ def _response(
         over = []  # preventing before the plant is good
     else:
         accurate = expected <= applied_kinds
-        over = sorted(a for a in applied_ids - {"notify"} if kind(a) not in expected)
+        called_for = expected | justified_response(gt)
+        over = sorted(a for a in applied_ids - {"notify"} if kind(a) not in called_for)
     return {
         "policy": up.get("policy"),
         "approval": up.get("approval"),

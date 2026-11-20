@@ -341,8 +341,10 @@ class Episode(unittest.TestCase):
                 "note": "through the HMI",
             },
             {"step": "meas_fdi", "stage": "impact", "stage_rank": 5, "ok": False},
+            {"step": "ot_foothold", "stage": "ot_foothold", "stage_rank": 3, "ok": True},
         ]
         rows[2]["phases"] = [{"phase": "fdi", "t": 52.5, "ok": False, "sent": 0}]
+        rows[3]["phases"] = [{"phase": "ot_foothold", "t": 53.5, "ok": True, "detail": "ews"}]
         return [
             json.dumps({"t": 50.0 + i, "kind": "red_step", "operator": "agent:scripted", **r})
             + "\n"
@@ -390,16 +392,25 @@ class Episode(unittest.TestCase):
         end = next(e for e in gt if e["kind"] == "attack_end")
         self.assertEqual(
             (end["stage_reached"], end["success"], end["mode"]),
-            ("pivot", False, "manual"),
+            ("ot_foothold", False, "manual"),
             "an attack played at the console has no end on record: it cannot be scored",
         )
         steps = [e for e in gt if e["kind"] == "red_step"]
-        self.assertEqual([s["stage"] for s in steps], ["it_access", "pivot", "impact"])
+        self.assertEqual(
+            [s["stage"] for s in steps], ["it_access", "pivot", "impact", "ot_foothold"]
+        )
         self.assertEqual(steps[1]["note"], "through the HMI")
         self.assertIn("fdi", [e["kind"] for e in gt], "falsified readings are not on the record")
+        self.assertEqual(
+            [(e["kind"], e["ok"]) for e in gt if e["kind"] in ("ot_foothold", "ot_aitm")],
+            [("ot_foothold", True)],
+            "the workstation the red team took is not on the record by name, as a driven "
+            "attack leaves it",
+        )
         m = compute_metrics(self.out)
         self.assertEqual(
-            (m["stage_reached"], m["attack_succeeded"], m["prevented"]), ("pivot", False, True)
+            (m["stage_reached"], m["attack_succeeded"], m["prevented"]),
+            ("ot_foothold", False, True),
         )
 
     def test_each_harness_gets_its_scorecard(self):

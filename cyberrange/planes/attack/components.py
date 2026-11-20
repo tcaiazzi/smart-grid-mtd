@@ -560,6 +560,10 @@ class RedConsole(GuestAgent):
             ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
             ctx.emit("red_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **step)
             for e in row.get("phases") or []:
+                if e.get("phase") in ("ot_foothold", "ot_aitm"):
+                    # The workstation taken, the PLC's session intercepted: on
+                    # record by name, as a driven attack leaves them.
+                    ctx.gt.record(e["phase"], t=e.get("t"), mode=self.MODE, ok=e.get("ok"))
                 if e.get("phase") == "fdi":
                     # An act on the plant with no write of the attacker's: left
                     # out, the plant would be scored as never reached.
