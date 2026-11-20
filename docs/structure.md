@@ -14,7 +14,7 @@ document describes something that is checked rather than hoped for.
 
 | Layer | Where | What belongs there |
 |---|---|---|
-| **core** | `cyberrange/core/` | Everything identical for every experiment: how a lab is declared, deployed, observed and torn down; how runs are repeated, scored and aggregated; the progress ledger and the dashboard that reads it. The core never names a scenario — the registry maps names to module paths as *strings*, which is its whole job. |
+| **core** | `cyberrange/core/` | Everything identical for every experiment: how a lab is declared, deployed, observed and torn down; how runs are repeated, scored and aggregated; the progress ledger and the dashboard that reads it (the two libraries its page loads are vendored in `cyberrange/core/vendor/`, the only third-party code in the tree). The core never names a scenario — the registry maps names to module paths as *strings*, which is its whole job. |
 | **planes** | `cyberrange/planes/{traffic,attack,defense,monitor}/` | Reusable building blocks: `components.py` is the plane's contract, `agents/` is the code that runs inside containers, and the host-side domain logic sits beside them. A plane may import the core. It may **not** import a scenario. |
 | **scenarios** | `cyberrange/scenarios/<name>/` | One directory per experiment, holding all of it: topology, episode, CLI, campaign, deploy manifest, metrics, figures, offline training. A scenario composes planes. |
 | **analysis** | `cyberrange/scenarios/<name>/analysis/`, `training/`, `tools/` | What runs *after* a run, offline, on its artifacts. It may import anything below it, and nothing imports it. |

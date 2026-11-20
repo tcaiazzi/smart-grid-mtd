@@ -68,10 +68,27 @@ should stay empty; an entry in it is a debt with no due date.
   scenario (or of `CORE`): its lines are counted twice. Make the categories
   follow directories, one each.
 - **`EveryFileIsCounted`** — a new source file belongs to nobody. Add it to a
-  `SOURCES` category, or to `EXEMPT` **with a reason**.
+  `SOURCES` category, or to `EXEMPT` **with a reason**. The dashboard's
+  vendored libraries (`cyberrange/core/vendor/*.js`) are exempt: third-party
+  code, pinned by checksum in `VENDOR.json` there.
 - **`TotalsAreStable`** — the headline totals moved. Ask which: a total that
   *fell* usually means a glob went stale; one that *rose* usually means you wrote
   code, which is fine. Only then update the snapshot.
+
+### The dashboard's libraries and its panels
+
+- **`Vendored`** (`tests/core/test_dashboard.py`) — a file under
+  `cyberrange/core/vendor/` is not the release `VENDOR.json` names, or the page
+  loads a script the manifest does not list. *Legitimate fix:* put back the
+  release's own build, or record the new version, source and SHA-256 when the
+  update is meant. *Forbidden:* editing a vendored file, or pasting a new hash
+  to quiet the test without knowing where the file came from.
+- **`test_every_panel_draws_a_run`** (`tests/core/test_panels.py`) — a view
+  shows something other than what the ledger records. The runs are built by the
+  page's own reducer from events shaped as the components write them, so the
+  fix is in the page or the panel. When a component gains a field a view should
+  show, add the field to the events in `tests/core/panel_draw_harness.js` and a
+  check on what is drawn; do not hand a view a run built by hand.
 
 ### The test-count floor
 

@@ -359,9 +359,14 @@ table: for each attack step, when the attacker did it, when the defender first
 suspected and confirmed it, the lag, and the countermeasure that covered it.
 
 A **Topology · knowledge graph · attack tree** card draws
-three views in SVG with no libraries (`cyberrange/scenarios/cps/panel.js`),
+three views in SVG (`cyberrange/scenarios/cps/panel.js`),
 reading the run's `kg.json` / `tree.json` through
-`GET /api/structure?id=&run=`. Every run writes both files; for runs that predate
+`GET /api/structure?id=&run=`. The attack tree is laid out by D3; the topology
+and the knowledge graph place their nodes themselves, because their columns
+mean something (a zone, a type of node). Each view can be dragged, and zoomed
+with the − + buttons or Ctrl + wheel. The same two files give the page the
+names of the attack steps and countermeasures, which the cards show in place
+of the identifiers the run records. Every run writes both files; for runs that predate
 them the structure is rebuilt from today's lab model and the card says so.
 
 - **Topology**: zones as columns, firewall and sensor on the boundary of two

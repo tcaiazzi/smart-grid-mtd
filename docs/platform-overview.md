@@ -136,6 +136,14 @@ the phases of the current run, a time bar to replay a run at ×1/×5/×20, and t
 results with confidence intervals. Each scenario adds its own panel on top. The
 CPS panel is described in [§2.9](#29-following-a-run).
 
+The page is written for a reader who has not seen the code: attack steps,
+countermeasures and metrics go by their names (the recorded identifier is on
+hover), figures carry their unit, a relative time says what it is counted from,
+and an empty table says why it is empty. The badge next to the title tells
+whether the page is still hearing from its server. Its charts are drawn with
+Observable Plot and D3, served from the repository itself, so it works on a
+machine with no internet access.
+
 ### 1.8 The scenarios today
 
 | Scenario | Question it answers |

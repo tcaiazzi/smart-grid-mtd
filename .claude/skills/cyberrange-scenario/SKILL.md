@@ -187,7 +187,10 @@ truth, exit code — with no containers. See `tests/core/test_progress.py` and
   **cyberrange-components**; come back for the wiring.
 - **The scenario wants its own dashboard panel?** Implement `panel_js()` and
   `structure()` (see `cyberrange/core/scenario.py`); the dashboard asks the
-  registry. Never make the dashboard import your scenario.
+  registry. Never make the dashboard import your scenario. In the panel, give
+  every headline metric a name and a unit (`labels.metrics`), show identifiers
+  through `ui.term`, charts through `ui.plot`, and say why an empty table is
+  empty (`ui.empty`): docs/platform.md, section 5, has the helpers and hooks.
 - **The code is useful to a second scenario?** It belongs in a plane, not here.
 
 ## Common pitfalls

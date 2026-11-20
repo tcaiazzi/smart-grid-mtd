@@ -260,10 +260,21 @@ make dashboard            # every scenario's runs and campaigns under output/ (1
 make cps-dashboard        # only the cps runs
 make cps-advisor-dashboard  # only the cps-advisor runs
 make cps-recon-dashboard  # only the cps-recon runs
+make cps-soc-dashboard    # only the cps-soc runs
 ```
 
 `cyberrange/core/dashboard.py` only reads: the server has no endpoint that
 changes anything, in the lab or on disk. It shows two kinds of content.
+
+The page loads nothing from another host, so it works where a lab machine has
+no internet access. Its two libraries are files of this repository, under
+`cyberrange/core/vendor/` and served at `/vendor/<file>`: **D3** (the attack
+tree's layout, the links, zoom and pan on the structure views) and **Observable
+Plot** (every chart). `VENDOR.json` there pins each one by version and SHA-256,
+and is the route's whitelist; `tests/core/test_dashboard.py` fails if a file is
+not the release the manifest names, or if the page loads a script that is not
+listed. To update one, replace the file with the release's own build and record
+its version, source and checksum in the manifest.
 
 **Common to every scenario:**
 
@@ -288,33 +299,79 @@ Each section is drawn on its own: one that throws shows its error in its card
 and the others are drawn as usual, and an event the page cannot fold is skipped
 rather than stalling the ledger.
 
+The page says what it cannot show. The badge next to the title gives the time
+it last heard from its server, or says that it is not updating and why (the
+server is down, an answer that is not JSON). Event kinds that no view folds are
+counted at the foot of the page. An empty table says why it is empty.
+
+**How a ledger reaches the page.** `GET /api/events?id=&since=&limit=` answers
+`{gen, next, total, events}`: one page of the events with `seq >= since`.
+`next` is the `seq` to ask for next and `total` the `seq` after the last event,
+so a long ledger is read page by page until `next` reaches `total`. `gen` names
+the file's incarnation: when it changes (the ledger was replaced or cut short)
+the page drops what it had folded and starts over. The answers are strict JSON:
+a NaN in a ledger or a structure file is served as `null`, since a browser
+rejects it. The root is walked for new ledgers at most every
+`ledgers.DISCOVER_TTL_S`; asking for an id nobody has seen forces a walk.
+
+**A fact is the event whole.** The page's reducer (`apply()` in
+`dashboard.html`) keeps each event it lists as the ledger recorded it, with `t`
+set to the time the fact happened (`guest_t`, `frame_t` or `write_t` when the
+event carries one; the ledger's own `t`, when the host heard of it, stays as
+`heard_t`). A view therefore reads any field a component records, without the
+reducer having to name it. `FACTS` in the page lists the kinds kept this way and
+the list of the run each goes to (`plant`, `findings`, `writes`, `states`,
+`decisions`, `actions`, `alerts`, `mtd`, `gaps`, `detections`).
+
 A ledger that is open keeps its file's modification time fresh
 (`progress.HEARTBEAT_S`), so a campaign busy in a step that emits nothing is
 still shown as running; one whose writer died turns "interrupted" after
 `ledgers.STALE_S`.
 
 **Per scenario**, drawn by the scenario's `panel.js` and not by the page. The
-page calls the panel's factory once with its helpers (`h`, `svg`, `$`, `num`,
-`dur`, `clock`, `queueTable`, `time()`/`setTime(t)` for the time shown,
-`view()` for the view chosen, …); every panel is served in one script, so a
-panel uses only these and its own names, never another panel's. The hooks, all
-optional:
+page calls the panel's factory once with its helpers; every panel is served in
+one script, so a panel uses only these and its own names, never another
+panel's. The helpers:
+
+| helper | what it is for |
+|---|---|
+| `h`, `svg`, `$` | build an HTML or SVG element, find one by id |
+| `num`, `dur`, `clock`, `rel(t, t0)`, `pretty` | a number, a duration, a wall-clock time (with its date when not today's), a time as an offset from an origin, an identifier spelled as words |
+| `metric(key)`, `metricHead(m)` | a metric as `{label, unit, help}`: the panel's own words (`labels.metrics`), else the key spelled out and the unit read off its suffix (`_s`, `_pu`, `_kw`, `_rate`) |
+| `term(id, label?, help?)`, `termText(id, label?)` | a recorded identifier shown by its name (the caller's, else `labels.terms`), the identifier on hover |
+| `table(heads, rows, none)`, `empty(why)`, `queueTable` | a table with headers that explain themselves, a box that says why it is empty, the shared run table |
+| `plot(options)`, `plotTip(data, …)`, `timeAxis(span, since)` | an Observable Plot chart in the page's type and theme, its tooltip, a time axis in one unit that names its origin |
+| `structure(run)` | the run's recorded knowledge graph and attack tree, or `null` while they load (the page draws again when they arrive): it is where the names of the tree's steps and countermeasures come from |
+| `time()`, `setTime(t)`, `view()`, `render()`, `select(id)`, `S` | the time shown and the view chosen, and the page's state |
+
+A panel never shows a recorded identifier where it has a name for it: a reader
+of the page does not know that `block_flow` is a countermeasure or what
+`detectors.combined.latency_from_write_s` measures. A time relative to
+something says to what (*since run start*, *since attack start*), in the
+column's header or the axis's label.
+
+The hooks, all optional:
 
 | hook | what the panel does with it |
 |---|---|
 | `queue()` | its columns of the run table, through `ui.queueTable` |
 | `detail(run)` | chips, chart and table of the selected run |
 | `chart(run)` | the selected run's chart |
-| `reduce(run, ev)` | folds the event kinds only it knows into `run.x` |
+| `reduce(run, ev)` | folds the event kinds only it knows into `run.x`, and returns `true` for a kind it took (a kind nobody takes is listed at the foot of the page) |
 | `cards: [{id, title, sub, help?, span?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the page |
 | `views: [{id, label, help, sections, options?}]` | buttons in the page's header, one per view: `sections` lists, in order, the page's sections (`queue-card`, `detail`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it |
 | `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches (`{id, label, view?, default}` a check box, with `choices: [{id, label}]` a row of buttons), `origin(run)` the time the bar counts from |
-| `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one |
+| `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one; `aggregate` is the campaign's `aggregate` event whole |
+| `labels: {metrics, terms, mode}` | its words: `metrics[key] = {label, unit, help}` for each metric it reports, `terms[id]` the name of an identifier it records, `mode(mode, run)` a run's mode as a sentence |
 
 `tests/core/test_panels.py` checks the contract (a view lists only sections that
-exist) and draws an empty run and a run with every event kind through every hook
-of every panel, each card under every view and the attack tree from every
-perspective.
+exist, every headline metric of a campaign has a label and a unit) and draws
+runs through every hook of every panel, each card under every view and the
+attack tree from every perspective. It runs under node with the page's own
+reducer and helpers (the `data-part="model"` script of `dashboard.html`) and
+its own libraries, and builds each run by folding ledger events, shaped as the
+components write them, through `apply()`: a run built by hand would hold what
+its author believes the reducer keeps. Charts are drawn for real.
 
 - **CPS:** three views, *Overview*, *Attacker* and *Defender* (below); the plant
   voltage chart, findings and score; the **Attacker · Defender**
@@ -323,12 +380,15 @@ perspective.
   belief and decisions), a lane timeline of both sides and the plant, and a
   truth-vs-belief table per attack step; and the topology, knowledge graph and
   attack tree, the tree carrying both the defender's belief and the attacker's
-  progress.
+  progress. Its results add four tabs: detection, physical impact, response and
+  countermeasures.
 - **CPS advisor:** the CPS panel (its `panel.js` delegates to it).
 - **CPS recon:** the CPS panel, with the attack tree framing the real nodes the
   attacker does not know (from the belief tree it puts on the ledger) and naming
   the ones it believes in that are not real.
-- **MQTT:** MTD actions per knob coloured by outcome, delivery gaps, and the coordinator's actions table.
+- **MQTT:** the defence's changes on a timeline, one lane per thing it moves
+  (broker address and port, client source address, message padding, publish
+  timing) coloured by outcome, the delivery gaps, and the table of its actions.
 
 ### A run kept open: `--playground`
 
