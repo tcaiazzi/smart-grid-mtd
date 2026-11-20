@@ -8,7 +8,8 @@ site.
 
 What belongs here:
 
-- project plans agreed with partners (`piano-wp2-wp3.md`);
+- project plans agreed with partners (`piano-wp2-wp3.md`) and improvement plans for
+  parts of the repository (`piano-guida-scenario.md`);
 - dated code audits and review notes (`audit-YYYY-MM-DD.md`);
 - anything else that is a record of the work rather than documentation of the
   platform.

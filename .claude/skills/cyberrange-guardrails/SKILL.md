@@ -98,6 +98,27 @@ Three conditions, all of them, before you run either:
 Never edit a file under `tests/snapshots/` by hand, and never delete one to make
 the test regenerate it: deletion is how the guarantee is lost without trace.
 
+## The scenario guide's view of the repository
+
+`docs/scenario-guide.html` checks a newcomer's answers against facts of the
+repository (taken scenario and lab names, make targets, guest modules, what each
+image installs), kept in its `#guide-contract-derived` block.
+`tests/core/test_scenario_guide.py` goes red when the repository moves and the
+block does not: adding a scenario, a make target, a guest module or a package to
+an image all do it. Bring the guide along, then read the page's diff:
+
+```sh
+UPDATE_GUIDE_CONTRACT=1 .venv/bin/python -m pytest tests/core/test_scenario_guide.py -q
+```
+
+This one is not a frozen contract: the block is a copy of facts, and the same
+change that moves the facts should update it. The conditions above still hold
+in one respect: the diff must show only what you changed. The rest of that test
+module is different: a red skeleton test (`ExampleSkeleton`, `EditsApply`) means
+the guide writes code that no longer works, and no switch makes it green. Never
+edit the derived block by hand; `#guide-contract`, the paths and symbols the
+guide cites, is the hand-written one.
+
 ## Writing a test here
 
 - Put it in the area it belongs to: `tests/core/`, `tests/planes/`,

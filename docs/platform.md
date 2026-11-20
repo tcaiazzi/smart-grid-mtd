@@ -366,6 +366,9 @@ to a file in the run directory, on the host.
 
 ## 6. Adding a scenario: checklist
 
+The [interactive guide](new-scenario.md) takes a scenario with a lab of its own through
+these steps and writes its skeleton from your answers.
+
 1. **Image.** Reuse `kathara/mqtt`, `kathara/cps` or `kathara/soc`, or add `docker/<name>/Dockerfile`.
 2. **Guest code.** Agents go under `cyberrange/planes/<plane>/agents/`; the configuration and glue of a tool a node runs go under `nodes/<tool>/` (prefer an existing open-source tool, installed by the image, to code of our own). Both are flat modules with bare imports, and may import only the stdlib and what the node image installs. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
 3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `PlannedAttacker` takes its attack tree). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.

@@ -72,5 +72,7 @@ nav:
       - Components: components.md
       - Attacks and defences: attacks-and-defenses.md
   - SOAR — KG & attack trees: kg-and-attack-trees.md
-  - Extending the platform: extending.md
+  - Extending the platform:
+      - Overview: extending.md
+      - Creating a scenario: new-scenario.md
   - Glossary: glossary.md

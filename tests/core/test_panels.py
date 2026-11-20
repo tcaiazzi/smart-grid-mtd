@@ -277,7 +277,8 @@ console.log(JSON.stringify(out));""",
 
     def test_the_page_scripts_parse(self):
         """A syntax error in a page is a blank page and nothing else says so: the
-        dashboard here, and the two team consoles served in the lab."""
+        dashboard here, the two team consoles served in the lab, and the
+        scenario guide of the documentation site."""
         import re
         import tempfile
 
@@ -287,6 +288,7 @@ console.log(JSON.stringify(out));""",
             "cyberrange/core/dashboard.html",
             "nodes/soc/soc_console.html",
             "nodes/redteam/red_console.html",
+            "docs/scenario-guide.html",
         ):
             with self.subTest(page=page):
                 html = (paths.REPO_ROOT / page).read_text()

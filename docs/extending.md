@@ -64,7 +64,8 @@ topology, episode, CLI, campaign, deploy manifest, metrics, and its `analysis/` 
    its staged files in `guest_files.py`.
 
 [Architecture](platform.md) is the full contract; the `cyberrange-scenario` skill
-walks through it.
+walks through it, and the [interactive guide](new-scenario.md) does the same step by step
+while it writes the scenario's skeleton.
 
 ## Adding to the CPS family
 
