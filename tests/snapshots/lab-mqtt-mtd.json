@@ -1,0 +1,72 @@
+{
+ "attacker": {
+  "settings": {
+   "0": "B"
+  },
+  "startup": [
+   "ip address add 10.1.0.3/24 dev eth0",
+   "ip route add default via 10.1.0.1 dev eth0"
+  ]
+ },
+ "router": {
+  "guest_files": [
+   "/replay_background.sh",
+   "traccia.pcap"
+  ],
+  "settings": {
+   "0": "A",
+   "1": "B",
+   "image": "kathara/mqtt"
+  },
+  "startup": [
+   "ip address add 10.0.0.1/24 dev eth0",
+   "ip address add 10.1.0.1/24 dev eth1"
+  ]
+ },
+ "scmc": {
+  "guest_files": [
+   "/mtd_executor.py",
+   "/simple_client.py",
+   "/cert_client.py",
+   "/mtd_crypto.py",
+   "/mtd_wire.py",
+   "/microgrid_sim.py"
+  ],
+  "settings": {
+   "0": "A",
+   "image": "kathara/mqtt"
+  },
+  "startup": [
+   "ip address add 10.0.0.2/24 dev eth0",
+   "ip route add default via 10.0.0.1 dev eth0",
+   "ip address add 10.0.0.4/24 dev eth0",
+   "ip address add 10.0.0.5/24 dev eth0"
+  ]
+ },
+ "semp": {
+  "guest_files": [
+   "/cert_authority.py",
+   "/mtd_coordinator.py",
+   "/mtd_crypto.py",
+   "/mtd_wire.py",
+   "/mtd_telemetry.py",
+   "/mtd_dashboard.py",
+   "/mtd_dashboard.html",
+   "/rl_policy.py",
+   "/delivery_detector.py",
+   "/etc/mosquitto/mosquitto.conf"
+  ],
+  "settings": {
+   "0": "B",
+   "bridged": "true",
+   "image": "kathara/mqtt",
+   "port": "8080:8080/tcp"
+  },
+  "startup": [
+   "ip address add 10.1.0.2/24 dev eth0",
+   "ip route replace default via 10.1.0.1 dev eth0",
+   "ip address add 10.1.0.4/24 dev eth0",
+   "ip address add 10.1.0.5/24 dev eth0"
+  ]
+ }
+}

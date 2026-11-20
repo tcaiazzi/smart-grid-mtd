@@ -1,0 +1,31 @@
+# opensearch.yml — the Wazuh indexer of the cps-soc lab: one node, TLS between
+# every party, certificates from the lab's own authority (docker/wazuh-pki).
+# Installed by wazuh-indexer-start.sh; based on Wazuh's single-node deployment.
+network.host: "0.0.0.0"
+node.name: "wazuh.indexer"
+cluster.name: "wazuh-cluster"
+path.data: /var/lib/wazuh-indexer
+path.logs: /var/log/wazuh-indexer
+discovery.type: single-node
+compatibility.override_main_response_version: true
+plugins.security.ssl.http.pemcert_filepath: /usr/share/wazuh-indexer/config/certs/indexer.pem
+plugins.security.ssl.http.pemkey_filepath: /usr/share/wazuh-indexer/config/certs/indexer-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: /usr/share/wazuh-indexer/config/certs/root-ca.pem
+plugins.security.ssl.transport.pemcert_filepath: /usr/share/wazuh-indexer/config/certs/indexer.pem
+plugins.security.ssl.transport.pemkey_filepath: /usr/share/wazuh-indexer/config/certs/indexer-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: /usr/share/wazuh-indexer/config/certs/root-ca.pem
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.transport.resolve_hostname: false
+plugins.security.authcz.admin_dn:
+  - "CN=admin,OU=Wazuh,O=Wazuh,L=California,C=US"
+plugins.security.nodes_dn:
+  - "CN=wazuh.indexer,OU=Wazuh,O=Wazuh,L=California,C=US"
+plugins.security.restapi.roles_enabled:
+  - "all_access"
+  - "security_rest_api_access"
+plugins.security.system_indices.enabled: true
+plugins.security.allow_default_init_securityindex: true
+# A lab node on a shared host: the disk watermarks would stop indexing on a
+# laptop's nearly full disk, for a few megabytes of alerts.
+cluster.routing.allocation.disk.threshold_enabled: false

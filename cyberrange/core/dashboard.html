@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Experiment Progress</title>
+<!--
+  Progress dashboard of the platform (every scenario), served by
+  cyberrange/core/dashboard.py. It follows the progress ledgers (progress.jsonl)
+  written by the core run lifecycle and campaign runner: polls
+  /api/ledgers for the list and /api/events for the selected one, and folds
+  every event through one reducer (apply()) — a finished campaign and a live
+  one are shown by the same code. Self-contained on purpose: no CDN.
+-->
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
+  --s1: #2a78d6; --s2: #eb6834;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+    --s1: #3987e5; --s2: #d95926;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+  --s1: #3987e5; --s2: #d95926;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { margin: 0 auto; padding: 16px 24px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
+.spacer { flex: 1; }
+select, button { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 4px 10px; }
+button { cursor: pointer; }
+select { max-width: 100%; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px;
+  border-radius: 999px; border: 1px solid var(--ring); color: var(--ink-2); white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+  padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.bar { height: 10px; border-radius: 999px; background: var(--wash); overflow: hidden; display: flex; gap: 2px; margin: 4px 0 16px; }
+.bar > span { display: block; height: 100%; }
+/* The page is one 12-column grid: each section says how many columns it takes
+   (data-span), the scenario's view says which sections show and in what order. */
+#board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; grid-auto-flow: row dense; }
+#board > .card { margin-bottom: 0; grid-column: span 12; }
+#board > .card[data-span="4"] { grid-column: span 4; }
+#board > .card[data-span="8"] { grid-column: span 8; }
+#board > .card[data-span="6"] { grid-column: span 6; }
+#board > .card.wide { grid-column: span 12; }
+#board > .offview { display: none !important; }
+@media (max-width: 1100px) { #board > .card[data-span] { grid-column: span 12; } }
+/* Every card can be closed: its head stays, the rest goes. */
+.card-head { display: flex; align-items: baseline; gap: 8px; }
+.card-head h2 { flex: 1; cursor: pointer; }
+.card-head button { padding: 0 7px; line-height: 20px; color: var(--ink-2); }
+.card.collapsed > :not(.card-head) { display: none !important; }
+.card.collapsed { padding-bottom: 10px; }
+.help { background: var(--wash); border-radius: 8px; padding: 8px 12px; margin: 6px 0 10px; font-size: 13px; color: var(--ink-2); white-space: pre-line; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 6px 8px; vertical-align: bottom; }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.num, th.num { text-align: right; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: var(--wash); }
+tr.sel td { background: var(--wash); }
+tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
+.muted { color: var(--muted); }
+.phases { display: flex; gap: 2px; margin: 8px 0 4px; }
+.ph { flex: 1 1 0; min-width: 0; }
+.ph .seg { height: 10px; border-radius: 3px; background: var(--wash); border: 1px solid var(--ring); position: relative; overflow: hidden; }
+.ph .seg > i { position: absolute; inset: 0 auto 0 0; background: var(--ink-2); opacity: .55; }
+.ph.done .seg > i { opacity: .8; }
+.ph.active .seg { border-color: var(--ink); }
+.ph.failed .seg > i { background: var(--critical); opacity: .9; }
+.ph .nm { font-size: 11px; color: var(--ink-2); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph .tm { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph.compact .nm, .ph.compact .tm { visibility: hidden; }
+.ph.compact.active .nm, .ph.compact.active .tm { visibility: visible; overflow: visible; }
+.ph.active .nm { color: var(--ink); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.chip { border: 1px solid var(--ring); border-radius: 8px; padding: 6px 10px; min-width: 110px; }
+.chip .k { font-size: 11px; color: var(--ink-2); }
+.chip .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); margin: 6px 0; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.lk { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--ring);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  display: none; min-width: 150px; z-index: 2; }
+.tip .row { display: flex; align-items: center; gap: 6px; }
+.tip b { font-variant-numeric: tabular-nums; }
+.empty { color: var(--muted); padding: 24px 0; text-align: center; }
+.err { color: var(--critical); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; }
+.tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.gbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 4px; }
+.gbar .tabs { margin-bottom: 0; }
+.gbar label { margin: 0; display: inline-flex; align-items: center; gap: 6px; }
+.gwrap { position: relative; overflow-x: auto; }
+.gview svg.graph { display: block; width: 100%; height: auto; }
+.gwrap .tip { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
+td.wrap { white-space: normal; min-width: 280px; }
+.sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; }
+.sug .hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.sug .hd b { font-size: 15px; }
+.sug .left { font-variant-numeric: tabular-nums; }
+.sug dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 8px 0; }
+.sug dt { color: var(--ink-2); font-size: 12px; }
+.sug dd { margin: 0; overflow-wrap: anywhere; }
+.sug code { font-size: 12px; overflow-wrap: anywhere; }
+.sug details { margin: 6px 0; font-size: 13px; }
+.sug summary { cursor: pointer; color: var(--ink-2); }
+.team { font-weight: 600; }
+/* The time bar keeps its shape while it is used: the slider takes the free
+   width, the label after it has a fixed one. */
+.timebar { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
+.timebar input[type=range] { flex: 1 1 auto; min-width: 120px; margin: 0; }
+.timebar .tlabel { flex: 0 0 38ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); }
+.timebar button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+@media (max-width: 760px) { .timebar { flex-wrap: wrap; } .timebar input[type=range] { order: -1; flex-basis: 100%; } .timebar .tlabel { flex-basis: 100%; } }
+.viewtabs { margin: 0; }
+/* Neutral blocks a panel's cards are built from: two sides, key/value lines, lanes. */
+.cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+@media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }
+.side { border-top: 3px solid var(--axis); padding-top: 6px; min-width: 0; }
+.side.red { border-top-color: var(--critical); }
+.side.blue { border-top-color: var(--s1); }
+.side h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 10px 0 4px; font-weight: 600; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 13px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.lanes { position: relative; margin-top: 12px; }
+.lanes svg { display: block; width: 100%; overflow: visible; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Experiment progress</h1>
+    <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
+    <span class="spacer"></span>
+    <span class="tabs viewtabs" id="views" role="group" aria-label="View"></span>
+    <label class="sub" style="margin:0" for="ledger">Experiment</label>
+    <select id="ledger" aria-label="Campaign or run"></select>
+    <button id="theme" type="button" title="Toggle light/dark">Theme</button>
+  </header>
+
+  <section class="tiles" id="tiles"></section>
+  <div class="bar" id="pbar" role="img" aria-label="campaign progress"></div>
+  <div class="timebar" id="timebar" style="display:none" role="group" aria-label="Time of the run shown">
+    <button type="button" id="t-prev" title="Previous fact of the run (← key)">◀</button>
+    <button type="button" id="t-next" title="Next fact of the run (→ key)">▶</button>
+    <button type="button" id="t-play" title="Replay the run from the time shown (Space)" aria-pressed="false">▶ Play</button>
+    <select id="t-speed" title="Replay speed" aria-label="Replay speed">
+      <option value="1">×1</option><option value="5">×5</option><option value="20">×20</option>
+    </select>
+    <input type="range" id="g-time" min="0" max="0" value="0" step="1" aria-label="Time of the run shown"
+      title="Drag to see the run as it stood at that time; Shift+←/→ moves 10 s">
+    <button type="button" id="g-live" title="Follow the run as it happens (End key)">Live</button>
+    <span class="tlabel" id="g-tlabel">live</span>
+  </div>
+
+  <div id="board">
+    <section class="card" id="queue-card" data-span="4"
+      data-help="One row per run of the selected experiment. A standalone run has one; a campaign one per configuration and seed.&#10;status: pending · running · scoring · done · failed · interrupted (its writer stopped) · retrying.&#10;time: how long the run took, or has been running.&#10;The other columns are the scenario's: hover their headers.">
+      <h2>Queue</h2>
+      <p class="sub">One row per run; click a row to inspect it. Results appear as each run is scored.</p>
+      <div class="scroll"><table id="queue"></table></div>
+      <p class="sub" style="margin:8px 0 0" id="q-note"></p>
+    </section>
+
+    <section class="card" id="detail" data-span="8"
+      data-help="The selected run: its phases (bar width = expected length, fill = how far it got), then the scenario's view of it: state chips, chart and table. Hover a phase, a chip or a column header for its meaning.">
+      <h2 id="d-title">Run</h2>
+      <p class="sub" id="d-sub"></p>
+      <div class="phases" id="d-phases"></div>
+      <div class="chips" id="d-chips"></div>
+      <div class="legend" id="d-legend"></div>
+      <div class="chart" id="d-chart"><div class="tip" id="tip"></div></div>
+      <div class="err" id="d-err"></div>
+      <h2 style="margin-top:14px" id="f-title"></h2>
+      <p class="sub" id="f-sub"></p>
+      <div class="scroll"><table id="d-findings"></table></div>
+    </section>
+
+  <section class="card" id="graph-card"
+    data-help="The lab as structure, drawn as of the time the bar above selects.&#10;Topology: zones, hosts, addresses, services and the allowed flows.&#10;Knowledge graph: every typed node and how they relate (hover a node).&#10;Attack tree: the ways to the plant's impact. The switches above the drawing choose what is shown; the legend says what each colour and mark means.">
+    <h2>Topology · knowledge graph · attack tree</h2>
+    <p class="sub" id="g-sub">Select a run.</p>
+    <div class="gbar">
+      <div class="tabs" id="g-tabs" role="group" aria-label="Structure view">
+        <button type="button" data-view="topology" aria-pressed="true">Topology</button>
+        <button type="button" data-view="kg" aria-pressed="false">Knowledge graph</button>
+        <button type="button" data-view="tree" aria-pressed="false">Attack tree</button>
+      </div>
+      <span id="g-options"></span>
+    </div>
+    <div class="legend" id="g-legend"></div>
+    <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
+  </section>
+
+  <section class="card" id="op-card" style="display:none"
+    data-help="Each suggestion the defender's analytics put to its human operator: what it proposed, why, and whether it was approved, rejected or left to expire. Answered at the defender's console, never here.">
+    <h2>Operator suggestions</h2>
+    <p class="sub">What the defender put to its operator, and what came of it. Shown here only: it is answered at the defender's own console.</p>
+    <div id="op-pending"></div>
+    <div class="scroll"><table id="op-history"></table></div>
+  </section>
+
+  <section class="card" id="teams-card" style="display:none"
+    data-help="What people in the lab did, newest first: a step run from a team console, a countermeasure applied or reverted by hand, a mode change, and every command typed in a lab shell, with the host and the team it is attributed to.">
+    <h2>Teams</h2>
+    <p class="sub">What the people in the lab did, both sides on one timeline: steps and commands, newest first.</p>
+    <div class="scroll"><table id="teams"></table></div>
+  </section>
+
+  <section class="card" id="results-card"
+    data-help="The campaign's aggregate over its scored runs: the scenario's tabs, and the mean with its 95% confidence interval for every metric. A standalone run has no aggregate: its score is in the run's detail.">
+    <h2>Results</h2>
+    <p class="sub" id="r-sub">Aggregated over the scored runs of this campaign; refreshed after every run.</p>
+    <div class="tabs" id="r-tabs" role="group" aria-label="Results table"></div>
+    <div class="scroll"><table id="results"></table></div>
+  </section>
+  </div>
+</main>
+
+<script src="graph.js"></script>
+<script>
+"use strict";
+// ── state & reducer ─────────────────────────────────────────────────────────
+let S, cur = { id: null, since: 0 }, selectedRun = null, resultsTab = null;
+let ledgers = [], clockSkew = 0;
+
+function fresh() {
+  return { kind: null, scenario: null, campaign: null, runs: {}, order: [], aggregate: null, current: null,
+           ended: null, step: null };
+}
+S = fresh();
+
+function runOf(id) {
+  if (!S.runs[id]) {
+    S.runs[id] = { id, mode: null, seed: null, status: "pending", attempt: 1, phases: [],
+      plant: [], findings: [], writes: [], alerts: [], threshold: null, metrics: null,
+      start_t: null, end_t: null, duration: null, planned: null, learn_s: null, error: null,
+      states: [], decisions: [], actions: [], respond: null, scenario: null, step: null,
+      mtd: [], gaps: [], alerts2: [], approvals: {}, teams: [], playground: false, x: {}, info: {} };
+    if (!S.order.includes(id)) S.order.push(id);
+  }
+  return S.runs[id];
+}
+
+function resetRunDetail(r, ev) {
+  Object.assign(r, { status: "running", attempt: ev.attempt || 1, mode: ev.mode, seed: ev.seed,
+    scenario: ev.scenario || null, mtd: [], gaps: [], alerts2: [],
+    phases: (ev.phases || []).map(p => ({ name: p.name, planned_s: p.planned_s, timed: p.timed, start_t: null, end_t: null, ok: null })),
+    plant: [], findings: [], writes: [], alerts: [], threshold: null, start_t: ev.t, end_t: null,
+    duration: null, planned: ev.planned_s, learn_s: ev.learn_s, error: null,
+    states: [], decisions: [], actions: [], respond: ev.respond || null,
+    approvals: {}, teams: [], playground: !!ev.playground, x: {},
+    // The run_start event whole: what the scenario's run_info says, for its panel.
+    info: ev });
+}
+
+function apply(ev) {
+  const r = ev.run_id ? runOf(ev.run_id) : null;
+  switch (ev.kind) {
+    case "campaign_start": {
+      const keep = S.aggregate;
+      S.campaign = { name: ev.name, grid: ev.grid || [], params: ev.params || {},
+        planned: ev.planned_run_s || {}, start_t: ev.t };
+      S.kind = "campaign"; S.scenario = ev.scenario || null; S.ended = null; S.runs = {}; S.order = []; S.aggregate = keep;
+      for (const g of S.campaign.grid) Object.assign(runOf(g.run_id), { mode: g.mode ?? g.group, seed: g.seed, scenario: S.scenario });
+      break;
+    }
+    case "run_skipped": Object.assign(r, { status: "skipped", mode: ev.mode, seed: ev.seed, metrics: ev.metrics }); break;
+    case "run_start": if (!S.kind) S.kind = "run"; if (!S.scenario) S.scenario = ev.scenario || null;
+      resetRunDetail(r, ev); S.current = r.id; break;
+    // campaign units and their (command) steps; a scored unit shares its run's id
+    case "unit_start": S.step = { unit: ev.unit, step: null, t: ev.t };
+      if (S.runs[ev.unit]) { const u = S.runs[ev.unit]; if (u.status === "pending") u.status = "running"; u.start_t = u.start_t ?? ev.t; S.current = ev.unit; }
+      break;
+    case "step_start": S.step = { unit: ev.unit, step: ev.step, t: ev.t };
+      if (S.runs[ev.unit]) Object.assign(S.runs[ev.unit], { step: ev.step, status: "running" });
+      break;
+    case "step_end": if (!ev.ok && S.runs[ev.unit]) S.runs[ev.unit].error = ev.error; break;
+    case "step_failed": if (S.runs[ev.unit]) S.runs[ev.unit].status = "failed"; break;
+    case "unit_blocked": if (S.runs[ev.unit]) S.runs[ev.unit].status = "blocked"; break;
+    // the MTD coordinator's telemetry, mirrored live
+    case "mtd_action": r.mtd.push({ t: ev.guest_t || ev.t, action: ev.action, status: ev.status, cost: ev.cost }); break;
+    case "data_gap": r.gaps.push({ t: ev.guest_t || ev.t, gap: ev.gap_s }); break;
+    case "detector_alert": case "detection": r.alerts2.push({ t: ev.guest_t || ev.t, kind: ev.kind, ev }); break;
+    case "phase": {
+      const p = r.phases.find(x => x.name === ev.name) ||
+        (r.phases.push({ name: ev.name, planned_s: null, start_t: null, end_t: null, ok: null }), r.phases[r.phases.length - 1]);
+      if (ev.state === "start") { p.start_t = ev.t; if (ev.learn_s != null) r.learn_s = ev.learn_s; }
+      else { p.end_t = ev.t; p.ok = ev.ok; p.duration = ev.duration_s; }
+      break;
+    }
+    case "plant": r.plant.push({ t: ev.frame_t || ev.t, v_load: ev.v_load, v_dg: ev.v_dg, abnormal: ev.abnormal,
+      ctrl_mode: ev.ctrl_mode, dg_setpoint: ev.dg_setpoint, switch_cmd: ev.switch_cmd, energy: ev.energy_kwh,
+      units: ev.units || null }); break;
+    case "finding": r.findings.push({ t: ev.guest_t || ev.t, detector: ev.detector, klass: ev.klass, src: ev.src, unit: ev.unit, register: ev.register }); break;
+    case "alert": r.alerts.push(ev); break;
+    case "model_fitted": {
+      // One model per feeder: the thresholds side by side, named by unit when there are several.
+      const by = (r.thresholds = r.thresholds || {});
+      by[ev.unit ?? ""] = ev.threshold;
+      const units = Object.keys(by);
+      r.threshold = units.length > 1 ? units.map(u => `u${u} ${by[u]}`).join(" · ") : by[units[0]];
+      break;
+    }
+    case "attack_write": r.writes.push({ t: ev.write_t || ev.t, unit: ev.unit, register: ev.register_name || ev.register, value: ev.value }); break;
+    case "tree_state": r.states.push({ t: ev.guest_t || ev.t, nodes: ev.nodes || {}, active: ev.active || [], hosts: ev.hosts || [], next: ev.next || [] }); break;
+    case "decision": r.decisions.push({ t: ev.guest_t || ev.t, policy: ev.policy, actions: ev.actions || [], rationale: ev.rationale, needs_approval: ev.needs_approval || [] }); break;
+    case "action": r.actions.push({ t: ev.guest_t || ev.t, id: ev.id, ok: ev.ok, machine: ev.machine });
+      // A response a person asked for is that person's doing, not the policy's.
+      if (ev.by && ev.by !== "soc") r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "countermeasure",
+        text: `${ev.op === "revert" ? "revert " : ""}${ev.id}`, where: ev.machine, ok: ev.ok, who: ev.by });
+      break;
+    // People in the lab: a shell command, a step of the attack run by hand, the defender's mode changed.
+    case "team_command": r.teams.push({ t: ev.guest_t || ev.t, team: ev.team, what: "command", text: ev.cmd, where: ev.node, via: ev.via }); break;
+    case "red_step": r.teams.push({ t: ev.guest_t || ev.t, team: "red", what: "step", text: ev.step, ok: ev.ok, who: ev.operator }); break;
+    case "soc_mode": r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "mode", text: `SOC set to ${ev.mode}`, who: ev.operator }); break;
+    // A suggestion put to the operator, then its outcome: one entry per request,
+    // the later event completing the earlier (which carries the explanation).
+    case "approval": {
+      if (!ev.request) break;
+      const a = r.approvals[ev.request] || (r.approvals[ev.request] = { request: ev.request, asked_t: ev.guest_t || ev.t });
+      for (const k of ["action", "state", "due_t", "explanation", "operator", "waited_s"]) if (ev[k] != null) a[k] = ev[k];
+      a.t = ev.guest_t || ev.t;
+      break;
+    }
+    case "run_retry": r.status = "retrying"; r.error = ev.error; break;
+    case "run_end":
+      r.end_t = ev.t; r.duration = ev.duration_s; r.error = ev.error;
+      r.status = ev.status === "ok" ? (S.kind === "campaign" ? "scoring" : "ok") : ev.status;
+      if (S.kind === "run" && ev.rc) r.error = `exit code ${ev.rc}`;
+      if (S.current === r.id) S.current = null;
+      break;
+    case "run_failed": r.status = "failed"; break;
+    case "run_metrics": r.status = "ok"; r.metrics = ev.metrics; r.end_t = r.end_t ?? ev.t;
+      if (r.start_t && r.duration == null) r.duration = ev.t - r.start_t; break;
+    case "aggregate": S.aggregate = { detection: ev.detection || null, impact: ev.impact || null, ci: ev.ci || null }; break;
+    case "campaign_end": S.ended = ev; break;
+  }
+  // The scenario folds the event kinds only it knows into run.x, after the page
+  // has taken what it draws itself.
+  if (r) panel()?.reduce?.(r, ev);
+}
+
+// ── ETA ─────────────────────────────────────────────────────────────────────
+function now() { return Date.now() / 1000 + clockSkew; }
+function observedPhase() {
+  const acc = {};
+  for (const r of Object.values(S.runs)) for (const p of r.phases)
+    if (p.end_t && p.start_t && p.ok !== false) (acc[p.name] = acc[p.name] || []).push(p.end_t - p.start_t);
+  const out = {};
+  for (const [k, v] of Object.entries(acc)) out[k] = v.reduce((a, b) => a + b, 0) / v.length;
+  return out;
+}
+// A fixed-length phase is flagged by the run itself (run_start.phases[].timed):
+// the page knows no phase by name.
+function isTimed(p) { return !!p.timed; }
+function phaseEst(p, obs) { return isTimed(p) ? (p.planned_s || 0) : (obs[p.name] ?? p.planned_s ?? 0); }
+function runRemaining(r, obs, t) {
+  let rem = 0;
+  for (const p of r.phases) {
+    if (p.end_t) continue;
+    const est = phaseEst(p, obs);
+    rem += p.start_t ? Math.max(0, est - (t - p.start_t)) : est;
+  }
+  return rem;
+}
+function eta() {
+  const t = now(), obs = observedPhase();
+  const finished = Object.values(S.runs).filter(r => r.status === "ok" && r.duration);
+  const meanRun = finished.length ? finished.reduce((a, r) => a + r.duration, 0) / finished.length : null;
+  let rem = 0;
+  for (const id of S.order) {
+    const r = S.runs[id];
+    if (r.status === "running") rem += runRemaining(r, obs, t);
+    else if (r.status === "pending" || r.status === "retrying")
+      rem += meanRun ?? (S.campaign?.planned?.[id] ?? r.planned ?? 0);
+  }
+  return rem;
+}
+
+// ── formatting / DOM helpers ────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null) continue;
+    if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c != null) e.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return e;
+}
+function dur(s) {
+  if (s == null || !isFinite(s)) return "—";
+  s = Math.max(0, Math.round(s));
+  const hh = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60;
+  return hh ? `${hh}h ${String(mm).padStart(2, "0")}m` : `${mm}:${String(ss).padStart(2, "0")}`;
+}
+function clock(t) { return t ? new Date((t - clockSkew) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"; }
+function num(v, d = 3) { return v == null ? "—" : (typeof v === "number" ? +v.toFixed(d) : v); }
+const STATUS = {
+  running: ["var(--s1)", "running"], scoring: ["var(--s1)", "scoring"], pending: ["var(--axis)", "pending"],
+  ok: ["var(--good)", "done"], skipped: ["var(--good)", "done (resumed)"], failed: ["var(--critical)", "failed"],
+  retrying: ["var(--warning)", "retrying"], interrupted: ["var(--serious)", "interrupted"],
+  blocked: ["var(--serious)", "blocked"], invalid: ["var(--critical)", "invalid run"],
+  done: ["var(--good)", "finished"], done_with_failures: ["var(--warning)", "finished with failures"],
+};
+function statusBadge(st) {
+  const [c, label] = STATUS[st] || ["var(--axis)", st || "—"];
+  return h("span", { class: "badge" }, h("span", { class: "dot", style: `background:${c}` }), label);
+}
+const SVGNS = "http://www.w3.org/2000/svg";
+function svg(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+// ── render ──────────────────────────────────────────────────────────────────
+function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).status; }
+
+// ── scenario panels ─────────────────────────────────────────────────────────
+// A scenario draws its own views. It deposits a factory in window.CyberRangePanels
+// (graph.js is served before this script, so it cannot call anything here), and
+// the page invokes it once with the handles below. A scenario without a panel
+// still gets the neutral views: ledger, phases, runs, metrics, aggregate.
+//
+// The hooks a panel may return, all optional:
+//   queue()                     columns of the run queue, through ui.queueTable
+//   detail(run)                 chips, chart and table of the selected run
+//   chart(run)                  the run's chart (null: no run selected)
+//   reduce(run, ev)             fold the scenario's own event kinds into run.x
+//   cards: [{id, title, sub, render(box, run, t)}]   cards of its own, drawn at
+//                               the time the run's time bar selects (null = live)
+//   graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree,
+//           options?, origin?}  the structure card; marks also drive the time bar
+//   results: {tabs, render}     tabs of the campaign aggregate
+const panelApi = {
+  get S() { return S; },
+  $, h, svg, num, dur, clock, now, statusBadge, queueTable, stepCell,
+  shownRunId: () => shownRunId(),
+  select(id) { selectedRun = id; render(); },
+  render: () => render(),
+  // The time the run is shown at (null = live) and the view the reader chose.
+  time: () => gTime,
+  setTime(t) { gTime = t; render(); },
+  view: () => curView,
+};
+const panels = Object.fromEntries(
+  Object.entries(window.CyberRangePanels || {}).map(([name, make]) => {
+    try { return [name, make(panelApi)]; } catch (e) { console.error(name, e); return [name, null]; }
+  }).filter(([, p]) => p));
+// A ledger written before run_start carried `scenario` is named by the listing.
+const ledgerScenario = () => (ledgers.find(l => l.id === cur.id) || {}).scenario;
+const panel = () => panels[S.scenario || ledgerScenario()] || null;
+
+// One section that throws must not take the others with it: its error is shown
+// in its own card, the rest of the page is drawn as usual.
+function guard(id, fn) {
+  const box = $(id), card = box.closest(".card") || box;
+  // A closed card, or one the view hides, is not drawn: it is redrawn when shown.
+  if (card.classList.contains("collapsed") || card.classList.contains("offview")) return;
+  let note = card.querySelector(":scope > .err.guard");
+  try {
+    fn();
+    if (note) note.remove();
+  } catch (e) {
+    console.error(id, e);
+    if (!note) { note = h("div", { class: "err guard" }); card.append(note); }
+    note.textContent = `this view failed to draw: ${e && e.message || e}`;
+  }
+}
+
+function render() {
+  const lst = ledgerStatus();
+  $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
+  if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
+  guard("views", renderViews);
+  guard("tiles", () => renderTiles(lst));
+  guard("queue", renderQueue);
+  guard("detail", renderDetail);
+  guard("results", renderResults);
+  guard("timebar", renderTimebar);
+  guard("board", renderCards);
+  guard("graph-card", renderGraph);
+  guard("op-card", renderOperator);
+  guard("teams-card", renderTeams);
+}
+
+function counts() {
+  const c = { total: S.order.length, ok: 0, skipped: 0, failed: 0, running: 0 };
+  for (const id of S.order) {
+    const st = S.runs[id].status;
+    if (st === "ok") c.ok++; else if (st === "skipped") c.skipped++;
+    else if (st === "failed") c.failed++; else if (st === "running" || st === "scoring") c.running++;
+  }
+  return c;
+}
+
+const TILE_HELP = {
+  "Runs done": "Runs finished and scored, out of all the runs of the experiment",
+  "Failed": "Runs that ended in an error (the queue says which)",
+  "Elapsed": "Wall-clock time since the experiment started",
+  "Time left": "Estimated from each phase's expected length and the phases seen so far",
+  "Now": "The run, and its phase, under way right now",
+};
+function tile(label, value, note) {
+  return h("div", { class: "tile", title: TILE_HELP[label] || null }, h("div", { class: "label" }, label), h("div", { class: "value" }, value),
+    h("div", { class: "note" }, note || " "));
+}
+
+function renderTiles(lst) {
+  const c = counts(), t = now();
+  const live = lst === "running";
+  const start = S.campaign?.start_t ?? S.runs[S.order[0]]?.start_t;
+  const end = S.ended?.t ?? (live ? null : Math.max(0, ...Object.values(S.runs).map(r => r.end_t || 0)) || null);
+  const rem = live ? eta() : null;
+  const curRun = S.current ? S.runs[S.current] : null;
+  const curPhase = curRun?.phases.find(p => p.start_t && !p.end_t);
+  $("tiles").replaceChildren(
+    tile("Runs done", `${c.ok + c.skipped} / ${c.total}`, c.skipped ? `${c.skipped} reused from an earlier attempt` : (S.kind === "run" ? "standalone run" : "")),
+    tile("Failed", String(c.failed), c.failed ? "see the queue for errors" : "none"),
+    tile("Elapsed", start ? dur((end || t) - start) : "—", start ? `started ${clock(start)}` : ""),
+    // A playground run has no end of its own: it is closed by hand.
+    tile("Time left", live ? (curRun?.playground ? "open" : dur(rem)) : (lst === "interrupted" ? "stopped" : "—"),
+      live ? (curRun?.playground ? "playground: until closed with Ctrl-C" : `ETA ${clock(t + rem)}`) : (end ? `ended ${clock(end)}` : "")),
+    tile("Now", curRun ? curRun.id : (S.step?.unit && live ? S.step.unit : "idle"),
+      curPhase ? `phase: ${curPhase.name.replace("_", " ")}` : (S.step?.step && live ? `step: ${S.step.step}` : "")),
+  );
+  const bar = $("pbar"); bar.replaceChildren();
+  if (c.total) {
+    const seg = (n, col) => n && bar.append(h("span", { style: `width:${100 * n / c.total}%;background:${col}` }));
+    seg(c.ok + c.skipped, "var(--good)"); seg(c.failed, "var(--critical)"); seg(c.running, "var(--s1)");
+    bar.setAttribute("aria-label", `${c.ok + c.skipped} done, ${c.failed} failed, ${c.running} running, of ${c.total}`);
+  }
+}
+
+// The run queue, drawn once for everybody. A scenario decides which columns to
+// add and what goes in them; selection, keyboard navigation, the retry suffix,
+// the running-run clock and the empty state live here, so a panel cannot
+// forget them and quietly break the table for its own scenario.
+function queueTable({ note, columns, cells }) {
+  const q = $("q-note");
+  if (note && note.html) q.innerHTML = note.html; else q.textContent = note || "";
+  const head = h("tr", {}, h("th", { title: "The run's id: click a row to inspect it" }, "run"),
+    h("th", { title: "pending · running · scoring · done · failed · interrupted · retrying" }, "status"),
+    h("th", { class: "num", title: "How long the run took, or has been running" }, "time"),
+    ...columns.map(c => h("th", c.attrs || (c.num ? { class: "num" } : {}), c.label)));
+  const rows = S.order.map(id => {
+    const r = S.runs[id];
+    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
+    return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
+        onclick: () => { selectedRun = id; render(); },
+        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
+      h("td", {}, id, r.attempt > 1 ? h("span", { class: "muted" }, ` (try ${r.attempt})`) : null),
+      h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
+      ...cells(r, id));
+  });
+  const width = 3 + columns.length;
+  $("queue").replaceChildren(h("thead", {}, head),
+    h("tbody", {}, rows.length ? rows
+      : h("tr", {}, h("td", { colspan: width, class: "empty" }, "No runs yet"))));
+}
+
+// The step a run is on, for the scenarios that show it.
+function stepCell(r) {
+  return h("td", {}, r.step || (r.phases.find(p => p.start_t && !p.end_t)?.name ?? "—"));
+}
+
+function renderQueueNeutral() {
+  const keys = [];
+  for (const id of S.order) {
+    for (const [k, v] of Object.entries(S.runs[id].metrics || {})) {
+      if (typeof v === "number" && !keys.includes(k) && keys.length < 4) keys.push(k);
+    }
+  }
+  queueTable({
+    note: keys.length ? "metrics as the scenario reported them" : "no scored runs yet",
+    columns: [{ label: "step" }, ...keys.map(k => ({ label: k, num: true }))],
+    cells: r => [stepCell(r),
+      ...keys.map(k => h("td", { class: "num" },
+        r.metrics && r.metrics[k] != null ? String(num(r.metrics[k])) : "—"))],
+  });
+}
+
+function renderQueue() {
+  const p = panel();
+  if (p && p.queue) return p.queue();
+  return renderQueueNeutral();
+}
+function shownRunId() {
+  if (selectedRun && S.runs[selectedRun]) return selectedRun;
+  if (S.current) return S.current;
+  const started = S.order.filter(id => S.runs[id].start_t);
+  return started.length ? started[started.length - 1] : S.order[0] || null;
+}
+
+function renderDetail() {
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  $("d-title").textContent = r ? `Run ${id}` : "Run";
+  if (!r) { $("d-sub").textContent = "Select a run."; ["d-phases", "d-chips", "d-legend", "d-findings"].forEach(x => $(x).replaceChildren()); panel()?.chart?.(null); return; }
+  $("d-sub").textContent = r.start_t
+    ? `${r.mode || "?"} · seed ${r.seed ?? "—"} · started ${clock(r.start_t)}`
+    : (r.status === "skipped" ? `${r.mode} · seed ${r.seed} · result reused from an earlier attempt (no live trace in this attempt)` : `${r.mode || "?"} · seed ${r.seed ?? "—"} · waiting in the queue`);
+  // phases
+  const t = now(), obs = observedPhase();
+  const totalEst = r.phases.reduce((a, p) => a + Math.max(phaseEst(p, obs), 2), 0) || 1;
+  $("d-phases").replaceChildren(...r.phases.map(p => {
+    const est = phaseEst(p, obs), el = p.start_t ? ((p.end_t || t) - p.start_t) : 0;
+    const compact = Math.max(est, 2) / totalEst < 0.12;
+    const frac = p.end_t ? 1 : p.start_t ? Math.min(1, el / Math.max(est, 0.1)) : 0;
+    const cls = "ph" + (compact ? " compact" : "") + (p.end_t ? (p.ok === false ? " failed" : " done") : p.start_t ? " active" : "");
+    const title = `${p.name.replace("_", " ")}: ${p.start_t ? `${dur(el)} of ~${dur(est)}` : `~${dur(est)}`}`;
+    return h("div", { class: cls, style: `flex-grow:${Math.max(est, 2)}`, title, "aria-label": title },
+      h("div", { class: "seg" }, h("i", { style: `width:${100 * frac}%` })),
+      h("div", { class: "nm" }, p.name.replace("_", " ")),
+      h("div", { class: "tm" }, p.start_t ? `${dur(el)} / ${dur(est)}` : dur(est)));
+  }));
+  $("d-err").textContent = r.error && r.status !== "ok" ? `error: ${r.error}` : "";
+  const scenarioDetail = panel()?.detail;
+  if (scenarioDetail) return scenarioDetail(r);
+  // No panel: the phases above are all the page can say about a run.
+  $("f-title").textContent = ""; $("f-sub").textContent = "";
+  ["d-chips", "d-legend", "d-findings"].forEach(x => $(x).replaceChildren());
+  $("d-chart").querySelector("svg")?.remove();
+}
+
+// ── results ─────────────────────────────────────────────────────────────────
+// The aggregate a campaign reports is the scenario's. The page draws the one
+// table every scenario has (mean [95% CI], from core/aggregate.py); a panel adds
+// its own tabs with `results: { tabs: [{id, label}], render(tab, aggregate, table) }`.
+let tabsSig = "";
+function renderResults() {
+  const tb = $("results"), a = S.aggregate, res = panel()?.results;
+  const hasCi = !!(a && a.ci);
+  const tabs = [...(res?.tabs || []), ...(hasCi ? [{ id: "ci", label: "Mean [95% CI]" }] : [])];
+  if (!tabs.some(t => t.id === resultsTab)) resultsTab = tabs[0]?.id ?? null;
+  const sig = tabs.map(t => t.id).join("|") + "#" + resultsTab;
+  if (sig !== tabsSig) {  // rebuilt only on change: a button replaced mid-click loses the click
+    tabsSig = sig;
+    $("r-tabs").replaceChildren(...tabs.map(t => h("button", { type: "button", "aria-pressed": String(t.id === resultsTab),
+      onclick: () => { resultsTab = t.id; renderResults(); } }, t.label)));
+  }
+  if (!a) { tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, S.kind === "run"
+    ? (Object.values(S.runs).some(r => r.metrics) ? "This run is scored in its detail above; an aggregate is a campaign's." : "A single run is scored when it ends; an aggregate is a campaign's.")
+    : "No scored runs yet")))); return; }
+  const n = c => h("td", { class: "num" }, c == null ? "—" : String(num(c)));
+  if (resultsTab === "ci" && hasCi) {
+    const gk = a.ci.length && "group" in a.ci[0] ? "group" : "mode";
+    const head = h("tr", {}, h("th", {}, gk === "group" ? "configuration" : "mode"), h("th", {}, "metric"),
+      ...["runs", "mean", "95% CI", "median", "min–max"].map(x => h("th", { class: "num" }, x)));
+    const rows = a.ci.map(r => h("tr", {}, h("td", {}, r[gk]), h("td", {}, r.metric), n(r.n), n(r.mean),
+      h("td", { class: "num" }, r.n > 1 ? `${num(r.ci95_low)} – ${num(r.ci95_high)}` : "—"), n(r.median),
+      h("td", { class: "num" }, r.min == null ? "—" : `${num(r.min)}–${num(r.max)}`)));
+    tb.replaceChildren(h("thead", {}, head), h("tbody", {}, rows));
+  } else if (res && resultsTab) {
+    res.render(resultsTab, a, tb);
+  } else {
+    tb.replaceChildren(h("tbody", {}, h("tr", {}, h("td", { class: "empty" }, "This campaign reported no aggregate the page can tabulate."))));
+  }
+  const scored = Object.values(S.runs).filter(r => r.metrics).length;
+  $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. Rates are shares of runs (0–1).`;
+}
+
+// ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
+const QS = new URLSearchParams(location.search);
+let wantRun = QS.get("run"), gView = ["topology", "kg", "tree"].includes(QS.get("view")) ? QS.get("view") : "topology";
+let gOpts = null, gTime = null, gSig = "";
+const gStruct = {};
+const gTip = {
+  show(ev, title, rows) {
+    const tip = $("g-tip"), wrap = tip.parentElement.getBoundingClientRect();
+    tip.replaceChildren(h("div", {}, h("b", {}, title)), ...rows.map(r => h("div", { class: "muted" }, r)));
+    tip.style.display = "block";
+    tip.style.left = `${Math.min(ev.clientX - wrap.left + 12, wrap.width - 300)}px`;
+    tip.style.top = `${ev.clientY - wrap.top + 12}px`;
+  },
+  hide() { $("g-tip").style.display = "none"; },
+};
+async function loadStructure(lid, id) {
+  const k = `${lid}|${id}`;
+  if (gStruct[k]) return;
+  gStruct[k] = "loading";
+  try { gStruct[k] = await getJSON(`/api/structure?id=${encodeURIComponent(lid)}&run=${encodeURIComponent(id)}`); }
+  catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
+  gSig = ""; renderGraph();
+}
+// ── the run's time ──────────────────────────────────────────────────────────
+// The time bar is on the run's own clock: the slider is a time (stable while
+// it is dragged), its stops for ◀ ▶ are the facts the panel marks. gTime is
+// the time shown, null when following the run live.
+function runTime(r) {
+  const mk = panel()?.graph?.marks;
+  const marks = r && mk ? mk(r) : [];
+  const t0 = r?.start_t ?? marks[0]?.t ?? 0;
+  const lastFact = Math.max(t0, ...marks.map(m => m.t));
+  const live = r && r.status === "running";
+  const planned = r ? t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0) : t0;
+  // A live run is laid on its planned length, so the thumb does not jump as
+  // facts arrive; a finished one on what it lasted.
+  const edge = live ? Math.max(lastFact, now()) : Math.max(lastFact, r?.end_t ?? lastFact);
+  const t1 = Math.max(live ? Math.max(planned, edge) : edge, t0 + 1);
+  const t = gTime == null ? null : Math.min(Math.max(gTime, t0), t1);
+  return { marks, t, t0, t1, edge };
+}
+function relLabel(r, t) {
+  if (t == null) return "live";
+  const o = panel()?.graph?.origin?.(r);
+  return o && o.t != null ? `${t - o.t >= 0 ? "+" : ""}${num(t - o.t, 2)} s ${o.label}`
+    : (r.start_t ? `+${dur(t - r.start_t)} into the run` : clock(t));
+}
+function renderTimebar() {
+  const id = shownRunId(), r = id ? S.runs[id] : null, p = panel(), T = runTime(r);
+  $("timebar").style.display = r && (p?.graph || p?.cards?.length) ? "" : "none";
+  if (!r) return;
+  const slider = $("g-time"), span = T.t1 - T.t0;
+  slider.max = String(Math.round(span * 10));
+  if (document.activeElement !== slider || gTime == null)
+    slider.value = String(Math.round(((T.t ?? T.edge) - T.t0) * 10));
+  const before = T.marks.filter(m => T.t == null || m.t <= T.t + 1e-6);
+  const fact = before.length ? before[before.length - 1].kind : "before the first fact";
+  const text = `${T.t == null ? "live" : relLabel(r, T.t)} · ${fact}`;
+  const lab = $("g-tlabel");
+  if (lab.textContent !== text) { lab.textContent = text; lab.title = text; }
+  $("g-live").setAttribute("aria-pressed", String(gTime == null));
+  $("t-play").textContent = playing ? "❚❚ Pause" : "▶ Play";
+  $("t-play").setAttribute("aria-pressed", String(!!playing));
+}
+function shownRun() { const id = shownRunId(); return id ? S.runs[id] : null; }
+// One fact back or forward; past the last fact is live.
+function stepFact(dir) {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), cur = T.t ?? Infinity;
+  if (dir < 0) {
+    const prev = T.marks.filter(m => m.t < cur - 1e-6);
+    gTime = prev.length ? prev[prev.length - 1].t : T.t0;
+  } else {
+    const next = T.marks.find(m => m.t > cur + 1e-6);
+    gTime = next ? next.t : null;
+  }
+  render();
+}
+function shiftTime(ds) {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), t = (T.t ?? T.edge) + ds;
+  gTime = t >= T.edge ? null : Math.max(T.t0, t);
+  render();
+}
+let playing = null;
+function setPlaying(on) {
+  if (playing) { clearInterval(playing); playing = null; }
+  if (on) {
+    const r = shownRun(); if (!r) return;
+    if (gTime == null) gTime = runTime(r).t0;  // replaying from live starts over
+    playing = setInterval(() => {
+      const run = shownRun(); if (!run) return setPlaying(false);
+      const T = runTime(run), speed = +$("t-speed").value || 1;
+      gTime = (gTime ?? T.t0) + 0.2 * speed;
+      if (gTime >= T.edge) { gTime = null; setPlaying(false); }
+      render();
+    }, 200);
+  }
+  renderTimebar();
+}
+
+// ── views ───────────────────────────────────────────────────────────────────
+// A panel may compose the page into views ({id, label, help, sections,
+// options}): which sections show, in what order, and the graph switches set on
+// entering it. Without views every section shows, in page order.
+let curView = null, viewSig = "";
+function renderViews() {
+  const views = panel()?.views || [];
+  if (!views.some(v => v.id === curView)) {
+    let saved = null; try { saved = localStorage.getItem("platform-dash-view"); } catch (e) {}
+    const want = QS.get("show") || saved;
+    curView = views.find(v => v.id === want)?.id ?? views[0]?.id ?? null;
+    if (curView) enterView(curView, false);
+  }
+  const sig = views.map(v => v.id).join("|") + "#" + curView;
+  if (sig !== viewSig) {
+    viewSig = sig;
+    $("views").replaceChildren(...views.map(v => h("button", { type: "button", title: v.help || null,
+      "aria-pressed": String(v.id === curView), onclick: () => enterView(v.id, true) }, v.label)));
+  }
+  applyView(views.find(v => v.id === curView));
+}
+function enterView(id, byHand) {
+  curView = id;
+  const v = (panel()?.views || []).find(x => x.id === id);
+  const g = panel()?.graph;
+  if (g) { graphOpts(g); Object.assign(gOpts, v?.options || {}); gSig = ""; }
+  if (byHand) { try { localStorage.setItem("platform-dash-view", id); } catch (e) {} render(); }
+}
+function applyView(v) {
+  const order = v ? v.sections : null;
+  for (const el of $("board").children) {
+    if (!el.id) continue;
+    const i = order ? order.indexOf(el.id) : -1;
+    el.classList.toggle("offview", !!order && i < 0);
+    el.style.order = order && i >= 0 ? String(i) : "";
+  }
+  // The run detail takes the whole row when the queue beside it is hidden.
+  $("detail").classList.toggle("wide", $("queue-card").classList.contains("offview"));
+}
+
+// ── cards: every one can be closed and can explain itself ───────────────────
+let closedCards = new Set();
+try { closedCards = new Set(JSON.parse(localStorage.getItem("platform-dash-closed") || "[]")); } catch (e) {}
+function collapsible(sec) {
+  if (sec.querySelector(":scope > .card-head")) return;
+  const h2 = sec.querySelector(":scope > h2");
+  if (!h2 || !sec.id) return;
+  const toggle = h("button", { type: "button", title: "Close or open this card", "aria-expanded": "true" }, "▾");
+  const set = closed => {
+    sec.classList.toggle("collapsed", closed);
+    toggle.textContent = closed ? "▸" : "▾";
+    toggle.setAttribute("aria-expanded", String(!closed));
+  };
+  const flip = () => {
+    const closed = !sec.classList.contains("collapsed");
+    set(closed);
+    if (closed) closedCards.add(sec.id); else closedCards.delete(sec.id);
+    try { localStorage.setItem("platform-dash-closed", JSON.stringify([...closedCards])); } catch (e) {}
+    gSig = ""; render();
+  };
+  toggle.addEventListener("click", flip);
+  h2.addEventListener("click", flip);
+  const head = h("div", { class: "card-head" });
+  sec.insertBefore(head, h2);
+  head.append(h2);
+  if (sec.dataset.help) {
+    const note = h("div", { class: "help", style: "display:none" }, sec.dataset.help);
+    head.after(note);
+    head.append(h("button", { type: "button", title: "What this card shows", onclick: () => {
+      note.style.display = note.style.display === "none" ? "" : "none"; } }, "ⓘ"));
+  }
+  head.append(toggle);
+  set(closedCards.has(sec.id));
+}
+
+// A panel's own cards, on the page's board, each drawn at the time the bar
+// selects and guarded on its own: one that throws shows its error and leaves
+// the others drawn.
+function renderCards() {
+  const board = $("board"), list = panel()?.cards || [];
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  const want = list.map(c => `card-${c.id}`);
+  for (const el of [...board.querySelectorAll(":scope > [id^='card-']")]) if (!want.includes(el.id)) el.remove();
+  if (!r) { for (const c of list) $(`card-${c.id}`)?.classList.add("offview"); return; }
+  const t = runTime(r).t;
+  for (const c of list) {
+    let sec = $(`card-${c.id}`);
+    if (!sec) {
+      sec = h("section", { class: "card", id: `card-${c.id}`, "data-span": c.span || null, "data-help": c.help || null },
+        h("h2", {}, c.title), h("p", { class: "sub" }, c.sub || ""), h("div", { class: "cbody" }));
+      board.insertBefore(sec, $("graph-card"));
+      collapsible(sec);
+      applyView((panel()?.views || []).find(v => v.id === curView));
+    }
+    guard(`card-${c.id}`, () => c.render(sec.querySelector(".cbody"), r, t));
+  }
+}
+
+// Switches a graph panel declares, shown above the views they apply to and
+// passed to its draw functions by id: {id, label, view?, default} is a check
+// box, with choices: [{id, label}] a row of buttons.
+function graphOpts(g) {
+  if (!gOpts) { gOpts = {}; for (const o of g.options || []) gOpts[o.id] = o.choices ? (o.default ?? o.choices[0].id) : !!o.default; }
+  const shown = (g.options || []).filter(o => !o.view || o.view === gView);
+  const wrap = $("g-options"), sig = shown.map(o => `${o.id}=${gOpts[o.id]}`).join("|");
+  if (wrap.dataset.sig !== sig) {
+    wrap.dataset.sig = sig;
+    wrap.replaceChildren(...shown.map(o => o.choices
+      ? h("span", { class: "tabs", role: "group", "aria-label": o.label, title: o.help || null, style: "display:inline-flex;margin:0 0 0 8px" },
+          h("span", { class: "sub", style: "margin:0 4px 0 0;align-self:center" }, o.label),
+          ...o.choices.map(c => h("button", { type: "button", title: c.help || null, "aria-pressed": String(gOpts[o.id] === c.id),
+            onclick: () => { gOpts[o.id] = c.id; renderGraph(); } }, c.label)))
+      : h("label", { class: "sub", title: o.help || null },
+          h("input", { type: "checkbox", checked: gOpts[o.id] ? "" : null,
+            onchange: e => { gOpts[o.id] = e.target.checked; renderGraph(); } }), ` ${o.label}`)));
+  }
+  return gOpts;
+}
+
+function renderGraph() {
+  // The card exists only for a scenario that declares a graph to draw in it.
+  const g = panel()?.graph;
+  $("graph-card").style.display = g ? "" : "none";
+  if (!g) return;
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  document.querySelectorAll("#g-tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === gView)));
+  const opts = graphOpts(g);
+  if (!r) {
+    if (gSig !== "none") { gSig = "none"; $("g-sub").textContent = "Select a run."; ["g-view", "g-legend"].forEach(x => $(x).replaceChildren()); }
+    return;
+  }
+  const k = `${cur.id}|${id}`, st = gStruct[k];
+  if (!st) loadStructure(cur.id, id);
+  const T = runTime(r);
+  const width = $("g-view").clientWidth;
+  const sig = JSON.stringify([k, typeof st === "object" ? (st.source || st.error) : st, gView, opts, T.t, T.marks.length,
+    r.states.length, r.actions.length, r.writes.length, Math.round(width / 40)]);
+  if (sig === gSig) return;
+  gSig = sig;
+  const policy = r.respond && r.respond !== "off" ? r.respond : (r.decisions[0]?.policy || null);
+  const resp = policy ? `response policy: ${policy}` : "response: off (structure only)";
+  if (!st || st === "loading") { $("g-sub").textContent = `${resp} · loading the structure…`; return; }
+  if (st.error) { $("g-sub").textContent = `${resp} · ${st.error}`; $("g-view").replaceChildren(); return; }
+  $("g-sub").textContent = `${resp} · ${st.source === "rebuilt"
+    ? "structure rebuilt from today's lab model: this run predates kg.json, it may differ from what ran"
+    : "structure recorded with the run (kg.json, tree.json)"}`;
+  const ov = g.overlayAt(r, T.t);
+  const draw = { topology: g.drawTopology, kg: g.drawKG, tree: g.drawTree }[gView];
+  let legend = [];
+  try { legend = draw($("g-view"), st, ov, { width, tip: gTip, ...opts }) || []; }
+  catch (e) { $("g-view").replaceChildren(h("div", { class: "err" }, `could not draw: ${e.message}`)); }
+  // A legend entry with no colour heads the group of entries after it.
+  $("g-legend").replaceChildren(...legend.map(([c, label]) => c
+    ? h("span", {}, h("span", { class: "lk", style: `background:${c};height:3px` }), label)
+    : h("span", { style: "font-weight:600;color:var(--ink);margin-left:6px" }, label)));
+}
+
+// ── people: what the defender asked its operator, what the teams did ────────
+// Read-only, like the rest of the page: the suggestions are answered at the
+// defender's own console and the teams act from theirs. This page is the view
+// of whoever referees, and it has no way to act on a lab.
+let opSig = "", teamSig = "";
+function coveredNodes(list) {
+  return (list || []).map(n => `${n.label || n.node}${n.attck ? ` [${n.attck}]` : ""}${n.belief != null ? ` (belief ${num(n.belief, 2)})` : ""}`).join("; ");
+}
+function suggestionCard(a) {
+  const x = a.explanation || {}, cm = x.countermeasure || {}, tr = x.trigger || {};
+  const row = (k, v) => v ? [h("dt", {}, k), h("dd", {}, v)] : [];
+  return h("div", { class: "sug" },
+    h("div", { class: "hd" },
+      h("b", {}, cm.label || a.action), h("span", { class: "muted" }, `${a.action}${cm.machine ? ` · runs on ${cm.machine}` : ""}`),
+      h("span", { class: "spacer" }), h("span", { class: "left", "data-due": a.due_t ?? "" }, "")),
+    h("dl", {},
+      ...row("seen", tr.klass ? `${tr.klass}${tr.detector ? ` (${tr.detector} detector)` : ""}${tr.src ? ` from ${tr.src}` : ""}` : null),
+      ...row("prevents", coveredNodes(x.prevents)),
+      ...row("undoes", coveredNodes(x.restores)),
+      ...row("why", x.rationale)));
+}
+const OUTCOME = { granted: ["var(--good)", "approved"], rejected: ["var(--critical)", "rejected"], expired: ["var(--axis)", "expired, not applied"] };
+function renderOperator() {
+  const id = shownRunId(), r = id ? S.runs[id] : null;
+  const all = r ? Object.values(r.approvals).sort((a, b) => a.asked_t - b.asked_t) : [];
+  $("op-card").style.display = all.length ? "" : "none";
+  if (!all.length) { opSig = ""; return; }
+  const live = r.status === "running" && ledgerStatus() === "running";
+  const pending = live ? all.filter(a => a.state === "requested") : [], closed = all.filter(a => a.state !== "requested").reverse();
+  const sig = JSON.stringify([cur.id, id, live, all.map(a => [a.request, a.state])]);
+  if (sig !== opSig) {
+    opSig = sig;
+    $("op-pending").replaceChildren(...pending.map(a => suggestionCard(a)));
+    const w0 = r.writes[0]?.t ?? r.start_t;
+    $("op-history").replaceChildren(...(closed.length ? [
+      h("thead", {}, h("tr", {}, h("th", { class: "num" }, r.writes.length ? "from 1st write" : "time"), h("th", {}, "suggestion"),
+        h("th", {}, "outcome"), h("th", {}, "by"), h("th", { class: "num" }, "answered in"), h("th", {}, "why it was suggested"))),
+      h("tbody", {}, closed.map(a => { const [c, label] = OUTCOME[a.state] || ["var(--axis)", a.state]; return h("tr", {},
+        h("td", { class: "num" }, w0 ? `${a.t - w0 >= 0 ? "+" : ""}${num(a.t - w0, 2)} s` : clock(a.t)),
+        h("td", {}, a.action || "—"),
+        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`),
+        h("td", {}, a.operator || "—"),
+        h("td", { class: "num" }, a.state === "expired" || a.waited_s == null ? "—" : `${num(a.waited_s, 1)} s`),
+        h("td", { class: "wrap" }, a.explanation?.rationale || "—")); }))] : []));
+  }
+  const t = now();
+  document.querySelectorAll("#op-pending [data-due]").forEach(e => {
+    const due = parseFloat(e.dataset.due);
+    e.textContent = isFinite(due) ? (due > t ? `waiting, expires in ${dur(due - t)}` : "expiring…") : "";
+  });
+}
+const TEAM = { red: "var(--critical)", blue: "var(--s1)", control: "var(--axis)" };
+function renderTeams() {
+  const id = shownRunId(), r = id ? S.runs[id] : null, rows = r ? r.teams : [];
+  $("teams-card").style.display = rows.length ? "" : "none";
+  const sig = `${cur.id}|${id}|${rows.length}`;
+  if (!rows.length || sig === teamSig) return;
+  teamSig = sig;
+  const stamp = t => t ? new Date((t - clockSkew) * 1000).toLocaleTimeString() : "—";
+  $("teams").replaceChildren(
+    h("thead", {}, h("tr", {}, ["time", "team", "what", "", "where", "by"].map((x, i) => h("th", { class: i ? null : "num" }, x)))),
+    h("tbody", {}, [...rows].sort((a, b) => b.t - a.t).slice(0, 300).map(e => h("tr", {},
+      h("td", { class: "num" }, stamp(e.t)),
+      h("td", {}, h("span", { class: "dot", style: `background:${TEAM[e.team] || "var(--axis)"}` }), h("span", { class: "team" }, ` ${e.team || "?"}`)),
+      h("td", {}, e.what),
+      h("td", { class: "wrap" }, e.what === "command" ? h("code", {}, e.text) : e.text,
+        e.ok == null ? null : h("span", { class: "muted" }, e.ok ? " — worked" : " — failed")),
+      h("td", {}, e.where ? `${e.where}${e.via ? ` (from ${e.via})` : ""}` : "—"),
+      h("td", {}, e.who || "—")))));
+}
+
+// ── polling ─────────────────────────────────────────────────────────────────
+async function getJSON(url) { const r = await fetch(url, { cache: "no-store" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); }
+
+function select(id) {
+  if (id === cur.id) return;
+  cur = { id, since: 0 }; S = fresh(); selectedRun = null; gTime = null; setPlaying(false);
+  try { history.replaceState(null, "", `#${encodeURIComponent(id)}`); } catch (e) {}
+}
+
+async function pollLedgers() {
+  try {
+    const res = await getJSON("/api/ledgers");
+    clockSkew = res.now - Date.now() / 1000;
+    ledgers = res.ledgers;
+    const sel = $("ledger");
+    sel.replaceChildren(...ledgers.map(l => {
+      const st = (STATUS[l.status] || [null, l.status])[1];
+      const prog = l.kind === "campaign" ? ` · ${l.done}/${l.total}` : "";
+      return h("option", { value: l.id }, `${l.scenario || "run"} · ${l.kind === "campaign" ? "campaign" : "run"} ${l.name || l.id}${prog} · ${st}`);
+    }));
+    const want = cur.id || decodeURIComponent(location.hash.slice(1)) || ledgers[0]?.id;
+    if (want && ledgers.some(l => l.id === want)) { select(want); sel.value = want; }
+    else if (ledgers[0]) { select(ledgers[0].id); sel.value = ledgers[0].id; }
+  } catch (e) { /* server restarting: keep the last view */ }
+}
+
+async function pollEvents() {
+  if (!cur.id) return;
+  try {
+    const id = cur.id, res = await getJSON(`/api/events?id=${encodeURIComponent(id)}&since=${cur.since}`);
+    if (id !== cur.id) return;
+    if (res.next < cur.since) { S = fresh(); cur.since = 0; return; }
+    // An event the page cannot fold is skipped, not retried: retrying it would
+    // stall this ledger on it forever and re-apply the events before it.
+    for (const ev of res.events) {
+      try { apply(ev); } catch (e) { console.error("event", ev.seq, ev.kind, e); }
+    }
+    cur.since = res.next;
+  } catch (e) { /* keep the frame */ }
+}
+
+$("ledger").addEventListener("change", e => { select(e.target.value); pollEvents().then(render); });
+document.querySelectorAll("#g-tabs button").forEach(b => b.addEventListener("click", () => { gView = b.dataset.view; renderGraph(); }));
+$("g-time").addEventListener("input", e => {
+  const r = shownRun(); if (!r) return;
+  const T = runTime(r), t = T.t0 + (+e.target.value) / 10;
+  gTime = t >= T.edge - 0.05 ? null : t;
+  render();
+});
+$("g-live").addEventListener("click", () => { setPlaying(false); gTime = null; render(); });
+$("t-prev").addEventListener("click", () => { setPlaying(false); stepFact(-1); });
+$("t-next").addEventListener("click", () => { setPlaying(false); stepFact(1); });
+$("t-play").addEventListener("click", () => setPlaying(!playing));
+try { const sp = localStorage.getItem("platform-dash-speed"); if (sp) $("t-speed").value = sp; } catch (e) {}
+$("t-speed").addEventListener("change", e => { try { localStorage.setItem("platform-dash-speed", e.target.value); } catch (err) {} });
+// The keyboard moves the time too, except where keys already mean something
+// (a field, a list, a button the reader is on).
+document.addEventListener("keydown", e => {
+  const el = e.target, onSlider = el && el.id === "g-time";
+  if (!onSlider && el && el.closest && el.closest("input, select, textarea, button")) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault(); setPlaying(false);
+    const dir = e.key === "ArrowLeft" ? -1 : 1;
+    if (e.shiftKey) shiftTime(10 * dir); else stepFact(dir);
+  } else if (e.key === " " && !onSlider) { e.preventDefault(); setPlaying(!playing); }
+  else if (e.key === "End") { e.preventDefault(); setPlaying(false); gTime = null; render(); }
+});
+document.querySelectorAll("#board > .card").forEach(collapsible);
+$("theme").addEventListener("click", () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  try { localStorage.setItem("platform-dash-theme", document.documentElement.dataset.theme); } catch (e) {}
+});
+try { const th = localStorage.getItem("platform-dash-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
+window.addEventListener("resize", () => renderDetail());
+
+(async function loop() {
+  await pollLedgers(); await pollEvents(); render();
+  let tick = 0;
+  setInterval(async () => {
+    tick++;
+    if (tick % 5 === 0) await pollLedgers();
+    await pollEvents(); render();
+  }, 1000);
+})();
+</script>
+</body>
+</html>

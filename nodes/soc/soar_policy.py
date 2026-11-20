@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+"""soar_policy.py — response policies over the campaign state (soar_mapping's
+snapshot()).
+
+Copied flat onto the SOC node next to soc_analytics.py; stdlib only.
+
+Two policies with the same interface, ``decide(snapshot, t) -> Decision|None``:
+
+RulesPolicy   the static playbook (the MTM baseline of WP3): a fixed table from
+              *confirmed* impact leaves to countermeasures, each fired once.
+SolverPolicy  a first solver: picks the subset of countermeasures that
+              minimises expected loss (what stays, what is still possible,
+              what is suffered before an action bites) + weighted operational
+              and energy cost, by exhaustive enumeration (5 countermeasures ->
+              <= 32 subsets; 7 and 128 with the IT ones). Also returns the
+              Pareto front (risk vs disruption vs energy) for inspection.
+
+Every Decision carries its justification — the tree nodes each action covers
+and the cost terms — which is what "explainable decision coverage" counts.
+
+Countermeasures already applied stay in effect: both policies only ever add
+actions (reverting is an operator decision, out of scope for v0).
+"""
+
+import itertools
+from dataclasses import asdict, dataclass, field
+from typing import Optional
+
+import soar_mapping as mapping
+import soar_trees as trees
+
+# Plus "delay:<seconds>" and "operator:<seconds>", handled by the responder.
+APPROVAL_MODES = ("auto", "deny")
+
+
+@dataclass
+class Decision:
+    t: Optional[float]
+    policy: str
+    actions: list  # countermeasure ids, in execution order
+    covers: dict  # action -> {"prevents": [...], "restores": [...]}
+    cost_terms: dict
+    rationale: str
+    needs_approval: list = field(default_factory=list)
+    active_impacts: list = field(default_factory=list)
+    pareto: list = field(default_factory=list)
+
+    def to_dict(self):
+        return asdict(self)
+
+    @property
+    def explained(self):
+        """Every action names at least one covered node (notify excepted) and a
+        rationale is given."""
+        if not self.rationale:
+            return False
+        return all(
+            a == "notify"
+            or self.covers.get(a, {}).get("prevents")
+            or self.covers.get(a, {}).get("restores")
+            for a in self.actions
+        )
+
+
+def impact_nodes(tree):
+    """The ids of ``tree``'s impact steps (by kind: the step may recur)."""
+    return [n.id for n in tree.walk() if (n.kind or n.id) in mapping.IMPACT_LEAVES]
+
+
+class _Base:
+    name = "base"
+
+    def __init__(self, countermeasures, allowed=None, tree=None):
+        self.tree = tree
+        self.impacts = impact_nodes(tree) if tree is not None else list(mapping.IMPACT_LEAVES)
+        self.cms = {c.id: c for c in countermeasures}
+        self.allowed = set(allowed) if allowed is not None else set(self.cms)
+        self.applied = set()  # countermeasures already in effect
+        self.declined = set()  # turned down by an operator: not proposed again
+        self.notified = False
+
+    def mark_applied(self, ids, by_hand=False):
+        """Countermeasures now in effect. One an operator applied ``by_hand``
+        after turning it down is theirs to change their mind about: it may be
+        proposed again."""
+        self.applied.update(ids)
+        if by_hand:
+            self.allowed.update(self.declined.intersection(ids))
+            self.declined.difference_update(ids)
+
+    def mark_withdrawn(self, ids, declined=False):
+        """Countermeasures proposed that will not run after all: an operator
+        turned them down, or never answered. They leave ``applied``, so the
+        policy stops counting on their effect. A ``declined`` one is not
+        proposed again (until the operator applies it by hand, see
+        mark_applied); one that merely lapsed may be, on new evidence."""
+        self.applied.difference_update(ids)
+        if declined:
+            self.declined.update(self.allowed.intersection(ids))
+            self.allowed.difference_update(ids)
+
+    def _order(self, ids):
+        return sorted(ids, key=lambda a: (self.cms[a].order, a))
+
+    def _covers(self, ids, nodes):
+        # What each action addresses: believed nodes it prevents/restores, plus
+        # the impact leaves it pre-emptively guards (a block before the plant is
+        # touched is justified by the impact it prevents, even if not yet seen).
+        relevant = set(nodes) | set(self.impacts)
+        out = {}
+        for a in ids:
+            cm = self.cms[a]
+            out[a] = {
+                "prevents": [n for n in cm.prevents if n in relevant],
+                "restores": [n for n in cm.restores if n in relevant],
+            }
+        return out
+
+    def _notify(self, snapshot, t, why):
+        # Once a countermeasure is in effect the operator already knows.
+        if self.notified or self.applied or not snapshot["nodes"]:
+            return None
+        self.notified = True
+        return Decision(
+            t,
+            self.name,
+            ["notify"],
+            {"notify": {"prevents": [], "restores": []}},
+            {},
+            why,
+            active_impacts=list(snapshot["active_impacts"]),
+        )
+
+
+class RulesPolicy(_Base):
+    """Static playbook: confirmed step -> fixed kinds of countermeasure, each
+    taken where it acts on that step."""
+
+    name = "rules"
+    # Step kind -> countermeasure kinds (attack_graph.py).
+    PLAYBOOK = {
+        # Early IT steps (observed only with the IT sensor): stop the foothold
+        # and pre-emptively block the pivot before the plant is touched.
+        "it_access": ["block_web_src"],
+        "it_exec": ["kill_proc_tree", "block_flow"],
+        # Impact leaves (OT sensor): block the flow and undo the effect.
+        "setpoint_oor": ["block_flow"],  # the PLC rejects the value and recovers
+        "breaker_open": ["block_flow", "restore_breaker"],
+        "mode_hijack": ["block_flow", "force_auto"],
+        "setpoint_ramp": ["block_flow", "force_auto"],
+        "setpoint_oscillation": ["block_flow", "force_auto"],
+        "breaker_chatter": ["block_flow", "restore_breaker"],
+        # Between the PLC and the plant: take the host that stands there off the
+        # OT link, at the position already, before a reading is falsified.
+        "ot_aitm": ["isolate_ot_host", "repair_arp"],
+        "meas_fdi": ["isolate_ot_host", "repair_arp"],
+    }
+    TRIGGERS = ["it_access", "it_exec", "ot_aitm"] + list(mapping.IMPACT_LEAVES)
+
+    def _kind(self, n):
+        node = trees.index(self.tree).get(n) if self.tree is not None else None
+        return (node.kind if node is not None and node.kind else None) or n
+
+    def _instances(self, cm_kind, node):
+        """The countermeasures of ``cm_kind`` that act on ``node``; failing
+        that, those that act on its way in (a block ahead of the pivot)."""
+        of_kind = [c for c in self.cms.values() if (c.kind or c.id) == cm_kind]
+        on_node = [c.id for c in of_kind if node in c.prevents or node in c.restores]
+        if on_node or self.tree is None:
+            return on_node
+        par = trees.parents(self.tree)
+        way = node
+        while way in par and par[way].id != self.tree.id:
+            way = par[way].id
+        on_way = {n.id for n in trees.index(self.tree)[way].walk()}
+        return [c.id for c in of_kind if on_way & (set(c.prevents) | set(c.restores))]
+
+    def decide(self, snapshot, t=None):
+        nodes = snapshot["nodes"]
+        ordered = [n.id for n in self.tree.walk()] if self.tree is not None else self.TRIGGERS
+        confirmed = [
+            n
+            for n in ordered
+            if self._kind(n) in self.TRIGGERS and nodes.get(n, {}).get("state") == mapping.CONFIRMED
+        ]
+        confirmed.sort(key=lambda n: self.TRIGGERS.index(self._kind(n)))
+        if not confirmed:
+            return self._notify(
+                snapshot,
+                t,
+                "suspicious activity below the confirmation "
+                "threshold: operator notified, no automatic action",
+            )
+        want, chosen = [], {}
+        for node in confirmed:
+            chosen[node] = [
+                a for k in self.PLAYBOOK.get(self._kind(node), []) for a in self._instances(k, node)
+            ]
+            for a in chosen[node]:
+                if a not in want:
+                    want.append(a)
+        new = [a for a in want if a not in self.applied and a in self.allowed]
+        if not new:
+            return None
+        new = self._order(new)
+        rationale = "; ".join(
+            f"{node} confirmed ({', '.join(nodes[node]['classes'])}) -> {', '.join(chosen[node])}"
+            for node in confirmed
+        )
+        return Decision(
+            t,
+            self.name,
+            new,
+            self._covers(new, nodes),
+            {},
+            rationale,
+            needs_approval=[a for a in new if self.cms[a].requires_approval],
+            active_impacts=[n for n in confirmed if n in self.impacts],
+        )
+
+
+@dataclass
+class Weights:
+    op: float = 1.0  # operational disruption
+    time: float = 0.05  # share of a covered loss suffered per second until the action bites
+    energy: float = 0.5
+
+
+class SolverPolicy(_Base):
+    """Expected-loss minimisation over countermeasure subsets."""
+
+    name = "solver"
+
+    def __init__(self, countermeasures, tree, weights=None, allowed=None, approval_delay_s=0.0):
+        super().__init__(countermeasures, allowed, tree)
+        self.w = weights or Weights()
+        # How long a countermeasure that needs approval waits before it runs.
+        self.approval_delay_s = float(approval_delay_s)
+        self.impact = {n.id: n.impact for n in tree.walk() if n.impact > 0}
+        self.gateways = self._gateways(tree, self.impacts)
+
+    @staticmethod
+    def _gateways(tree, impacts):
+        """{step: impact leaves behind it}: the last step before each impact,
+        i.e. the sibling just before it (or before the gate that holds it) under
+        the nearest AND. Holding that step is holding the way to those impacts."""
+        parent, out = trees.parents(tree), {}
+        for leaf in impacts:
+            node = trees.index(tree).get(leaf)
+            while node is not None and node.id in parent:
+                up = parent[node.id]
+                at = up.children.index(node)
+                if up.gate == trees.AND and at > 0:
+                    out.setdefault(up.children[at - 1].id, []).append(leaf)
+                    break
+                node = up
+        return out
+
+    def _late(self, actions):
+        """Share of a loss still suffered when the quickest of ``actions``
+        takes effect: its own time, and the wait for its approval. Never more
+        than the whole loss, so that acting late is not worse than not acting."""
+        delay = min(
+            self.cms[a].time_to_effect_s
+            + (self.approval_delay_s if self.cms[a].requires_approval else 0.0)
+            for a in actions
+        )
+        return min(1.0, self.w.time * delay)
+
+    # J(A) = residual + future + time + w.op*op + w.energy*energy
+    def cost(self, subset, scores):
+        A = set(subset) | self.applied
+        restored = {n for a in A for n in self.cms[a].restores}
+        prevented = {n for a in A for n in self.cms[a].prevents}
+        # Impact already achieved (or under way) that nothing undoes.
+        residual = sum(
+            scores.get(n, 0.0) * imp
+            for n, imp in self.impact.items()
+            if n in self.impacts and n not in restored
+        )
+        # The attacker still holds a path: further manipulation is possible
+        # unless the path or the manipulations behind it are prevented.
+        future = 0.0
+        for gateway, behind in self.gateways.items():
+            if gateway in prevented:
+                continue
+            exposure = max((self.impact[n] for n in behind if n not in prevented), default=0.0)
+            future += scores.get(gateway, 0.0) * exposure
+        new = [a for a in subset if a not in self.applied]
+        # What the new actions take away is taken away only once they bite:
+        # until then the impact they restore stands and the path they cut is
+        # open. Charged where the terms above credit an action in full, on the
+        # impacts restored and on the paths cut.
+        held_r = {n for a in self.applied for n in self.cms[a].restores}
+        held_p = {n for a in self.applied for n in self.cms[a].prevents}
+        time = sum(
+            scores.get(n, 0.0) * imp * self._late([a for a in new if n in self.cms[a].restores])
+            for n, imp in self.impact.items()
+            if n in self.impacts and n in restored and n not in held_r
+        )
+        for gateway, behind in self.gateways.items():
+            if gateway in prevented and gateway not in held_p:
+                by = [a for a in new if gateway in self.cms[a].prevents]
+                exposure = max(self.impact[n] for n in behind)
+                time += scores.get(gateway, 0.0) * exposure * self._late(by)
+        # A function two actions both cut is lost once: an action costs what it
+        # cuts beyond what is already cut, and what running it disturbs.
+        held = {f for a in self.applied for f in self.cms[a].cuts}
+        cut = held | {f for a in new for f in self.cms[a].cuts}
+        op = trees.disruption(cut) - trees.disruption(held) + sum(self.cms[a].op_cost for a in new)
+        energy = sum(self.cms[a].energy_cost for a in new)
+        total = residual + future + time + self.w.op * op + self.w.energy * energy
+        return {
+            "residual": round(residual, 4),
+            "future": round(future, 4),
+            "op": round(op, 4),
+            "time": round(time, 4),
+            "energy": round(energy, 4),
+            "total": round(total, 4),
+        }
+
+    def candidates(self):
+        pool = [
+            a for a in self.cms if a != "notify" and a in self.allowed and a not in self.applied
+        ]
+        for k in range(len(pool) + 1):
+            yield from itertools.combinations(sorted(pool), k)
+
+    def unpaired_restores(self, subset, scores):
+        """Causal pairing (from the attack-defense tree): restoring an impact
+        leaf the policy believes in, without preventing the leaf or one of the
+        steps that lead to it, only undoes the effect and leaves the cause in
+        place. Early restores also suppress the voltage evidence that would
+        later raise the belief in the path, so the path would never be cut.
+        Returns the leaves restored without such a prevention — only those for
+        which some allowed countermeasure could provide it."""
+        A = set(subset) | self.applied
+        restored = {n for a in A for n in self.cms[a].restores}
+        prevented = {n for a in A for n in self.cms[a].prevents}
+        preventable = {n for a in self.allowed for n in self.cms[a].prevents}
+        out = []
+        for leaf in sorted(restored):
+            if leaf not in self.impacts or scores.get(leaf, 0.0) <= 0.0:
+                continue
+            path = [leaf] + trees.prerequisites(self.tree, leaf)
+            if any(n in prevented for n in path):
+                continue
+            if any(n in preventable for n in path):
+                out.append(leaf)
+        return out
+
+    def decide(self, snapshot, t=None):
+        nodes = snapshot["nodes"]
+        if not nodes:
+            return None
+        scores = {n: v["score"] for n, v in nodes.items()}
+        evaluated = [
+            (subset, self.cost(subset, scores))
+            for subset in self.candidates()
+            if not self.unpaired_restores(subset, scores)
+        ]
+        best, best_cost = min(evaluated, key=lambda x: (x[1]["total"], len(x[0]), x[0]))
+        # Was the pairing binding? (the unconstrained optimum restored alone)
+        free = min(
+            ((s, self.cost(s, scores)) for s in self.candidates()),
+            key=lambda x: (x[1]["total"], len(x[0]), x[0]),
+        )
+        paired = self.unpaired_restores(free[0], scores)
+        if not best:
+            return self._notify(
+                snapshot,
+                t,
+                "no countermeasure is worth its cost at the "
+                f"current belief (J={best_cost['total']}): operator notified",
+            )
+        new = self._order(best)
+        idle = self.cost((), scores)
+        rationale = (
+            f"chosen {'+'.join(new)}: J {idle['total']} -> {best_cost['total']} "
+            f"(residual {idle['residual']}->{best_cost['residual']}, "
+            f"future {idle['future']}->{best_cost['future']}, "
+            f"late +{best_cost['time']}, op +{best_cost['op']}, energy +{best_cost['energy']}); "
+            "beliefs "
+            + ", ".join(
+                f"{n}={scores[n]}" for n in list(self.impacts) + list(self.gateways) if n in scores
+            )
+        )
+        if paired:
+            rationale += (
+                f"; causal pairing: restoring {', '.join(paired)} also requires "
+                f"cutting its path (cheapest alone was {'+'.join(free[0])}, "
+                f"J={free[1]['total']})"
+            )
+        return Decision(
+            t,
+            self.name,
+            new,
+            self._covers(new, nodes),
+            best_cost,
+            rationale,
+            needs_approval=[a for a in new if self.cms[a].requires_approval],
+            active_impacts=list(snapshot["active_impacts"]),
+            pareto=pareto_front(evaluated),
+        )
+
+
+def pareto_front(evaluated):
+    """Non-dominated subsets on (risk = residual + future + time, op, energy)."""
+    pts = [
+        (list(s), round(c["residual"] + c["future"] + c["time"], 4), c["op"], c["energy"])
+        for s, c in evaluated
+    ]
+    front = []
+    for i, (s, r, o, e) in enumerate(pts):
+        dominated = any(
+            (r2 <= r and o2 <= o and e2 <= e) and (r2, o2, e2) != (r, o, e)
+            for j, (_s2, r2, o2, e2) in enumerate(pts)
+            if j != i
+        )
+        if not dominated:
+            front.append({"actions": s, "risk": r, "op": o, "energy": e})
+    return sorted(front, key=lambda p: (p["risk"], p["op"]))
+
+
+def make_policy(kind, countermeasures, tree, approval="auto", weights=None, approval_delay_s=0.0):
+    """'rules' | 'solver'. With approval 'deny', countermeasures that need an
+    operator's approval are never proposed. ``approval_delay_s`` is how long
+    the others wait for theirs, which the solver counts against them."""
+    allowed = {c.id for c in countermeasures if not (approval == "deny" and c.requires_approval)}
+    if kind == "rules":
+        return RulesPolicy(countermeasures, allowed=allowed, tree=tree)
+    if kind == "solver":
+        return SolverPolicy(
+            countermeasures,
+            tree,
+            weights=weights,
+            allowed=allowed,
+            approval_delay_s=approval_delay_s,
+        )
+    raise ValueError(f"unknown policy {kind!r}")

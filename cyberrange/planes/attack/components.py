@@ -1,0 +1,682 @@
+"""components.py — attack plane building blocks (see cyberrange/core).
+
+Every attack records what it really did in the run's ground truth (host-only):
+
+    VulnApp              the deliberately vulnerable diagnostics web app (CPS foothold)
+    EwsMaintenance       the workstation's maintenance service, its credential on the HMI
+    ScriptedChain        fixed per-mode chain: RCE -> pivot -> unauthorized Modbus writes
+    PlannedAttacker      reactive, tree-guided attacker, run in the lab (red_agent.py)
+    RedConsole           the same steps, run by a person from a console on the attacker
+    PassiveFingerprinter sniff -> CNN fingerprint of the nanogrid -> pick the IP to block
+    DeliveryAttack       blackhole episodes + benign faults (cyberrange/detection_scenario)
+
+Attack components that act during a phase expose ``attack(ctx)`` (blocking);
+the scenario calls it inside its attack phase.
+"""
+
+import base64
+import json
+import logging
+import os
+import threading
+
+from cyberrange.planes.attack import active_attack
+from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetryCursor, tail_reader
+
+log = logging.getLogger("cyberrange.planes.attack.components")
+
+PLANE = "attack"
+
+
+# ── cyber-physical ────────────────────────────────────────────────────────────
+class VulnApp(GuestAgent):
+    """The diagnostics web app with a command injection; ``access_log`` makes
+    its requests observable to the IT sensor."""
+
+    SCRIPT = "vuln_app.py"  # names the process a shell got through it descends from
+
+    def __init__(self, node, port, access_log=None):
+        access = f" --access-log {access_log}" if access_log else ""
+        arts = (
+            [Artifact(node, access_log, f"{node}.{os.path.basename(access_log)}")]
+            if access_log
+            else []
+        )
+        super().__init__(
+            node,
+            f"python3 {self.SCRIPT} --host 0.0.0.0 --port {port}{access}",
+            "vuln_app.log",
+            plane=PLANE,
+            name="vuln_app",
+            artifacts=arts,
+        )
+
+
+class EwsMaintenance(GuestAgent):
+    """The engineering workstation's remote-maintenance service, and the
+    credential for it in a configuration file on each of ``clients`` — the
+    hosts its operators work from, as [(name, address, the service's URL as that
+    host reaches it)]. Whoever executes code on one of them can read it: that is
+    the way onto the workstation, and from there onto the OT link."""
+
+    SCRIPT = "ews_maint.py"
+    CONF = "/etc/ews-maint.conf"  # exploit_client.MAINT_CONF reads it
+    ACCESS_LOG = "/ews_maint.access.jsonl"
+    MITM_LOG = "/ot_mitm.jsonl"  # left by ot_mitm.py when the attack stands in the middle
+
+    def __init__(self, node, port, clients, token):
+        self.clients, self.token = list(clients), token
+        allow = " ".join(f"--allow {ip}" for _name, ip, _url in self.clients)
+        super().__init__(
+            node,
+            f"python3 {self.SCRIPT} --port {port} --token {token} {allow} "
+            f"--access-log {self.ACCESS_LOG}",
+            "ews_maint.log",
+            plane=PLANE,
+            name="ews_maint",
+            artifacts=[
+                Artifact(node, self.ACCESS_LOG, f"{node}.{os.path.basename(self.ACCESS_LOG)}"),
+                Artifact(node, self.MITM_LOG, f"{node}.{os.path.basename(self.MITM_LOG)}"),
+            ],
+        )
+
+    def start(self, ctx):
+        for name, _ip, url in self.clients:
+            conf = f"url={url}\\ntoken={self.token}\\n"
+            ctx.run(name, f"sh -c \"printf '{conf}' > {self.CONF}\"", wait=True)
+        super().start(ctx)
+
+
+def emit_attack_writes(ctx):
+    """Put the attack's Modbus writes (from the ground truth) on the ledger."""
+    try:
+        with open(ctx.gt.path) as f:
+            for line in f:
+                ev = json.loads(line)
+                if ev.get("kind") == "modbus_write":
+                    ctx.emit(
+                        "attack_write",
+                        unit=ev.get("unit"),
+                        register=ev.get("register"),
+                        register_name=ev.get("register_name"),
+                        value=ev.get("value"),
+                        ok=ev.get("ok"),
+                        write_t=ev.get("t"),
+                    )
+    except Exception as e:
+        log.debug("could not replay ground truth: %s", e)
+
+
+def observed(phases):
+    """What a step's own output told the attacker: the lines it printed about
+    itself, reduced to what the dashboard's attacker column shows."""
+    out, writes = {}, []
+    for p in phases or []:
+        if p.get("phase") == "modbus_write":
+            reg = p.get("register")
+            writes.append(
+                {
+                    "unit": p.get("unit"),
+                    "register_name": active_attack.REGISTER_NAMES.get(reg, reg),
+                    "value": p.get("value"),
+                    "ok": p.get("ok"),
+                }
+            )
+            continue
+        for k in ("whoami", "detail"):
+            if p.get(k) is not None:
+                out[k] = p[k]
+    if writes:
+        out["writes"] = writes
+    return out
+
+
+class _ExploitDriver(Component):
+    """An attack driven from ``node``, the attacker's machine. ``target_url`` is
+    the application of host ``via``, its way in; ``unit`` the feeder of the
+    plant (``plant_b64``) it acts on — both None for an attacker free to choose,
+    or in a lab with one of each."""
+
+    plane = PLANE
+
+    def __init__(
+        self,
+        target_url,
+        engine_ip,
+        engine_port,
+        interval=0.5,
+        node="attacker",
+        via=None,
+        unit=None,
+        plant_b64=None,
+    ):
+        self.target_url, self.engine_ip, self.engine_port = target_url, engine_ip, engine_port
+        self.interval, self.node = interval, node
+        self.via, self.unit, self.plant_b64 = via, unit, plant_b64
+
+    def artifacts(self):
+        return [Artifact(self.node, "/exploit.log", f"{self.node}.exploit.log")]
+
+
+class ScriptedChain(_ExploitDriver):
+    """The fixed chain of one attack mode (exploit_client.py --attack MODE)."""
+
+    name = "scripted_chain"
+
+    def __init__(
+        self,
+        mode,
+        target_url,
+        engine_ip,
+        engine_port,
+        repeat=None,
+        interval=0.5,
+        node="attacker",
+        **where,
+    ):
+        super().__init__(target_url, engine_ip, engine_port, interval, node, **where)
+        self.mode, self.repeat = mode, repeat
+
+    @property
+    def label(self):
+        return self.mode
+
+    def attack(self, ctx):
+        rc = active_attack.drive_attack(
+            ctx.manager,
+            ctx.machine(self.node),
+            ctx.gt,
+            target_url=self.target_url,
+            engine_ip=self.engine_ip,
+            engine_port=self.engine_port,
+            attack_mode=self.mode,
+            repeat=self.repeat,
+            interval=self.interval,
+            unit=self.unit,
+            plant=self.plant_b64,
+            via=self.via,
+        )
+        emit_attack_writes(ctx)
+        return rc
+
+
+class PlannedAttacker(_ExploitDriver):
+    """A reactive attacker choosing each step on an attack tree of the lab, by
+    profile (opportunistic | targeted | stealthy). The planner runs in the lab
+    (nodes/redteam/red_agent.py): this component launches it with the tree as
+    data and reconstructs the ground truth from the record it leaves, so the
+    oracle stays off the lab and the DPI sensor never sees it. ``ways`` are the
+    tree's ways in ({host: the URL of its application}); ``via`` and ``unit``
+    keep the attacker to one of them and to one feeder."""
+
+    name = "planned_attacker"
+    RECORD = "/red_actions.jsonl"
+    LOG = "/red_agent.log"
+
+    def __init__(
+        self,
+        profile,
+        target_url,
+        engine_ip,
+        engine_port,
+        goal=None,
+        dwell=0.0,
+        max_steps=12,
+        interval=0.5,
+        tree=None,
+        node="attacker",
+        ways=None,
+        **where,
+    ):
+        super().__init__(target_url, engine_ip, engine_port, interval, node, **where)
+        self.profile, self.goal, self.dwell, self.max_steps = profile, goal, dwell, max_steps
+        self.ways = dict(ways or {})
+        # ctx -> the attack tree as a document (tree_doc). The scenario supplies
+        # it: which tree describes a lab is the scenario's knowledge, and the
+        # attacker reads a document, never the defender's code.
+        self.tree = tree
+        # The record is read twice over: live by poll() on the live-poll thread,
+        # and to its end once the agent exits. One cursor behind one lock, so
+        # each row reaches the ground truth and the ledger exactly once.
+        self._cursor, self._lock = None, threading.Lock()
+        self._seen = set()
+        self._summary = {"success": False, "stage_reached": "none", "writes_ok": 0}
+
+    @property
+    def label(self):
+        return f"planner:{self.profile}"
+
+    def artifacts(self):
+        return [
+            Artifact(self.node, self.LOG, f"{self.node}.red_agent.log"),
+            Artifact(self.node, self.RECORD, f"{self.node}.red_actions.jsonl"),
+        ]
+
+    def attack(self, ctx):
+        tree_b64 = base64.b64encode(json.dumps(self.tree(ctx)).encode()).decode()
+        goal = f"--goal {self.goal} " if self.goal else ""
+        seed = f"--seed {ctx.seed} " if ctx.seed is not None else ""
+        where = "".join(f"--way {host}={url} " for host, url in self.ways.items())
+        where += f"--via {self.via} " if self.via else ""
+        where += f"--unit {self.unit} " if self.unit is not None else ""
+        where += f"--plant-b64 {self.plant_b64} " if self.plant_b64 else ""
+        cmd = (
+            f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 red_agent.py '
+            f"--tree-b64 {tree_b64} --profile {self.profile} {goal}{seed}{where}"
+            f"--dwell {self.dwell} --max-steps {self.max_steps} "
+            f"--target-url {self.target_url} --engine-ip {self.engine_ip} "
+            f"--engine-port {self.engine_port} --interval {self.interval} "
+            f'--record {self.RECORD} 2>&1 | tee {self.LOG}"'
+        )
+        log.info("[Attack] autonomous red agent (planner:%s) on %s", self.profile, self.node)
+        # Blocks until the in-lab agent exits; then its record is the only source
+        # of truth about what it did (the planner decided in the lab, not here).
+        out, _err, rc = ctx.run(self.node, cmd, wait=True)
+        return self._reconstruct(ctx, rc, (out or b"").decode(errors="replace"))
+
+    def poll(self, ctx):
+        # The agent appends a row per step: each is on the dashboard while the
+        # attack runs, not in one burst when it ends.
+        if ctx.gt is not None:
+            self._drain(ctx)
+
+    def _drain(self, ctx):
+        """Record every row of the agent's record not recorded yet."""
+        with self._lock:
+            if self._cursor is None:
+                self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.RECORD))
+            for row in self._cursor.poll():
+                self._seen.add(row.get("kind"))
+                self._record_row(ctx, row, self._summary)
+
+    def _reconstruct(self, ctx, rc, output):
+        """Finish replaying the agent's record into the ground truth and the
+        ledger (attack_start, its plans, per-step plan_step, the Modbus writes,
+        the foothold, attack_end): what the live poll has not read yet. ``rc``
+        and ``output`` are the agent's own, to report a record that is missing
+        or cut short."""
+        summary = self._summary
+        if ctx.gt is None:
+            return summary
+        self._drain(ctx)
+        seen = self._seen
+        tail = output[-500:].strip()
+        if "attack_start" not in seen:
+            # A run asked to attack whose ground truth holds no attack is scored
+            # as a quiet one, every finding a false alarm: fail it instead.
+            raise RuntimeError(f"the red agent left no record on {self.node} (rc={rc}): {tail}")
+        if "attack_end" not in seen:
+            # The agent died mid-attack. What it did is on record; the attack is
+            # closed here, or the metrics would find no outcome for it.
+            log.warning("red agent stopped before its attack_end (rc=%s): %s", rc, tail)
+            ctx.gt.record("attack_end", mode=self.label, aborted=True, **summary)
+        return summary
+
+    def _record_row(self, ctx, row, summary):
+        kind = row.get("kind")
+        if kind == "attack_start":
+            ctx.gt.record(
+                "attack_start",
+                t=row.get("t"),
+                mode=row.get("mode"),
+                target_url=row.get("target_url"),
+                via=row.get("via"),
+                unit=row.get("unit"),
+                engine_ip=row.get("engine_ip"),
+                engine_port=row.get("engine_port"),
+                goal=row.get("goal"),
+                dwell=row.get("dwell"),
+            )
+            ctx.emit(
+                "attack_start",
+                guest_t=row.get("t"),
+                mode=row.get("mode"),
+                profile=row.get("profile"),
+                goal=row.get("goal"),
+                dwell=row.get("dwell"),
+            )
+        elif kind == "attack_plan":
+            # What the attacker knows and intends, not something it did: on the
+            # ledger for the dashboard, not in the ground truth.
+            plan = ("target", "sequence", "candidates", "blocked", "reason")
+            ctx.emit("attack_plan", guest_t=row.get("t"), **{k: row.get(k) for k in plan})
+        elif kind == "plan_step":
+            keys = ("node", "step_kind", "via", "unit", "stage", "attck", "ok")
+            entry = {k: row.get(k) for k in (*keys, "chosen_among", "target", "writes")}
+            ctx.gt.record("plan_step", t=row.get("t"), mode=row.get("mode"), **entry)
+            ctx.emit(
+                "plan_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **entry
+            )
+            # Steps succeed in stage order, so the last one that did is how far
+            # the attack got, should the agent never report its end.
+            if row.get("ok"):
+                summary["stage_reached"] = row.get("stage")
+            summary["writes_ok"] += int(row.get("writes") or 0)
+            for e in row.get("phases") or []:
+                if e.get("phase") != "modbus_write":
+                    continue
+                write = dict(
+                    unit=e.get("unit"),
+                    register=e.get("register"),
+                    register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
+                    value=e.get("value"),
+                    ok=e.get("ok"),
+                )
+                ctx.gt.record(
+                    "modbus_write",
+                    t=e.get("t_send", e.get("t")),
+                    mode=row.get("mode"),
+                    attempt=e.get("attempt"),
+                    source="pivot",
+                    unauthorized=True,
+                    **write,
+                )
+                ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
+            # By stage, which is the step's kind: a lab with several ways in
+            # has the access step under an id of its own on each.
+            foothold = active_attack.STAGE_TO_GT.get(row.get("stage"))
+            if foothold and row.get("ok"):
+                ctx.gt.record(foothold, t=row.get("t"), mode=row.get("mode"))
+        elif kind == "attack_end":
+            ctx.gt.record(
+                "attack_end",
+                t=row.get("t"),
+                mode=row.get("mode"),
+                success=row.get("success"),
+                stage_reached=row.get("stage_reached"),
+                writes_ok=row.get("writes_ok"),
+            )
+            summary.update(
+                success=bool(row.get("success")),
+                stage_reached=row.get("stage_reached"),
+                writes_ok=row.get("writes_ok", 0),
+            )
+            ctx.emit("attack_end", guest_t=row.get("t"), **summary)
+
+
+class ReconAttacker(PlannedAttacker):
+    """An attacker that is NOT handed the tree: it derives it by reconnaissance
+    (nodes/redteam/red_recon_agent.py) — nmap on its own box for the IT side, then
+    living off the land on the compromised HMI for the OT side — builds a belief
+    tree and plans on it. Given only a scan scope, never the target's structure.
+
+    Reuses PlannedAttacker's ground-truth reconstruction; it adds the ``recon``
+    events (what it discovered) and the belief tree as an artifact. The oracle
+    stays off the lab: the host reconstructs the truth from the agent's record."""
+
+    name = "recon_attacker"
+    LOG = "/red_recon_agent.log"
+    BELIEF = "/belief_tree.json"
+
+    def __init__(
+        self, profile, it_cidr, scan_ports="22,80,502,5020,8080", goal=None, dwell=0.0,
+        max_steps=12, interval=0.5, node="attacker"
+    ):  # fmt: skip
+        # target_url / engine are discovered in the lab, not given: the host only
+        # launches the agent and reconstructs what it recorded.
+        super().__init__(
+            profile, "", "", 0, goal=goal, dwell=dwell, max_steps=max_steps, interval=interval,
+            node=node,
+        )  # fmt: skip
+        self.it_cidr, self.scan_ports = it_cidr, scan_ports
+
+    @property
+    def label(self):
+        return f"recon:{self.profile}"
+
+    def artifacts(self):
+        return super().artifacts() + [
+            Artifact(self.node, self.BELIEF, f"{self.node}.belief_tree.json")
+        ]
+
+    def attack(self, ctx):
+        goal = f"--goal {self.goal} " if self.goal else ""
+        seed = f"--seed {ctx.seed} " if ctx.seed is not None else ""
+        cmd = (
+            f'bash -c "set -o pipefail; PYTHONUNBUFFERED=1 python3 red_recon_agent.py '
+            f"--it-cidr {self.it_cidr} --scan-ports {self.scan_ports} --profile {self.profile} "
+            f"{goal}{seed}--dwell {self.dwell} --max-steps {self.max_steps} "
+            f"--interval {self.interval} --record {self.RECORD} --belief-out {self.BELIEF} "
+            f'2>&1 | tee {self.LOG}"'
+        )
+        log.info("[Attack] recon-driven red agent (recon:%s) on %s", self.profile, self.node)
+        out, _err, rc = ctx.run(self.node, cmd, wait=True)
+        return self._reconstruct(ctx, rc, (out or b"").decode(errors="replace"))
+
+    def _record_row(self, ctx, row, summary):
+        if row.get("kind") == "recon":
+            fields = dict(
+                stage=row.get("stage"),
+                foothold=row.get("foothold"),
+                engine_ip=row.get("engine_ip"),
+                modbus_ok=row.get("modbus_ok"),
+            )
+            ctx.gt.record("recon", t=row.get("t"), **fields)
+            # The dashboard shows what recon found in full: what the attacker
+            # knows of the target is the point of this scenario.
+            found = dict(
+                hosts=row.get("hosts"),
+                modbus_port=row.get("modbus_port"),
+                registers=row.get("registers"),
+            )
+            ctx.emit("recon", guest_t=row.get("t"), **fields, **found)
+            return
+        if row.get("kind") == "belief":
+            ctx.emit("attacker_belief", guest_t=row.get("t"), tree=row.get("tree"))
+            return
+        super()._record_row(ctx, row, summary)
+
+
+class RedConsole(GuestAgent):
+    """The red team's console on the attacker node (nodes/redteam/red_console.py):
+    a person runs the attack's steps one at a time. The console is given the
+    attack ``tree`` as data and builds its executable steps in the lab
+    (red_steps.build_steps), the same registry the autonomous planner reads.
+
+    What they run is the attack, so it is this component that writes the
+    ground truth: it follows the console's record and turns every step into
+    what a driven attack would have recorded — attack_start at the first one,
+    the Modbus writes, the foothold — plus the step itself."""
+
+    RECORD = "/red_actions.jsonl"
+    MODE = "manual"
+
+    def __init__(
+        self,
+        node,
+        port,
+        token,
+        tree,
+        target_url,
+        engine_ip,
+        engine_port,
+        interval=0.5,
+        terminal=None,
+        ways=None,
+        plant_b64=None,
+    ):
+        packed = base64.b64encode(json.dumps(tree).encode()).decode()
+        where = "".join(f" --way {host}={url}" for host, url in (ways or {}).items())
+        where += f" --plant-b64 {plant_b64}" if plant_b64 else ""
+        super().__init__(
+            node,
+            f"python3 red_console.py --port {port} --token {token} --tree-b64 {packed} "
+            f"--target-url {target_url} --engine-ip {engine_ip} --engine-port {engine_port} "
+            f"--interval {interval}{where}" + (f" --terminal {terminal}" if terminal else ""),
+            "red_console.log",
+            plane=PLANE,
+            name="red_console",
+            artifacts=[Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")],
+        )
+        self._cursor = None
+        self._started = False
+
+    def poll(self, ctx):
+        if ctx.gt is None:
+            return  # nothing may be lost: the steps are read once the truth is open
+        if self._cursor is None:
+            self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.RECORD))
+        for row in self._cursor.poll():
+            if row.get("kind") != "red_step":
+                continue
+            if not self._started:
+                self._started = True
+                ctx.gt.record("attack_start", t=row.get("t"), mode=self.MODE)
+            step = dict(step=row.get("step"), ok=row.get("ok"), operator=row.get("operator"))
+            ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
+            ctx.emit(
+                "red_step",
+                guest_t=row.get("t"),
+                stage=row.get("stage"),
+                observed=observed(row.get("phases")),
+                **step,
+            )
+            for e in row.get("phases") or []:
+                if e.get("phase") != "modbus_write":
+                    continue
+                write = dict(
+                    unit=e.get("unit"),
+                    register=e.get("register"),
+                    register_name=active_attack.REGISTER_NAMES.get(e.get("register")),
+                    value=e.get("value"),
+                    ok=e.get("ok"),
+                )
+                ctx.gt.record(
+                    "modbus_write",
+                    t=e.get("t_send", e.get("t")),
+                    mode=self.MODE,
+                    attempt=e.get("attempt"),
+                    source="pivot",
+                    unauthorized=True,
+                    **write,
+                )
+                ctx.emit("attack_write", write_t=e.get("t_send", e.get("t")), **write)
+            kind = active_attack.STAGE_TO_GT.get(row.get("stage"))
+            if kind and row.get("ok"):
+                ctx.gt.record(kind, t=row.get("t"), mode=self.MODE)
+
+
+# ── MQTT smart grid ───────────────────────────────────────────────────────────
+BLOCK_POLICIES = ("top1", "threshold")
+
+
+def detect_nanogrid_ip(pcap_path, model_path, scaler_path, block_policy="top1", threshold=None):
+    """Score a capture with the trained CNN and rank source IPs by how
+    nanogrid-like their traffic is, then pick the IP to block.
+
+    top1       always block the top-ranked IP, whatever its score (the
+               behaviour the workshop paper's results were produced with);
+    threshold  block it only if its nanogrid_frac >= threshold.
+
+    Returns (top_ip, ranking): ranking is rank_nanogrid_ips' per-IP DataFrame
+    (indexed by src_ip, sorted by nanogrid_frac desc); top_ip is "" when nothing
+    could be scored or the policy declines to block."""
+    from cyberrange.planes.attack.classify import (
+        extract_features,
+        load_artifacts,
+        predict_packets,
+        rank_nanogrid_ips,
+    )
+    from cyberrange.planes.attack.thresholds import DETECT_THRESHOLD
+
+    threshold = DETECT_THRESHOLD if threshold is None else threshold
+    df = extract_features(pcap_path)  # unlabeled — the attacker has no ground truth
+    model, scaler = load_artifacts(model_path, scaler_path)
+    pkt_preds = predict_packets(df, model, scaler, window_size=model.window_size)
+    ranking = rank_nanogrid_ips(pkt_preds)
+    if ranking.empty:
+        return "", ranking
+    if block_policy == "threshold" and ranking.iloc[0]["nanogrid_frac"] < threshold:
+        return "", ranking
+    return str(ranking.index[0]), ranking
+
+
+class PassiveFingerprinter(Component):
+    """The passive attacker on the broker-side link: sniffs, then fingerprints
+    the nanogrid's traffic with its CNN and picks the source IP to blackhole."""
+
+    plane, name = PLANE, "passive_fingerprinter"
+    CAPTURE = "attacker_capture.pcap"
+
+    def __init__(self, node, iface, model, scaler, block_policy="top1", threshold=None):
+        self.node, self.iface = node, iface
+        self.model, self.scaler = model, scaler
+        self.block_policy, self.threshold = block_policy, threshold
+        self.detected_ip, self.ranking = "", None
+
+    def sniff(self, ctx, seconds):
+        from cyberrange.core.context import drain
+
+        log.info("[Attack] Attacker sniffing for %ds", seconds)
+        drain(ctx.exec(self.node, f"timeout {seconds} tcpdump -i {self.iface} -w {self.CAPTURE}"))
+        log.info("[Attack] Downloading attacker capture")
+        return ctx.download(self.node, self.CAPTURE, self.CAPTURE)
+
+    def score(self, ctx, capture):
+        log.info("[Attack] Scoring capture with the trained model")
+        log.info("[Attack] Block policy: %s (threshold %s)", self.block_policy, self.threshold)
+        self.detected_ip, self.ranking = detect_nanogrid_ip(
+            capture,
+            self.model,
+            self.scaler,
+            block_policy=self.block_policy,
+            threshold=self.threshold,
+        )
+        log.info("[Attack] Per-IP nanogrid ranking:\n%s", self.ranking.to_string())
+        with open(ctx.path("nanogrid_ranking.csv"), "w") as f:
+            f.write(self.ranking.to_csv())
+        if self.detected_ip:
+            # plot_results.parse_block_event reads this exact line from run.log.
+            log.info("[Attack] Blocking nanogrid IP: %s", self.detected_ip)
+        else:
+            log.warning("[Attack] No nanogrid IP detected — nothing blocked")
+        return self.detected_ip
+
+
+class DeliveryAttack(Component):
+    """Blackhole episodes on the router (the CNN's pick or an oracle's) and
+    benign faults, all in the ground truth (cyberrange/detection_scenario)."""
+
+    plane, name = PLANE, "delivery_attack"
+
+    def __init__(
+        self,
+        router,
+        scmc,
+        port_pool,
+        relaunch,
+        oracle=None,
+        block_duration=None,
+        block_episodes=1,
+        impair=False,
+        injector=None,
+    ):
+        self.router, self.scmc, self.port_pool, self.relaunch = router, scmc, port_pool, relaunch
+        self.oracle, self.block_duration = oracle, block_duration
+        self.block_episodes, self.impair = block_episodes, impair
+        # The scenario owns what a fault looks like for it and passes the
+        # injector class in; the component only drives its lifecycle.
+        self.injector_cls, self.injector = injector, None
+
+    @property
+    def restarts(self):
+        return self.injector.restarts if self.injector else 0
+
+    def attack(self, ctx, cnn_ip):
+        self.injector = self.injector_cls(
+            ctx.manager,
+            ctx.machine(self.router),
+            ctx.machine(self.scmc),
+            ctx.gt,
+            self.port_pool,
+            ctx.role_seed("attack"),
+            self.relaunch,
+        )
+        self.injector.start(
+            self.oracle, cnn_ip, self.block_duration, self.block_episodes, self.impair
+        )
+
+    def stop(self, ctx):
+        if self.injector is not None:
+            self.injector.finish()
+            self.injector = None

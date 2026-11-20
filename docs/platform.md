@@ -11,59 +11,74 @@ metrics.
                  ┌───────────────── scenarios ─────────────────┐
                  │  mqtt-mtd (MQTT smart grid, MTD vs CNN)      │
                  │  cps      (OT/Modbus, active attack, SOAR)   │
+                 │  cps-advisor (cps, the SOC advises a person) │
+                 │  cps-recon   (cps, attacker derives the tree)│
                  └───────────────┬──────────────────────────────┘
                      compose     │
-   ┌─────────── plane components (<plane>/components.py) ───────────┐
+   ┌──── plane components (cyberrange/planes/<x>/components.py) ────┐
    │ traffic  PhysicalProcess PlcController HmiClient                │
    │          BackgroundReplay ScmcPublisher                         │
-   │ attack   VulnApp ScriptedChain PlannedAttacker                  │
+   │ attack   VulnApp ScriptedChain PlannedAttacker RedConsole       │
    │          PassiveFingerprinter DeliveryAttack                    │
-   │ defense  OtSensor ItSensor SoarResponder                        │
-   │          QkdCertBootstrap MtdCoordinator                        │
+   │ defense  OtSensor ItSensor SocAnalytics WazuhManager WazuhAgent │
+   │          JumpHost QkdCertBootstrap MtdCoordinator               │
    │ monitor  Capture TelemetryMirror PlantMirror                    │
+   │          WebTerminal RecordedShell                              │
    └───────────────┬─────────────────────────────────────────────────┘
                    │ run on
-   ┌────────── platform core (network_scenario/core) ──────────┐
-   │ topology · lifecycle · context · streams · campaign ·      │
-   │ aggregate · registry · cli   +  ledger · dashboard         │
-   └────────────────────────────────────────────────────────────┘
+   ┌─────────────── platform core (cyberrange/core) ─────────────────┐
+   │ topology · lifecycle · context · streams · campaign ·           │
+   │ aggregate · registry · cli · paths  +  ledger · dashboard       │
+   └─────────────────────────────────────────────────────────────────┘
+
+Imports point downwards only — scenarios on planes, planes on the core — and
+tests/core/test_layering.py enforces it. See [structure.md](structure.md).
 ```
+
+Beside the platform sits `nodes/`: the software the lab's nodes run that is not
+the platform's — Wazuh's configuration, the SOC's analytics and console, the
+red team's console, the scripts that give people a shell. Several components
+above only stage and launch it (`WazuhManager`, `WazuhAgent`, `SocAnalytics`,
+`JumpHost`, `WebTerminal`, `RecordedShell`, `RedConsole`); the boundary is
+described in [structure.md](structure.md).
 
 Every component, with its options, artifacts, telemetry and ground truth, is
 documented in [components.md](components.md).
 
-`python -m network_scenario.core loc` (or `make platform-loc`) measures the
+`python -m cyberrange.core loc` (or `make platform-loc`) measures the
 split: how many lines are platform and how many each scenario had to write.
 
 ## 1. The three properties, and where they come from
 
 | Property | Mechanism |
 |---|---|
-| **Safe** | Every attack runs against an emulated network and a digital twin, never real equipment. Each lab is an isolated set of containers (Kathará), named per scenario (`test`, `cps`) so one never replaces the other. Zones and boundary rules are part of the declared topology. The lifecycle always undeploys a lab, even when the episode fails. |
+| **Safe** | Every attack runs against an emulated network and a digital twin, never real equipment. Each lab is an isolated set of containers (Kathará), named per scenario (`test` for `mqtt-mtd`, `cps`, `cps-advisor`) so one never replaces the other. Zones and boundary rules are part of the declared topology. The lifecycle always undeploys a lab, even when the episode fails. |
 | **Reproducible** | Seeds are derived per role (`core.context.role_seed`), so each process of a run is reproducible on its own. Topology, options and components are declared, and every run writes its `topology.json`. Campaigns resume, retry, and record their grid and parameters (`campaign.json`). Dependencies and images are pinned. Ground truth is recorded host-side for every run. |
 | **Observable** | Three event streams per run (section 3). There is a live progress ledger for every run and campaign of every scenario, and one dashboard that reads it. Per-run metrics and a 95%-CI aggregate are computed as runs finish. |
 
 ## 2. Writing a scenario: the contract
 
-A scenario is a subclass of `network_scenario.core.scenario.Scenario`,
-registered in `network_scenario/core/registry.py`:
+A scenario is a subclass of `cyberrange.core.scenario.Scenario`,
+registered in `cyberrange/core/registry.py`:
 
 | Member | Purpose |
 |---|---|
 | `name`, `lab_name` | Registry key, and the Kathará lab name. A deploy replaces a lab with the same name. |
-| `add_arguments(ap)` | The scenario's options. The core adds `--seed --progress-file --run-id --poll-interval`. |
+| `add_arguments(ap)` | The scenario's options. The core adds `--seed --progress-file --run-id --poll-interval --playground`. |
 | `validate(args)` | Fail fast with `SystemExit` before anything is deployed. |
 | `topology(args)` | A `core.topology.Topology` (see below). |
-| `episode_phases(args)` | `[PhaseSpec(name, planned_s, timed)]`, the phases between deploy and download. They drive the ETA. |
+| `episode_phases(args)` | `[PhaseSpec(name, planned_s, timed)]`, the phases between deploy and download. They drive the ETA. The core adds `deploy`, `download`, `undeploy` around them, and `open` for a run held up with `--playground`. |
 | `episode(ctx)` | Start components, drive the phases. |
 | `run_info(args)` | Extra fields for `run_start` (mode, seed, …). |
 | `out_dir(args)`, `run_id(args)`, `prepare(args)` | Where the run writes, its ledger id, and anything to do before the lab is built (e.g. tee a run log). |
 | `write_structure(ctx)` | Optional files for the dashboard (CPS: `kg.json`, `tree.json`). |
+| `panel_js()` | Path of the JavaScript file that draws the scenario's own part of the dashboard (section 5), or `None`. |
+| `structure()` | `{"kg": …, "tree": …}` rebuilt from the declared topology, for runs recorded without their structure files; `None` when the scenario has none. |
 | `check_run(ctx) -> int` | 0 if the run is valid; anything else becomes the exit code (MQTT: 3 when the SCMC never published). |
 | `metrics(run_dir) -> dict` | The run's metrics, used by campaigns and the dashboard. |
 
 Each scenario's command-line entry point is a few lines long
-(`network_scenario/cps_experiment.py`, `network_scenario/run_experiment.py`):
+(`cyberrange/scenarios/<name>/cli.py`):
 
 ```python
 def main(argv=None):
@@ -78,15 +93,20 @@ The network is plain data. Interface order fixes `eth0`, `eth1`, …:
 Topology("cps", default_image="kathara/cps", nodes=[
     Node("hmi", [Iface("IT", "10.10.0.20/24")], role="hmi",
          routes=[Route("default", "10.10.0.1", "eth0")], files=HMI_FILES),
-    Node("sensor", [Iface("OT", promisc=True), Iface("DEF", "10.30.0.10/24")],
+    Node("sensor", [Iface("OT", promisc=True), Iface("MGMT", "10.30.0.10/24")],
          role="sensor", files=SENSOR_FILES, mgmt_port="8090:8080/tcp"),
     ...
 ])
 ```
 
+`mgmt_port` publishes guest ports on the host (`"HOST:GUEST/tcp"`, or a list of
+them) through a bridged NIC that is not a lab network. That NIC brings a default
+route of its own, so a node that has both a published port and a default route
+in the lab declares the latter with `Route(..., replace=True)`.
+
 `core.topology.build_lab` turns the topology into a Kathará Lab: startup
-commands, staged files, the bridged management NIC, and an `addresses` meta on
-every machine (the SOAR knowledge graph reads it). `export_lab_conf` writes
+commands, staged files, the bridged NIC of the published ports, and an
+`addresses` meta on every machine. `export_lab_conf` writes
 the same lab as `lab.conf` + `.startup` files (`make lab-conf SCENARIO=cps`),
 which is the scenario description to show in the paper.
 
@@ -94,7 +114,8 @@ which is the scenario description to show in the paper.
 
 ```
 run_start → build lab → topology.json + structure → deploy (replacing a same-name lab)
-          → episode → stop components → download artifacts → undeploy (always)
+          → episode → [open, until Ctrl-C: --playground]
+          → stop components → download artifacts → undeploy (always)
           → check_run → run_end{status, rc}
 ```
 
@@ -107,7 +128,8 @@ The episode drives the lab through a `RunContext`:
 | `ctx.phase(name)` | Phase start and end on the ledger. |
 | `ctx.observe(seconds)` | Wait on a fixed deadline while polling the components. |
 | `ctx.live()` | Poll in the background while a block waits on a guest command. |
-| `ctx.open_ground_truth(**run_meta)` | Open `ground_truth.jsonl`. |
+| `ctx.open_ground_truth(**run_meta)` | Open `ground_truth.jsonl`; afterwards `ctx.gt.record(kind, ...)` writes to it. |
+| `ctx.emit(kind, **fields)` | Put one event on the progress ledger. |
 | `ctx.role_seed(role)` | The seed for one role of the run. |
 | `ctx.add_artifact(...)`, `ctx.download(...)` | Extra files to fetch. |
 
@@ -130,8 +152,70 @@ example, the CPS scenario's `--it-telemetry` starts `ItSensor`, gives
 responder use the IT countermeasures.
 
 The artifacts a run downloads are the union of its components' artifacts. The
-`SoarResponder` reads the telemetry of every started sensor through the same
-`TelemetryCursor` the live mirror uses.
+`TelemetryMirror` reads the telemetry of every started component through a
+`TelemetryCursor` and folds it onto the progress ledger.
+
+### A scenario built on another
+
+The CPS scenarios share one lab and one episode, and differ by what they add
+to them. Two things make that possible without copying the base.
+
+**The lab is data.** `cyberrange/scenarios/cps/lab.py` describes a lab as a
+`LabSpec`, which holds:
+
+- zones, with their CIDR, and whether the boundary forwards between them;
+- hosts, each with a role, NICs in interface order, services, and an optional
+  image;
+- the flows the boundary lets through.
+
+Everything else is derived from the spec:
+
+- addresses, routes and the boundary's ruleset;
+- which hosts carry a Wazuh agent;
+- the SOC's inventory.
+
+`topology.py` turns a spec into the platform's `Topology`. The episode finds its
+hosts by role (`plant_of(spec)`) instead of by name. When a spec is built,
+`LabSpec.check()` refuses one that breaks a constraint the rest of the system
+relies on: two NICs on one address, a primary address that does not sort first
+for the knowledge graph, or a name Kathará refuses. `default_spec()` is the lab
+every CPS scenario runs today. A larger lab is another spec, overriding
+`CpsScenario.lab_spec(args)`.
+
+**Additions are features.** A `Feature` (`cyberrange/scenarios/cps/feature.py`)
+is one addition, with neutral hooks. A scenario is `CpsScenario` with a tuple
+of them:
+
+| Scenario | `features` |
+|---|---|
+| `cps` | `()` |
+| `cps-advisor` | `(People(),)` |
+| `cps-soc` | `(SocTools(), People(console=False))` |
+| `cps-recon` | `(Recon(),)` |
+
+| Hook | What a feature does with it |
+|---|---|
+| `add_arguments`, `validate`, `prepare`, `run_info` | its options, their checks, per-run secrets, what the ledger may know |
+| `check_approval(spec)` | takes over what `--approval` may be (People: `operator:<s>` only) |
+| `host_ports(args)` | the host ports it publishes; the scenario refuses two features publishing one port |
+| `extras(spec, args)` | `{host: Extra(files, ports, startup, image)}` added to the lab's hosts |
+| `nodes(spec, args)` | nodes of its own next to the lab (the SOC's tools) |
+| `links(args)`, `operator_api(scenario, args)` | what each team is handed; the `SocAnalytics` arguments it sets |
+| `services(ctx)`, `engage(ctx)` | components started with the services; once the ground truth is open |
+| `attacker(scenario, args)` | its own attack driver (Recon) |
+
+The scenario calls the features in the order it lists them. What one feature
+puts on a host (files, startup commands) comes before what the next one puts
+there, and its services start first. Two features may not give one host two
+different images.
+
+A combination no scenario declares yet, such as the SOC's tools with a recon
+attacker, is one more tuple (`tests/scenarios/cps/test_cps_lab.py` builds that
+one).
+
+Each feature lives in its scenario's directory. The scenario's `SOURCES` list
+only that directory, and its manifests list only what it adds, so the shared lab
+is counted once (see [structure.md](structure.md)).
 
 ## 3. The three streams of a run
 
@@ -139,15 +223,16 @@ The artifacts a run downloads are the union of its components' artifacts. The
 |---|---|---|---|
 | `ground_truth.jsonl` | the host only: attack drivers, fault injection, the scenario | what really happened: `run_meta`, attack steps, writes, blocks, faults, `run_end` | scorers, dataset builders. Never readable by a defender. |
 | `<node>.telemetry.jsonl` | defense components in the guests (`mtd_telemetry.py`) | what the defenders observed and did: findings, alerts, MTD actions, delivery gaps | detectors, the responder, metrics |
-| `progress.jsonl` | the host ledger (`monitor/progress.py`) | the run as it happens: lifecycle, campaign bookkeeping, a live mirror of the telemetry | the dashboard |
+| `progress.jsonl` | the host ledger (`cyberrange/core/progress.py`) | the run as it happens: lifecycle, campaign bookkeeping, a live mirror of the telemetry | the dashboard |
 
 The separation is deliberate. A detector or a response policy can only be
 scored against information it could not have had.
 
 Event kinds common to every scenario are documented in
-`network_scenario/core/streams.py`. Scenario-specific kinds are:
+`cyberrange/core/streams.py`. Scenario-specific kinds are:
 
-- **CPS:** `plant`, `finding`, `alert`, `model_fitted`, `attack_write`, `plan_step`, `tree_state`, `decision`, `action`.
+- **CPS:** `plant`, `finding`, `alert`, `model_fitted`, `model_error`, `response_write`, `attack_write`, `plan_step`, `tree_state`, `decision`, `approval`, `action`.
+- **CPS advisor:** the CPS kinds — `approval` here is a suggestion put to the operator, then its outcome — plus `soc_mode`, `team_command` and `red_step`.
 - **MQTT:** `mtd_action`, `data_gap`, `detection`, `detector_alert`.
 
 ## 4. Campaigns (`core.campaign`)
@@ -156,23 +241,29 @@ A campaign is a list of **units**, run in order on one ledger.
 
 - A **unit** is one configuration × one repetition. Its **steps** run in order, and a failed step stops the rest of the unit. `needs` names units that must have succeeded first.
 - A **step** is either in-process (`run(emit)`: a scenario run, bound to the campaign ledger) or a command (`cmd`, e.g. a `make` target).
+- A command step may carry a `timeout` in seconds. When it expires the command and everything it started are stopped (interrupted first, so a lab run undeploys itself) and the step fails like any other, which is what lets `retries` take over. The MQTT campaigns set it on their lab steps from `--lab-timeout`; without it a step has no limit.
 - `skip_if()` reuses earlier results.
 - A **scored** step (`run_dir` + `metrics`) gets `metrics.json`, which is also what `--resume` skips on, and is folded into the aggregate after every run.
+- A campaign's command line ends in `core.campaign.run_cli(campaign)`, which checks once that a lab can start, runs the units, prints the verdict and returns the exit code: `0` when every unit finished, `1` when one failed or was blocked, `EXIT_NO_LAB` (4) when no lab could start. A scenario's `campaign.py` builds the units and handles `--dry-run` itself; everything after that is shared. `epilogue=` adds the scenario's own lines before the verdict (the MQTT evaluation lists its figures).
 - `core.aggregate.summarize` gives n / mean / std / 95% CI (Student t) / median / min / max of every numeric metric per group. It writes `ci.csv` and a mean [CI] table in `summary.md`.
 
 | Campaign | Units | Steps |
 |---|---|---|
-| CPS (`make cps-campaign`, `network_scenario/cps_campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
-| Paper (`main.py`, `network_scenario/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
+| CPS (`make cps-campaign`, `cyberrange/scenarios/cps/campaign.py`) | modes × seeds | one scored scenario run each. Every option of the CPS scenario passes through, e.g. `--respond solver --it-telemetry --attack-driver planner`. |
+| MQTT MTD evaluation (`main.py`, `cyberrange/scenarios/mqtt_mtd/campaign.py`) | baseline + three MTD configs + figures, × runs | the same `make` targets as `scripts/run_single.sh`, with lab steps retried. Every config needs its run's baseline (cross-model attack); the figures need all four. The ledger and summary are in `output/campaigns/paper-mbps<M>/`. |
+| MTD ablation (`make sweep`, `cyberrange/scenarios/mqtt_mtd/ablation.py`) | 15 named MTD configurations in five groups (e0–e4), no seeds | the evaluation's `make` steps per configuration, plus its entropy and its row of the manifest; a last unit draws the figures with `plot_sweep` from the configurations that finished. |
 
 ## 5. Following it live
 
 ```bash
 make dashboard            # every scenario's runs and campaigns under output/ (127.0.0.1:8765)
-make cps-dashboard        # only output/cps
+make cps-dashboard        # only the cps runs
+make cps-advisor-dashboard  # only the cps-advisor runs
+make cps-recon-dashboard  # only the cps-recon runs
 ```
 
-`monitor/dashboard.py` only reads. It shows two kinds of content.
+`cyberrange/core/dashboard.py` only reads: the server has no endpoint that
+changes anything, in the lab or on disk. It shows two kinds of content.
 
 **Common to every scenario:**
 
@@ -180,24 +271,115 @@ make cps-dashboard        # only output/cps
 - campaign progress and ETA (fixed-length phases are flagged `timed`);
 - the queue;
 - the current run's phases;
-- results, with a mean [95% CI] tab.
+- one time bar for the selected run, on the run's own clock: the slider is a
+  time (a live run is laid on its planned length, so the thumb does not jump as
+  facts arrive), ◀ ▶ step through the facts the scenario's panel marks, Play
+  replays the run at ×1, ×5 or ×20, Live follows it. Keys, outside a field:
+  ←/→ previous or next fact, Shift+←/→ ten seconds, Space play or pause, End
+  live. Every time-aware view (the structure views and the panel's cards) is
+  drawn as of the time shown;
+- every card can be closed (▾, remembered by the browser) and explains itself
+  (ⓘ); a closed card is not redrawn;
+- results, with a mean [95% CI] tab. A standalone run is scored when it ends
+  (`run_metrics` on its own ledger, from `Scenario.metrics`); a campaign scores
+  each of its runs itself.
 
-**Per scenario:**
+Each section is drawn on its own: one that throws shows its error in its card
+and the others are drawn as usual, and an event the page cannot fold is skipped
+rather than stalling the ledger.
 
-- **CPS:** the plant voltage chart, findings, and the topology, knowledge graph and attack tree with the response decisions over time.
+A ledger that is open keeps its file's modification time fresh
+(`progress.HEARTBEAT_S`), so a campaign busy in a step that emits nothing is
+still shown as running; one whose writer died turns "interrupted" after
+`ledgers.STALE_S`.
+
+**Per scenario**, drawn by the scenario's `panel.js` and not by the page. The
+page calls the panel's factory once with its helpers (`h`, `svg`, `$`, `num`,
+`dur`, `clock`, `queueTable`, `time()`/`setTime(t)` for the time shown,
+`view()` for the view chosen, …); every panel is served in one script, so a
+panel uses only these and its own names, never another panel's. The hooks, all
+optional:
+
+| hook | what the panel does with it |
+|---|---|
+| `queue()` | its columns of the run table, through `ui.queueTable` |
+| `detail(run)` | chips, chart and table of the selected run |
+| `chart(run)` | the selected run's chart |
+| `reduce(run, ev)` | folds the event kinds only it knows into `run.x` |
+| `cards: [{id, title, sub, help?, span?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the page |
+| `views: [{id, label, help, sections, options?}]` | buttons in the page's header, one per view: `sections` lists, in order, the page's sections (`queue-card`, `detail`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it |
+| `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches (`{id, label, view?, default}` a check box, with `choices: [{id, label}]` a row of buttons), `origin(run)` the time the bar counts from |
+| `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one |
+
+`tests/core/test_panels.py` checks the contract (a view lists only sections that
+exist) and draws an empty run and a run with every event kind through every hook
+of every panel, each card under every view and the attack tree from every
+perspective.
+
+- **CPS:** three views, *Overview*, *Attacker* and *Defender* (below); the plant
+  voltage chart, findings and score; the **Attacker · Defender**
+  card — what each side is doing and what it can see (the attacker from its own
+  record: steps, plans, recon, observations; the defender from its telemetry,
+  belief and decisions), a lane timeline of both sides and the plant, and a
+  truth-vs-belief table per attack step; and the topology, knowledge graph and
+  attack tree, the tree carrying both the defender's belief and the attacker's
+  progress.
+- **CPS advisor:** the CPS panel (its `panel.js` delegates to it).
+- **CPS recon:** the CPS panel, with the attack tree framing the real nodes the
+  attacker does not know (from the belief tree it puts on the ledger) and naming
+  the ones it believes in that are not real.
 - **MQTT:** MTD actions per knob coloured by outcome, delivery gaps, and the coordinator's actions table.
+
+### A run kept open: `--playground`
+
+Every scenario's run takes `--playground` (`PLAYGROUND=1` on the single-run
+`make` targets). After its episode the run does not tear down: the lab, the
+components and the live mirrors stay up, in a phase named `open`, until Ctrl-C.
+The interrupt is how such a run ends, so it is followed by the usual teardown
+(stop, download, undeploy, `check_run`) and the run is recorded as `ok`. A
+second Ctrl-C during the teardown interrupts it for real.
+
+It is for trying things by hand — a lab to attack, a defender to watch — and it
+is not an experiment: the run's length is whatever it was left open, so its
+duration-dependent metrics do not compare with a campaign's. Campaigns never
+set it.
+
+### People in a lab
+
+The dashboard is the referee's view and stays read-only when people play in a
+lab (`cps-advisor`, `docs/scenario-cps-advisor.md`). A team does not act
+through the platform: each has a console served by its own node — the SOC's
+for the defenders, one on the attacker node for a red team — and a web
+terminal there. The platform's part is to let them in and keep sight of them:
+
+- `monitor.WebTerminal` serves a shell of a node to a browser; `defense.JumpHost`
+  gives the defenders SSH from their node to the hosts they manage;
+- `monitor.RecordedShell` puts every command typed there on the ledger
+  (`team_command`), with the team read from how the shell got onto the node —
+  a referee's own shell is `control`, never the attack — and `attack.RedConsole` turns the steps a red team runs into
+  ground truth;
+- the page shows the defender's suggestions with their outcome, and a *Teams*
+  timeline of both sides' steps and commands.
+
+A team's token never goes on the ledger: the scenario writes the teams' links
+to a file in the run directory, on the host.
 
 ## 6. Adding a scenario: checklist
 
-1. **Image.** Reuse `kathara/mqtt` or `kathara/cps`, or add `docker/<name>/Dockerfile`.
-2. **Guest agents.** Add them under `<plane>/agents/`. They are flat modules with bare imports. Add a manifest in `network_scenario/guest_files.py` and `tests/test_guest_imports.py` will check it.
-3. **Components.** Add to `<plane>/components.py` whatever the existing ones do not cover. Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
-4. **Scenario package.** Create `network_scenario/scenarios/<name>/` with:
+The [interactive guide](new-scenario.md) takes a scenario with a lab of its own through
+these steps and writes its skeleton from your answers.
+
+1. **Image.** Reuse `kathara/mqtt`, `kathara/cps` or `kathara/soc`, or add `docker/<name>/Dockerfile`.
+2. **Guest code.** Agents go under `cyberrange/planes/<plane>/agents/`; the configuration and glue of a tool a node runs go under `nodes/<tool>/` (prefer an existing open-source tool, installed by the image, to code of our own). Both are flat modules with bare imports, and may import only the stdlib and what the node image installs. List them in your scenario's own `guest_files.py`; `tests/core/test_guest_imports.py` replays the manifest and `tests/core/test_deploy_contract.py` freezes what each node receives.
+3. **Components.** Add to `cyberrange/planes/<plane>/components.py` whatever the existing ones do not cover. A component must not import your scenario: take what is specific to it as a constructor argument (as `PlannedAttacker` takes its attack tree). Reuse first: `Capture`, `TelemetryMirror`, `GuestAgent`, the sensors, the attack drivers.
+4. **Scenario package.** Create `cyberrange/scenarios/<name>/` with:
    - `topology.py`: a `Topology`;
    - `scenario.py`: the `Scenario` subclass;
-   - optionally `campaign.py`;
-   - `SOURCES` and `GUEST_MANIFESTS` in `__init__.py`, for the code accounting.
-5. **Register it** in `core/registry.py`, and add a CLI module (`network_scenario/<name>_experiment.py`).
-6. **Metrics.** Add `monitor/<name>_metrics.py: compute_metrics(run_dir)`, returned by `Scenario.metrics`.
-7. **Tests.** Write `tests/test_<name>_scenario.py` with `tests/fakes/kathara.py`. `FakeManager` and `fake_downloads` run the whole lifecycle without Docker: commands, artifacts, ledger, ground truth, exit code.
+   - `cli.py`: three lines wrapping `cli.main`;
+   - `guest_files.py`: what each node is staged with;
+   - optionally `campaign.py`, `analysis/`, `training/`;
+   - `SOURCES` and `GUEST_MANIFESTS` in `__init__.py`, for the code accounting. Keep the `SOURCES` categories disjoint (one directory each): loc sums them independently, so a file matched twice is counted twice.
+5. **Register it** in `core/registry.py` (name -> `cyberrange.scenarios.<name>.scenario:<Class>`).
+6. **Metrics.** Add `cyberrange/scenarios/<name>/metrics.py: compute_metrics(run_dir)`, returned by `Scenario.metrics`.
+7. **Tests.** Write `tests/scenarios/<name>/test_<name>_scenario.py` with `tests/helpers/kathara.py`. `FakeManager` and `fake_downloads` run the whole lifecycle without Docker: commands, artifacts, ledger, ground truth, exit code.
 8. **Measure.** Run `make platform-loc` before and after; the difference is what the scenario cost.

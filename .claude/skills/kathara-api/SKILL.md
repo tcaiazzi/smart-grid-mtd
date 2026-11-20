@@ -1,6 +1,6 @@
 ---
 name: kathara-api
-description: "Use the Kathara Python API correctly. Use when: calling Kathara Python API from code, writing scripts that interact with running Kathara labs, using the Kathara manager/model/parser layer programmatically, interacting with machines via exec or connect, or parsing lab.conf/startup files from Python."
+description: "Use the Kathara Python API correctly. Use when: calling Kathara Python API from code, writing scripts that interact with running Kathara labs, using the Kathara manager/model/parser layer programmatically, interacting with machines via exec or connect, or parsing lab.conf/startup files from Python. In this repository that means the adapter in cyberrange/core/topology.py or inspecting a live lab by hand; scenarios and components drive labs through core.lifecycle and ctx.exec — see the cyberrange-* skills."
 argument-hint: "What you want to do: deploy a lab, exec a command, create machines programmatically, parse a lab.conf, etc."
 user-invocable: true
 ---

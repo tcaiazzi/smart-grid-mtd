@@ -1,0 +1,78 @@
+# mkdocs.yml — the public documentation site (make docs-serve / make docs-build).
+#
+# docs/ is the source; docs/internal/ (shared plans, dated audits) is excluded and
+# never published. The built site goes under output/ (already git-ignored and wiped
+# by `make clean`), so no new top-level directory is introduced.
+
+site_name: Smart Grid AI-MTD
+site_description: A cyber range for smart-grid security — emulated labs, composable attacks and defences, seeded and scored runs.
+repo_url: https://github.com/tcaiazzi/smart-grid-mtd
+repo_name: tcaiazzi/smart-grid-mtd
+
+docs_dir: docs
+site_dir: output/site
+use_directory_urls: true
+
+# Working documents, kept in the repo for the team but not part of the public site.
+exclude_docs: |
+  internal/
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Overview: platform-overview.md
+      - Set-up and first run: getting-started.md
+      - Running and measuring: running-and-metrics.md
+  - Scenarios:
+      - MQTT MTD: scenario-mqtt.md
+      - CPS (OT/Modbus): scenario-cps.md
+      - CPS advisor: scenario-cps-advisor.md
+      - CPS recon: scenario-cps-recon.md
+      - CPS SOC (Wazuh + IRIS): scenario-cps-soc.md
+  - Red vs blue playground: playground-red-vs-blue.md
+  - Platform:
+      - Architecture: platform.md
+      - Where files go: structure.md
+      - Components: components.md
+      - Attacks and defences: attacks-and-defenses.md
+  - SOAR — KG & attack trees: kg-and-attack-trees.md
+  - Extending the platform:
+      - Overview: extending.md
+      - Creating a scenario: new-scenario.md
+  - Glossary: glossary.md
