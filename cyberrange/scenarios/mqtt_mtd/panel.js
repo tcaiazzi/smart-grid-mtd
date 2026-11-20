@@ -7,13 +7,14 @@
 // page at /graph.js, which concatenates the panel of every registered scenario.
 //
 // The factory below is invoked by the page once its own helpers exist, so this
-// code can use them (h, $, num, dur, now, statusBadge, S) directly.
+// code can use them (h, $, num, dur, rel, term, S) directly; its chart is drawn
+// by Observable Plot, through ui.plot.
 "use strict";
 (function () {
-// This panel's own redraw key and the page's SVG helper (set by the factory):
+// This panel's own redraw key and the page's handles (set by the factory):
 // every panel is concatenated into one script, so nothing here may lean on
 // another panel's private names.
-let chartKey = null, s = null;
+let chartKey = null, UI = null;
 
 // This scenario's words, for the page (ui.metric, ui.term) and the views here:
 // every metric of the campaign's mean [95% CI] table (campaign.HEADLINE), the
@@ -106,50 +107,55 @@ function renderDetailMqtt(r) {
         : r.start_t ? "No defence action: this run has no moving-target defence (a baseline), or it has not acted yet" : "No live trace for this run"))));
 }
 
-// MQTT: MTD actions over time (one lane per knob, colour = outcome) and the
-// delivery gaps the SEMP saw, on the run's phase timeline.
+// The defence's changes over time, one lane per thing it moves and coloured by
+// how each change ended, and the gaps in the nanogrid's data, on the run's clock.
+const OUTCOME = { applied: "var(--good)", failed: "var(--critical)", timed_out: "var(--warning)", client_lost: "var(--serious)" };
 function drawMtd(r) {
   const box = $("d-chart"), legend = $("d-legend");
-  const key = ["mtd", r.id, r.start_t, r.mtd.length, r.gaps.length, box.clientWidth, document.documentElement.dataset.theme || ""].join("|");
+  const key = ["mtd", r.id, r.start_t, r.status, r.mtd.length, r.gaps.length, box.clientWidth].join("|");
   if (key === chartKey) return;
   chartKey = key;
   box.querySelector("svg")?.remove(); box.querySelector(".empty")?.remove(); legend.replaceChildren();
   if (!r.start_t || (!r.mtd.length && !r.gaps.length)) {
-    box.append(h("div", { class: "empty" }, r.start_t ? "No MTD actions or delivery gaps yet." : "No live trace for this run."));
+    box.append(UI.empty(!r.start_t ? "No live trace for this run."
+      : S.kind === "campaign" ? "A campaign's ledger holds each run's score, not its live events: pick the run's own entry in the Experiment list to see its timeline."
+      : "No defence action or delivery gap yet: a run with no moving-target defence (a baseline) has none."));
     return;
   }
-  const lanes = [...new Set(r.mtd.map(a => a.action))].sort();
-  if (r.gaps.length) lanes.push("delivery gap");
-  const COL = { applied: "var(--good)", failed: "var(--critical)", timed_out: "var(--warning)", client_lost: "var(--serious)" };
-  legend.append(...Object.entries(COL).map(([k, c]) => h("span", {}, h("span", { class: "lk", style: `background:${c}` }), k.replace("_", " "))));
-  const W = Math.max(320, box.clientWidth || 600), LH = 22, m = { l: 96, r: 12, t: 8, b: 24 };
-  const H = m.t + m.b + LH * Math.max(lanes.length, 1);
-  const t0 = r.start_t, tEnd = Math.max(...r.mtd.map(a => a.t), ...r.gaps.map(g => g.t), ...r.phases.map(p => p.end_t || 0), t0 + 10);
+  const t0 = r.start_t, GAP = "delivery gap";
+  const acts = r.mtd.map(a => ({ lane: UI.termText(a.action), x: a.t - t0, t: a.t, status: a.status,
+    text: `${UI.termText(a.action)} changed: ${UI.termText(a.status)}${a.cost ? ` (cost ${num(a.cost, 2)})` : ""}` }));
+  const gaps = r.gaps.map(g => ({ lane: GAP, x1: g.t - (g.gap || 0) - t0, x2: g.t - t0, x: g.t - t0, t: g.t,
+    text: `the nanogrid's data did not reach the broker for ${num(g.gap, 1)} s` }));
+  const lanes = [...new Set(acts.map(a => a.lane))].sort();
+  if (gaps.length) lanes.push(GAP);
+  const tEnd = Math.max(t0 + 10, ...r.mtd.map(a => a.t), ...r.gaps.map(g => g.t), ...r.phases.map(p => p.end_t || 0));
   const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+  // A live run is laid on its whole planned length; a finished one on what happened.
   const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
-  const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
-  const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `MTD actions for ${r.id}` });
-  lanes.forEach((ln, i) => {
-    const y = m.t + LH * i + LH / 2;
-    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, stroke: "var(--grid)" }));
-    svg.append(s("text", { x: m.l - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, ln));
-  });
-  for (const a of r.mtd) {
-    const y = m.t + LH * lanes.indexOf(a.action) + LH / 2;
-    svg.append(s("rect", { x: X(a.t) - 1.5, y: y - 6, width: 3, height: 12, fill: COL[a.status] || "var(--axis)" }));
-  }
-  if (r.gaps.length) {
-    const y = m.t + LH * (lanes.length - 1) + LH / 2;
-    for (const g of r.gaps) svg.append(s("rect", { x: X(g.t - (g.gap || 0)), y: y - 5, width: Math.max(2, X(g.t) - X(g.t - (g.gap || 0))), height: 10, fill: "var(--critical)" }));
-  }
-  const step = xMax > 240 ? 60 : xMax > 90 ? 30 : 10;
-  for (let x = 0; x <= xMax; x += step)
-    svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, `${x}s`));
-  box.insertBefore(svg, $("tip"));
+  // Only the outcomes that occurred are in the legend.
+  const seen = Object.keys(OUTCOME).filter(k => acts.some(a => a.status === k));
+  legend.append(...seen.map(k => h("span", {}, h("span", { class: "lk", style: `background:${OUTCOME[k]};height:10px;width:3px` }), `change ${UI.termText(k)}`)),
+    ...(gaps.length ? [h("span", {}, h("span", { class: "lk", style: "background:var(--critical);height:8px" }), "data not reaching the broker")] : []));
+  const point = [...acts, ...gaps];
+  box.append(UI.plot({
+    width: Math.max(320, box.clientWidth || 600), height: 46 + lanes.length * 26, marginLeft: 150, marginRight: 14, marginBottom: 36, marginTop: 6,
+    ariaLabel: `Moving-target defence changes and delivery gaps for ${r.id}`,
+    x: { domain: [0, xMax], ...UI.timeAxis(xMax, "run start") },
+    y: { domain: lanes, label: null, tickSize: 0, padding: 0.3 },
+    marks: [
+      Plot.ruleY(lanes, { stroke: "var(--grid)" }),
+      Plot.barX(gaps, { x1: "x1", x2: "x2", y: "lane", fill: "var(--critical)", insetTop: 3, insetBottom: 3 }),
+      ...Object.entries(OUTCOME).map(([status, colour]) =>
+        Plot.tickX(acts.filter(a => a.status === status), { x: "x", y: "lane", stroke: colour, strokeWidth: 3 })),
+      Plot.tickX(acts.filter(a => !(a.status in OUTCOME)), { x: "x", y: "lane", stroke: "var(--axis)", strokeWidth: 3 }),
+      Plot.dot(point, Plot.pointer({ x: "x", y: "lane", r: 9, stroke: "var(--ink)", strokeWidth: 1.5 })),
+      UI.plotTip(point, { near: true, x: "x", y: "lane", title: e => `${e.text}\n${UI.rel(e.t, t0)} since run start` }),
+    ],
+  }));
 }
-
   (window.CyberRangePanels ||= {})["mqtt-mtd"] = ui => {
-    s = ui.svg;
+    UI = ui;
     return {
       queue: () => renderQueueMqtt(ui),
       detail: renderDetailMqtt,

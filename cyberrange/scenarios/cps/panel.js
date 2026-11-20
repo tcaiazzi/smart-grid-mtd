@@ -4,21 +4,18 @@
 // The run's two sides at once: what the attacker does and knows, what the
 // defender does and believes (the "Attacker · Defender" card), on top of the
 // plant chart, the findings, and the topology / knowledge-graph / attack-tree
-// views. Self-contained (no libraries, no CDN); every structure view is a pure
-// function of (structure, overlay) drawing an SVG with a deterministic layout, so
-// a redraw never moves anything that did not change.
+// views. The charts are drawn by Observable Plot (through ui.plot) and the
+// attack tree is laid out by D3, both served by the page from its own files.
+// Every structure view is a pure function of (structure, overlay) drawing an SVG
+// with a deterministic layout, so a redraw never moves anything that did not
+// change. The topology and the knowledge graph place their nodes themselves:
+// their columns mean something (a zone, a type of node), which no general
+// layout would keep.
 //
 //   structure = /api/structure → {source, kg: networkx node-link, tree: {attack_tree, defense, countermeasures}}
 //   overlay   = overlayAt(run, t) → the defender's response state and the attacker's progress at time t
 "use strict";
 (function () {
-  const NS = "http://www.w3.org/2000/svg";
-  function el(tag, attrs, text) {
-    const e = document.createElementNS(NS, tag);
-    for (const [k, v] of Object.entries(attrs || {})) if (v != null) e.setAttribute(k, v);
-    if (text != null) e.textContent = text;
-    return e;
-  }
   function clip(s, n) { s = String(s ?? ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
   function wrap2(s, n) {             // two lines of at most n chars, word-wrapped
     const words = String(s ?? "").split(/\s+/), lines = [""];
@@ -191,19 +188,19 @@
       }
     }
     const H = Math.max(...Object.values(stackY), HEAD + 120) + 30;
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Lab topology", class: "graph" });
-    const defs = el("defs");
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Lab topology", class: "graph" });
+    const defs = svg("defs");
     for (const [id, col] of [["arr", "var(--ink-2)"], ["arr-bad", "var(--critical)"]]) {
-      const mk = el("marker", { id: `${id}-${box.id}`, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
-      mk.append(el("path", { d: "M0,0 L10,5 L0,10 z", fill: col })); defs.append(mk);
+      const mk = svg("marker", { id: `${id}-${box.id}`, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+      mk.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: col })); defs.append(mk);
     }
-    svg.append(defs);
+    root.append(defs);
     // zones
     zones.forEach((z, i) => {
-      svg.append(el("rect", { x: colX(i), y: 4, width: colW, height: H - 8, rx: 10, fill: "var(--wash)", stroke: "var(--grid)" }));
+      root.append(svg("rect", { x: colX(i), y: 4, width: colW, height: H - 8, rx: 10, fill: "var(--wash)", stroke: "var(--grid)" }));
       const nets = [...new Set(G.ofType("ip").filter(ip => addrZone(ip) === z).map(ip => ip.network))].join(", ");
-      svg.append(el("text", { x: colX(i) + 12, y: 22, "font-size": 13, "font-weight": 600, fill: "var(--ink)" }, `${z} zone`));
-      if (nets) svg.append(el("text", { x: colX(i) + colW - 10, y: 22, "font-size": 11, fill: "var(--muted)", "text-anchor": "end" }, nets));
+      root.append(svg("text", { x: colX(i) + 12, y: 22, "font-size": 13, "font-weight": 600, fill: "var(--ink)" }, `${z} zone`));
+      if (nets) root.append(svg("text", { x: colX(i) + colW - 10, y: 22, "font-size": 11, fill: "var(--muted)", "text-anchor": "end" }, nets));
     });
     // interface links of boundary devices (dashed = no address: passive tap)
     for (const h of hosts) {
@@ -214,39 +211,39 @@
         const i = zi[z], left = colX(i) + colW < p.x;
         const x1 = left ? p.x : p.x + BW, x2 = left ? colX(i) + colW : colX(i), y = p.y + 22;
         const tap = !addrBy[z];
-        svg.append(el("line", { x1, y1: y, x2, y2: y, stroke: tap ? "var(--muted)" : "var(--ink-2)", "stroke-width": 1.5, "stroke-dasharray": tap ? "4 3" : null }));
-        svg.append(el("text", { x: (x1 + x2) / 2, y: y - 4, "font-size": 10, fill: "var(--muted)", "text-anchor": "middle" }, ifBy[z] || ""));
-        if (tap) svg.append(el("text", { x: (x1 + x2) / 2, y: y + 12, "font-size": 10, fill: "var(--muted)", "text-anchor": "middle" }, "tap"));
+        root.append(svg("line", { x1, y1: y, x2, y2: y, stroke: tap ? "var(--muted)" : "var(--ink-2)", "stroke-width": 1.5, "stroke-dasharray": tap ? "4 3" : null }));
+        root.append(svg("text", { x: (x1 + x2) / 2, y: y - 4, "font-size": 10, fill: "var(--muted)", "text-anchor": "middle" }, ifBy[z] || ""));
+        if (tap) root.append(svg("text", { x: (x1 + x2) / 2, y: y + 12, "font-size": 10, fill: "var(--muted)", "text-anchor": "middle" }, "tap"));
       }
     }
     // flow rules: src host -> boundary -> dst service
     const svcPos = {};
-    const ruleLayer = el("g");
+    const ruleLayer = svg("g");
     // hosts
     for (const h of hosts) {
       const p = place[h.id], hh = boxH(h), hot = I.tags[h.id]?.some(t => t.color === "var(--critical)") && ov.hosts.includes(h.name);
-      const g = el("g", { opacity: I.isolated.has(h.id) ? 0.45 : 1 });
-      g.append(el("rect", { x: p.x, y: p.y, width: BW, height: hh, rx: 8, fill: "var(--surface)",
+      const g = svg("g", { opacity: I.isolated.has(h.id) ? 0.45 : 1 });
+      g.append(svg("rect", { x: p.x, y: p.y, width: BW, height: hh, rx: 8, fill: "var(--surface)",
         stroke: hot ? "var(--critical)" : "var(--ring)", "stroke-width": hot ? 2.5 : 1 }));
       let y = p.y + 18;
-      g.append(el("text", { x: p.x + 10, y, "font-size": 13, "font-weight": 600, fill: "var(--ink)" }, h.name));
-      g.append(el("text", { x: p.x + BW - 10, y, "font-size": 11, fill: "var(--muted)", "text-anchor": "end" }, h.role));
-      for (const ip of ips(h)) { y += 15; g.append(el("text", { x: p.x + 10, y, "font-size": 11, fill: "var(--ink-2)", "font-family": "ui-monospace, monospace" }, `${ip.iface} ${ip.addr}/${ip.prefix}`)); }
-      if (h.forward_default) { y += 15; g.append(el("text", { x: p.x + 10, y, "font-size": 11, fill: "var(--ink-2)" }, `FORWARD default ${h.forward_default}`)); }
+      g.append(svg("text", { x: p.x + 10, y, "font-size": 13, "font-weight": 600, fill: "var(--ink)" }, h.name));
+      g.append(svg("text", { x: p.x + BW - 10, y, "font-size": 11, fill: "var(--muted)", "text-anchor": "end" }, h.role));
+      for (const ip of ips(h)) { y += 15; g.append(svg("text", { x: p.x + 10, y, "font-size": 11, fill: "var(--ink-2)", "font-family": "ui-monospace, monospace" }, `${ip.iface} ${ip.addr}/${ip.prefix}`)); }
+      if (h.forward_default) { y += 15; g.append(svg("text", { x: p.x + 10, y, "font-size": 11, fill: "var(--ink-2)" }, `FORWARD default ${h.forward_default}`)); }
       for (const s of svcs(h)) {
         y += 8;
-        g.append(el("rect", { x: p.x + 10, y, width: BW - 20, height: 16, rx: 8, fill: I.hot.has(s.id) ? "var(--wash)" : "none", stroke: I.hot.has(s.id) ? "var(--critical)" : "var(--axis)" }));
-        g.append(el("text", { x: p.x + 18, y: y + 12, "font-size": 11, fill: "var(--ink-2)" }, `${s.name} · ${s.proto}/${s.port}`));
+        g.append(svg("rect", { x: p.x + 10, y, width: BW - 20, height: 16, rx: 8, fill: I.hot.has(s.id) ? "var(--wash)" : "none", stroke: I.hot.has(s.id) ? "var(--critical)" : "var(--axis)" }));
+        g.append(svg("text", { x: p.x + 18, y: y + 12, "font-size": 11, fill: "var(--ink-2)" }, `${s.name} · ${s.proto}/${s.port}`));
         svcPos[s.id] = { x: p.x + 10, y: y + 8, w: BW - 20 };
         y += 12;
       }
       for (const t of I.tags[h.id] || []) {
         y += 15;
-        g.append(el("circle", { cx: p.x + 14, cy: y - 4, r: 3.5, fill: t.color }));
-        g.append(el("text", { x: p.x + 22, y, "font-size": 11, fill: "var(--ink)" }, clip(t.text, 27)));
+        g.append(svg("circle", { cx: p.x + 14, cy: y - 4, r: 3.5, fill: t.color }));
+        g.append(svg("text", { x: p.x + 22, y, "font-size": 11, fill: "var(--ink)" }, clip(t.text, 27)));
       }
-      g.append(el("title", {}, [h.name, h.role, ...ips(h).map(i => i.addr)].join(" · ")));
-      svg.append(g);
+      g.append(svg("title", {}, [h.name, h.role, ...ips(h).map(i => i.addr)].join(" · ")));
+      root.append(g);
     }
     for (const rule of G.ofType("flow_rule")) {
       const src = G.rel(rule.id, "src")[0], dst = G.rel(rule.id, "dst")[0];
@@ -257,17 +254,17 @@
       const dx = pd.x, dy = pd.y;
       const midY = Math.max(fy + 26, sy, dy);
       const d = `M${sx},${sy} C${sx + 40},${sy} ${fx - 60},${midY} ${fx},${midY} S${dx - 40},${dy} ${dx},${dy}`;
-      ruleLayer.append(el("path", { d, fill: "none", stroke: bad ? "var(--critical)" : "var(--ink-2)", "stroke-width": 2,
+      ruleLayer.append(svg("path", { d, fill: "none", stroke: bad ? "var(--critical)" : "var(--ink-2)", "stroke-width": 2,
         "stroke-dasharray": bad ? "6 4" : null, "marker-end": `url(#${bad ? "arr-bad" : "arr"}-${box.id})` }));
       const label = `${rule.proto || "any"}/${rule.dport ?? "any"} ${rule.action}${bad ? " → BLOCKED" : ""}`;
-      ruleLayer.append(el("text", { x: fx, y: midY + 15, "font-size": 11, "text-anchor": "middle", fill: bad ? "var(--critical)" : "var(--ink-2)",
+      ruleLayer.append(svg("text", { x: fx, y: midY + 15, "font-size": 11, "text-anchor": "middle", fill: bad ? "var(--critical)" : "var(--ink-2)",
         "font-weight": bad ? 600 : 400, stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, label));
-      if (ov.writes) ruleLayer.append(el("text", { x: fx, y: midY - 6, "font-size": 11, "text-anchor": "middle", fill: "var(--critical)",
+      if (ov.writes) ruleLayer.append(svg("text", { x: fx, y: midY - 6, "font-size": 11, "text-anchor": "middle", fill: "var(--critical)",
         stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, `${ov.writes} attacker write${ov.writes === 1 ? "" : "s"}`));
-      if (bad) ruleLayer.append(el("path", { d: `M${fx - 6},${midY - 6} L${fx + 6},${midY + 6} M${fx + 6},${midY - 6} L${fx - 6},${midY + 6}`, stroke: "var(--critical)", "stroke-width": 2.5 }));
+      if (bad) ruleLayer.append(svg("path", { d: `M${fx - 6},${midY - 6} L${fx + 6},${midY + 6} M${fx + 6},${midY - 6} L${fx - 6},${midY + 6}`, stroke: "var(--critical)", "stroke-width": 2.5 }));
     }
-    svg.append(ruleLayer);
-    box.replaceChildren(svg);
+    root.append(ruleLayer);
+    box.replaceChildren(root);
     return [
       ["var(--critical)", "compromised (inferred) / blocked / impact"], ["var(--good)", "countermeasure applied"],
       ["var(--warning)", "possible impact"], ["var(--muted)", "dashed link: passive tap (no address)"],
@@ -279,6 +276,11 @@
   const REL_COLOR = {
     in_zone: "var(--muted)", has_ip: "var(--s1)", runs: "var(--s2)", exposes: "var(--ink-2)",
     may_write: "var(--warning)", enforces: "var(--axis)", src: "var(--good)", dst: "var(--good)",
+  };
+  // What each relation of the graph says, from its source node to its target.
+  const REL_WORDS = {
+    in_zone: "is in the zone", has_ip: "has the address", runs: "runs the service", exposes: "exposes the register",
+    may_write: "may write the register", enforces: "enforces the flow rule", src: "flow allowed from", dst: "flow allowed to",
   };
   function drawKG(box, S, ov, opts) {
     const G = index(S.kg), T = treeIndex(S.tree), I = implications(G, T, ov);
@@ -305,34 +307,35 @@
       const span = layer.length * (NH + VG) - VG, y0 = TOP + (H - TOP - 20 - span) / 2;
       layer.forEach((n, i) => { pos[n.id] = { x: M + li * lw, y: y0 + i * (NH + VG) }; });
     });
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Knowledge graph", class: "graph" });
-    LAYERS.concat(extra.length ? ["other"] : []).forEach((t, li) => svg.append(el("text", { x: M + li * lw + NW / 2, y: 14, "font-size": 11,
+    const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Knowledge graph", class: "graph" });
+    LAYERS.concat(extra.length ? ["other"] : []).forEach((t, li) => root.append(svg("text", { x: M + li * lw + NW / 2, y: 14, "font-size": 11,
       fill: "var(--muted)", "text-anchor": "middle" }, t.replace("_", " ") + (t === "register" && hideInputs ? " (holding)" : ""))));
-    const edgeLayer = el("g"), nodeLayer = el("g"), edges = [];
+    const edgeLayer = svg("g"), nodeLayer = svg("g"), edges = [], across = d3.linkHorizontal();
     for (const [sid, list] of Object.entries(G.out)) for (const e of list) {
       const a = pos[sid], b = pos[e.t]; if (!a || !b) continue;
       const fwd = a.x <= b.x, x1 = fwd ? a.x + NW : a.x, x2 = fwd ? b.x : b.x + NW;
-      const y1 = a.y + NH / 2, y2 = b.y + NH / 2, c = Math.max(30, Math.abs(x2 - x1) / 2);
+      const y1 = a.y + NH / 2, y2 = b.y + NH / 2;
+      // Between layers, a smooth link; within one, a loop out to the right.
       const d = a.x === b.x
         ? `M${a.x + NW},${y1} C${a.x + NW + 40},${y1} ${b.x + NW + 40},${y2} ${b.x + NW},${y2}`
-        : `M${x1},${y1} C${x1 + (fwd ? c : -c)},${y1} ${x2 - (fwd ? c : -c)},${y2} ${x2},${y2}`;
+        : across({ source: [x1, y1], target: [x2, y2] });
       const bad = I.blocked.has(sid) || I.blocked.has(e.t);
-      const p = el("path", { d, fill: "none", stroke: bad ? "var(--critical)" : (REL_COLOR[e.rel] || "var(--axis)"),
+      const p = svg("path", { d, fill: "none", stroke: bad ? "var(--critical)" : (REL_COLOR[e.rel] || "var(--axis)"),
         "stroke-width": 1.4, opacity: 0.75, "stroke-dasharray": bad ? "5 3" : null });
-      p.append(el("title", {}, `${sid} —${e.rel}→ ${e.t}`));
+      p.append(svg("title", {}, `${sid} ${REL_WORDS[e.rel] || pretty(e.rel)} ${e.t}`));
       edges.push({ p, s: sid, t: e.t }); edgeLayer.append(p);
     }
     const tip = opts && opts.tip;
     for (const layer of layers) for (const n of layer) {
       const p = pos[n.id], hot = I.hot.has(n.id), bad = I.blocked.has(n.id);
-      const g = el("g", { tabindex: 0, style: "cursor:default" });
-      g.append(el("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 6, fill: "var(--surface)",
+      const g = svg("g", { tabindex: 0, style: "cursor:default" });
+      g.append(svg("rect", { x: p.x, y: p.y, width: NW, height: NH, rx: 6, fill: "var(--surface)",
         stroke: bad || hot ? "var(--critical)" : "var(--ring)", "stroke-width": bad || hot ? 2 : 1, "stroke-dasharray": bad ? "4 2" : null }));
       const label = n.type === "host" ? n.name : n.type === "ip" ? n.addr : n.type === "service" ? `${n.host}/${n.name}`
         : n.type === "register" ? `${n.name} (${n.kind === "holding" ? "holding" : "input"} ${n.addr})` : n.type === "flow_rule" ? `${n.action} ${n.proto || ""}/${n.dport ?? "*"}`
         : n.name || n.id;
-      g.append(el("text", { x: p.x + 8, y: p.y + 16, "font-size": 11, fill: "var(--ink)" }, clip(label, 21)));
-      if (n.sensitive) g.append(el("circle", { cx: p.x + NW - 9, cy: p.y + NH / 2, r: 3.5, fill: "var(--warning)" }));
+      g.append(svg("text", { x: p.x + 8, y: p.y + 16, "font-size": 11, fill: "var(--ink)" }, clip(label, 24)));
+      if (n.sensitive) g.append(svg("circle", { cx: p.x + NW - 9, cy: p.y + NH / 2, r: 3.5, fill: "var(--warning)" }));
       const enter = ev => {
         for (const e of edges) e.p.setAttribute("opacity", e.s === n.id || e.t === n.id ? 1 : 0.08);
         if (tip) {
@@ -340,7 +343,7 @@
           const say = v => v == null ? "—" : Array.isArray(v) ? (v.join(", ") || "none") : typeof v === "object"
             ? Object.entries(v).map(([k, x]) => `${pretty(k)} ${x}`).join(", ") : typeof v === "boolean" ? (v ? "yes" : "no") : String(v);
           const rows = Object.entries(n).filter(([k]) => k !== "id" && k !== "type").map(([k, v]) => `${pretty(k)}: ${say(v)}`);
-          const links = [...(G.out[n.id] || []).map(e => `${pretty(e.rel)} → ${e.t}`), ...(G.inn[n.id] || []).map(e => `${e.s} → ${pretty(e.rel)}`)];
+          const links = [...(G.out[n.id] || []).map(e => `${REL_WORDS[e.rel] || pretty(e.rel)} ${e.t}`), ...(G.inn[n.id] || []).map(e => `${e.s} ${REL_WORDS[e.rel] || pretty(e.rel)} it`)];
           tip.show(ev, `${pretty(n.type)}: ${label}`, [...rows, ...(links.length ? [`relations: ${links.slice(0, 8).join(" · ")}${links.length > 8 ? ` … (${links.length})` : ""}`] : [])]);
         }
       };
@@ -349,10 +352,11 @@
       g.addEventListener("focus", enter); g.addEventListener("blur", leave);
       nodeLayer.append(g);
     }
-    svg.append(edgeLayer, nodeLayer);
-    box.replaceChildren(svg);
+    root.append(edgeLayer, nodeLayer);
+    box.replaceChildren(root);
     const used = new Set(); for (const list of Object.values(G.out)) for (const e of list) used.add(e.rel);
-    return [...used].map(r => [REL_COLOR[r] || "var(--axis)", r]).concat([["var(--warning)", "● sensitive register"], ["var(--critical)", "involved / blocked"]]);
+    return [[null, "Relations:"], ...[...used].map(r => [REL_COLOR[r] || "var(--axis)", REL_WORDS[r] || pretty(r)]),
+      [null, "Marks:"], ["var(--warning)", "● sensitive register: one that actuates the plant"], ["var(--critical)", "involved in the attack, or blocked"]];
   }
 
   // ── attack tree ───────────────────────────────────────────────────────────
@@ -370,24 +374,34 @@
       tree = { attack_tree: ov.redTree || S.tree.attack_tree, defense: {}, countermeasures: [] };
     }
     const T = treeIndex(tree), root = tree.attack_tree, def = tree.defense || {};
-    const NW = 160, NH = 62, CHIP = 13, XG = 10, LV = 40;
-    // tidy layout: leaves left to right, parents centred over their children
-    let leafX = 0; const pos = {}; let depthMax = 0;
-    const chipLines = n => (def[n.id]?.prevented_by?.length ? 1 : 0) + (def[n.id]?.restored_by?.length ? 1 : 0);
-    const rowH = d => NH + 3 * CHIP + LV;
-    (function lay(n, d) {
-      depthMax = Math.max(depthMax, d);
-      if (!(n.children || []).length) { pos[n.id] = { x: leafX, d }; leafX += NW + XG; return; }
-      n.children.forEach(c => lay(c, d + 1));
-      const xs = n.children.map(c => pos[c.id].x);
-      pos[n.id] = { x: (Math.min(...xs) + Math.max(...xs)) / 2, d };
-    })(root, 0);
+    const NW = 190, NH = 62, CHIP = 13, XG = 12, LV = 40, CHIP_CHARS = 33;
+    // The countermeasures under a node, as lines that fit its width: each list
+    // (⊘ would prevent, ↺ would restore) wraps instead of running into the next node.
+    const chipLines = id => [["⊘", def[id]?.prevented_by], ["↺", def[id]?.restored_by]].flatMap(([kind, list]) => {
+      const lines = [];
+      for (const cm of list || []) {
+        const line = lines[lines.length - 1];
+        if (line && line.len + cm.length + 2 <= CHIP_CHARS) { line.ids.push(cm); line.len += cm.length + 2; }
+        else lines.push({ kind: lines.length ? " " : kind, ids: [cm], len: cm.length + 3 });
+      }
+      return lines;
+    });
+    let maxChips = 0;
+    (function count(n) { maxChips = Math.max(maxChips, chipLines(n.id).length); (n.children || []).forEach(count); })(root);
+    // A tidy tree (d3.tree): every node one slot wide, a parent centred over its
+    // children. The layout depends on the tree alone, so a redraw moves nothing.
+    const rowH = () => NH + maxChips * CHIP + LV;
+    const laid = d3.tree().nodeSize([NW + XG, rowH()]).separation(() => 1)(d3.hierarchy(root, n => n.children));
+    const left = d3.min(laid.descendants(), n => n.x), right = d3.max(laid.descendants(), n => n.x);
+    const pos = Object.fromEntries(laid.descendants().map(n => [n.data.id, { x: n.x - left, d: n.depth }]));
+    const depthMax = laid.height;
     // The top margin leaves room for the attacker's badge above a root node.
-    const M = 12, W = leafX - XG + 2 * M, H = (depthMax + 1) * rowH() + 20;
+    const M = 12, W = right - left + NW + 2 * M, H = (depthMax + 1) * rowH() + 20;
+    const link = d3.linkVertical();
     const Y = d => 18 + d * rowH();
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Attack tree", class: "graph",
+    const drawing = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Attack tree", class: "graph",
       style: `max-width:${Math.max(W, 600)}px` });
-    const edges = el("g"), nodes = el("g");
+    const edges = svg("g"), nodes = svg("g");
     (function draw(n) {
       const p = pos[n.id], x = M + p.x, y = Y(p.d);
       const s = stateOf(ov, n.id);
@@ -399,32 +413,34 @@
         : (STATE_STYLE[s.state] || STATE_STYLE.unknown);
       for (const c of n.children || []) {
         const q = pos[c.id], cx = M + q.x + NW / 2, cy = Y(q.d);
-        edges.append(el("path", { d: `M${x + NW / 2},${y + NH + 2 * CHIP + 4} C${x + NW / 2},${cy - LV / 2} ${cx},${y + NH + 2 * CHIP + LV / 2} ${cx},${cy}`,
+        edges.append(svg("path", { d: link({ source: [x + NW / 2, y + NH + chipLines(n.id).length * CHIP + 4], target: [cx, cy] }),
           fill: "none", stroke: "var(--axis)", "stroke-width": 1.3 }));
         draw(c);
       }
-      const g = el("g");
-      if (st.fill) g.append(el("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill, opacity: 0.13 }));
-      g.append(el("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill ? "none" : "var(--surface)", stroke: st.stroke,
+      const g = svg("g");
+      if (st.fill) g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill, opacity: 0.13 }));
+      g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill ? "none" : "var(--surface)", stroke: st.stroke,
         "stroke-width": st === STATE_STYLE.unknown ? 1 : 2, "stroke-dasharray": st.dash }));
-      wrap2(n.label || n.id, 25).forEach((line, i) =>
-        g.append(el("text", { x: x + 8, y: y + 15 + i * 13, "font-size": 11.5, "font-weight": 600, fill: "var(--ink)" }, line)));
+      wrap2(n.label || n.id, 27).forEach((line, i) =>
+        g.append(svg("text", { x: x + 8, y: y + 15 + i * 13, "font-size": 11.5, "font-weight": 600, fill: "var(--ink)" }, line)));
       const sub = [n.attck, n.gate !== "LEAF" ? n.gate : null, n.observable === false ? "not observable" : null].filter(Boolean).join(" · ");
-      g.append(el("text", { x: x + 8, y: y + 43, "font-size": 10.5, fill: "var(--ink-2)" }, clip(sub, 29)));
+      g.append(svg("text", { x: x + 8, y: y + 43, "font-size": 10.5, fill: "var(--ink-2)" }, clip(sub, 34)));
       const line3 = persp === "attacker" ? (st === STATE_STYLE.unknown ? (n.feasible === false ? "believed infeasible" : "not tried") : st.label)
         : s.state === "unknown" ? st.label : `${st.label} ${(+s.score).toFixed(2)}`;
-      g.append(el("text", { x: x + 8, y: y + 56, "font-size": 10.5, fill: st === STATE_STYLE.unknown ? "var(--muted)" : st.stroke, "font-weight": 600 }, line3));
-      if (n.impact) g.append(el("text", { x: x + NW - 8, y: y + 56, "font-size": 10, fill: "var(--muted)", "text-anchor": "end" }, `impact ${n.impact}`));
-      g.append(el("title", {}, [n.label, n.attck_name, n.review ? `review: ${n.review}` : null, (n.targets || []).join(", ")].filter(Boolean).join("\n")));
+      g.append(svg("text", { x: x + 8, y: y + 56, "font-size": 10.5, fill: st === STATE_STYLE.unknown ? "var(--muted)" : st.stroke, "font-weight": 600 }, line3));
+      if (n.impact) g.append(svg("text", { x: x + NW - 8, y: y + 56, "font-size": 10, fill: "var(--muted)", "text-anchor": "end" }, `impact ${n.impact}`));
+      g.append(svg("title", {}, [n.label, n.attck_name, n.review ? `review: ${n.review}` : null, (n.targets || []).join(", ")].filter(Boolean).join("\n")));
       // countermeasure chips: filled = applied by t
       let cy = y + NH + CHIP - 1;
-      for (const [kind, list] of [["⊘", def[n.id]?.prevented_by], ["↺", def[n.id]?.restored_by]]) {
-        if (!list || !list.length) continue;
-        const t = el("text", { x: x + 4, y: cy, "font-size": 10 });
-        t.append(el("tspan", { fill: "var(--muted)" }, `${kind} `));
-        list.forEach((id, i) => {
-          const on = id in ov.applied;
-          t.append(el("tspan", { fill: on ? "var(--good)" : "var(--muted)", "font-weight": on ? 700 : 400 }, (on ? "✓" : "") + id + (i < list.length - 1 ? " " : "")));
+      for (const line of chipLines(n.id)) {
+        const t = svg("text", { x: x + 4, y: cy, "font-size": 10 });
+        t.append(svg("tspan", { fill: "var(--muted)" }, `${line.kind} `));
+        line.ids.forEach((id, i) => {
+          const on = id in ov.applied, chip = svg("tspan", { fill: on ? "var(--good)" : "var(--muted)", "font-weight": on ? 700 : 400 },
+            (on ? "✓" : "") + id + (i < line.ids.length - 1 ? "  " : ""));
+          // The countermeasure's own name, on hover.
+          if (T.cms[id]?.label) chip.append(svg("title", {}, `${T.cms[id].label}${on ? " — applied" : ""}`));
+          t.append(chip);
         });
         g.append(t); cy += CHIP;
       }
@@ -433,16 +449,16 @@
       const mark = persp === "attacker" ? null : n.id in (rd.done || {}) ? "✓ attacker" : n.id in (rd.failed || {}) ? "✗ attacker"
         : rd.target === n.id ? "◎ target" : null;
       if (mark) {
-        g.append(el("rect", { x: x + NW - 72, y: y - 9, width: 68, height: 16, rx: 8, fill: "var(--surface)", stroke: "var(--critical)" }));
-        g.append(el("text", { x: x + NW - 38, y: y + 3, "font-size": 10, "font-weight": 600, "text-anchor": "middle", fill: "var(--critical)" }, mark));
+        g.append(svg("rect", { x: x + NW - 72, y: y - 9, width: 68, height: 16, rx: 8, fill: "var(--surface)", stroke: "var(--critical)" }));
+        g.append(svg("text", { x: x + NW - 38, y: y + 3, "font-size": 10, "font-weight": 600, "text-anchor": "middle", fill: "var(--critical)" }, mark));
       }
       if (ov.redKnows && !ov.redKnows.has(n.id) && !(ov.redLeavesOnly && (n.children || []).length))
-        g.append(el("rect", { x: x - 4, y: y - 4, width: NW + 8, height: NH + 8, rx: 11, fill: "none",
+        g.append(svg("rect", { x: x - 4, y: y - 4, width: NW + 8, height: NH + 8, rx: 11, fill: "none",
           stroke: "var(--critical)", "stroke-dasharray": "3 3", opacity: 0.8 }));
       nodes.append(g);
     })(root);
-    svg.append(edges, nodes);
-    box.replaceChildren(svg);
+    drawing.append(edges, nodes);
+    box.replaceChildren(drawing);
     // The legend in groups, a heading (no colour) before each.
     const legend = [];
     if (persp !== "attacker") legend.push([null, "Defender believes:"],
@@ -466,9 +482,8 @@
 
   // ── views the core page cannot draw ───────────────────────────────────
   // Only this scenario knows what a detection latency or a bus voltage means.
-  // The page's helpers (h, $, num, dur, now, statusBadge) are globals by the
-  // time this factory runs; its SVG helper comes in as ui.svg.
-  let s = null;
+  // The page's helpers (h, svg, $, num, dur, rel, pretty) are globals by the time
+  // this factory runs; the ones that need the page's state come in as ui.
   const LATENCY_HINT = "latency from the first malicious write; * = after the physical impact";
 
   function det(m, d) { return m?.detectors?.[d]; }
@@ -652,127 +667,92 @@
   }
 
   // ── voltage chart ─────────────────────────────────────────────────────────
-  // Time-axis ticks: a round step giving about eight labels, so an hour-long
-  // playground run does not print a label every minute on top of each other.
-  const TICKS = [10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
-  const tickStep = span => TICKS.find(t => span / t <= 8) || Math.ceil(span / 8 / 3600) * 3600;
-  const tickLabel = v => v < 60 || v % 60 ? `${v}s` : v % 3600 ? `${v / 60}m` : `${v / 3600}h`;
-  const Y_LO = 0.80, Y_HI = 1.20;
   let chartKey = null;
   // Why a run has nothing live to show, when the reason is that it was not run again.
   const reused = r => r.status === "skipped"
     ? "This run was not run again: its score was reused from an earlier attempt of the campaign, so this ledger has its result but not its events." : null;
+  // The run's time axis, shared by its charts: seconds since run start. A live
+  // run is laid on its whole planned length (a stable axis that fills up), a
+  // finished one on what happened.
+  function runSpan(r, times) {
+    const t0 = r.start_t, tEnd = Math.max(t0 + 10, ...times, ...r.phases.map(p => p.end_t || 0));
+    const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
+    return (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
+  }
   function drawChart(r) {
-    const box = $("d-chart"), tip = $("tip");
+    const box = $("d-chart");
     const unit = r ? shownUnit(r) : null;
-    const key = r ? [r.id, r.start_t, r.plant.length, r.findings.length, r.writes.length, box.clientWidth,
-      document.documentElement.dataset.theme || "", unit ?? ""].join("|") : "none";
+    const key = r ? [r.id, r.start_t, r.status, r.plant.length, r.findings.length, r.writes.length, box.clientWidth, unit ?? ""].join("|") : "none";
     if (key === chartKey) return;            // unchanged: keep the frame (and a live tooltip)
     chartKey = key;
     box.querySelector("svg")?.remove();
+    box.querySelector(".empty")?.remove();
     const legend = $("d-legend"); legend.replaceChildren();
     if (!r || !r.plant.length) {
-      box.querySelector(".empty")?.remove();
       box.append(h("div", { class: "empty" }, !r ? "Select a run to see its plant." : reused(r) || (r.status === "running"
         ? "Waiting for the first plant sample: the plant is polled once the lab is up." : "This run recorded no plant sample.")));
       return;
     }
-    box.querySelector(".empty")?.remove();
     // The plant's normal band, from the run; a run recorded without one had the default plant's.
     const band = r.info?.v_band || [0.95, 1.05];
+    // The feeder on show: its samples, and the writes and findings that concern it.
+    const t0 = r.start_t, pts = plantOf(r, unit).map(p => ({ ...p, x: p.t - t0 }));
+    const writes = r.writes.filter(onUnit(unit)), findings = r.findings.filter(onUnit(unit));
+    const xMax = runSpan(r, [pts[pts.length - 1].t]);
+    // The axis holds every sample and the whole band: nothing is clipped, and
+    // the band is in sight even when the voltages never leave it.
+    const vs = pts.flatMap(p => [p.v_load, p.v_dg]).filter(v => v != null && isFinite(v));
+    const lo = Math.min(band[0] - 0.02, ...vs), hi = Math.max(band[1] + 0.02, ...vs);
     legend.append(
       ...(unit != null ? [h("span", {}, h("b", {}, `feeder unit ${unit}`))] : []),
-      h("span", {}, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
-      h("span", {}, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
-      h("span", {}, h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--grid)" }), `normal band ${band[0]}–${band[1]} pu`));
-    const W = Math.max(320, box.clientWidth || 600), H = 230, m = { l: 44, r: 12, t: 14, b: 26 };
-    // The feeder on show: its samples, and the writes and findings that concern it.
-    const t0 = r.start_t, pts = plantOf(r, unit);
-    const writes = r.writes.filter(onUnit(unit)), findings = r.findings.filter(onUnit(unit));
-    const tEnd = Math.max(pts[pts.length - 1].t, ...(r.phases.map(p => p.end_t || 0)), t0 + 10);
-    const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
-    // A live run is drawn on its whole planned timeline (stable axis, fills up);
-    // a finished one on what actually happened.
-    const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
-    const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
-    const clampV = v => Math.min(Y_HI, Math.max(Y_LO, v));
-    const Y = v => m.t + (H - m.t - m.b) * (1 - (clampV(v) - Y_LO) / (Y_HI - Y_LO));
-    const svg = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Bus voltages for ${r.id}${unit != null ? `, feeder unit ${unit}` : ""}` });
-    // calibration window
-    const np = r.phases.find(p => p.name === "normal");
-    if (np?.start_t && r.learn_s) {
-      const x1 = X(np.start_t), x2 = Math.min(X(np.start_t + r.learn_s), W - m.r);
-      svg.append(s("rect", { x: x1, y: m.t, width: Math.max(0, x2 - x1), height: H - m.t - m.b, fill: "var(--wash)" }));
-      svg.append(s("text", { x: x1 + 4, y: H - m.b - 6, "font-size": 11, fill: "var(--muted)" }, "model calibration"));
-    }
-    // band + grid
-    svg.append(s("rect", { x: m.l, y: Y(band[1]), width: W - m.l - m.r, height: Y(band[0]) - Y(band[1]), fill: "var(--wash)", stroke: "var(--grid)" }));
-    for (const v of [0.8, 0.9, 1.0, 1.1, 1.2]) {
-      svg.append(s("line", { x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), stroke: "var(--grid)", "stroke-width": 1 }));
-      svg.append(s("text", { x: m.l - 6, y: Y(v) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, v.toFixed(2)));
-    }
-    const step = tickStep(xMax);
-    for (let x = 0; x <= xMax; x += step)
-      svg.append(s("text", { x: X(t0 + x), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, tickLabel(x)));
-    svg.append(s("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, stroke: "var(--axis)" }));
-    // events: attack + first finding per detector
-    const marks = [];
-    if (writes.length) marks.push({ t: writes[0].t, label: "attack", dash: "4 3", shape: null });
-    for (const [d, shape] of [["rules", "tri"], ["model", "dia"]]) {
-      const w0 = writes[0]?.t;
+      h("span", { title: "Voltage at the bus feeding the load, as a fraction of its nominal value" }, h("span", { class: "lk", style: "background:var(--s1)" }), "load-bus voltage"),
+      h("span", { title: "Voltage at the bus of the distributed generator (DG), as a fraction of its nominal value" }, h("span", { class: "lk", style: "background:var(--s2)" }), "DG-bus voltage"),
+      h("span", { title: "Inside this band the plant is normal; outside it, the run counts a physical impact" },
+        h("span", { class: "lk", style: "background:var(--wash);height:8px;border:1px solid var(--axis)" }), `normal band ${band[0]}–${band[1]} pu`),
+      h("span", { class: "muted", title: "pu (per unit): a voltage as a fraction of its nominal value; 1.05 pu is 5 % above nominal" }, "pu = fraction of nominal"));
+    // The run's turning points: the attack, and each detector's first finding after it.
+    const w0 = writes[0]?.t, events = [];
+    if (w0 != null) events.push({ x: w0 - t0, label: "attack: first malicious write", dash: "4 3" });
+    for (const d of ["rules", "model"]) {
       const f = findings.find(f => f.detector === d && (w0 == null || f.t >= w0 - 1));
-      if (f) marks.push({ t: f.t, label: d, dash: null, shape });
+      if (f) events.push({ x: f.t - t0, label: `first finding: ${UI.termText(d)}`, dash: null });
     }
-    let lastX = -1e9, row = 0;
-    for (const mk of marks.sort((a, b) => a.t - b.t)) {
-      const x = X(mk.t);
-      row = x - lastX < 46 ? row + 1 : 0; lastX = x;
-      svg.append(s("line", { x1: x, x2: x, y1: m.t, y2: H - m.b, stroke: "var(--ink-2)", "stroke-width": 1, "stroke-dasharray": mk.dash || "none" }));
-      const ty = m.t + 12 + row * 13;          // inside the plot, stacked downward
-      if (mk.shape === "tri") svg.append(s("path", { d: `M${x - 4},${ty - 8} L${x + 4},${ty - 8} L${x},${ty - 1}`, fill: "var(--ink-2)" }));
-      if (mk.shape === "dia") svg.append(s("path", { d: `M${x},${ty - 9} L${x + 4},${ty - 5} L${x},${ty - 1} L${x - 4},${ty - 5}Z`, fill: "var(--ink-2)" }));
-      svg.append(s("text", { x: x + 6, y: ty, "font-size": 11, fill: "var(--ink-2)", stroke: "var(--surface)", "stroke-width": 3, "paint-order": "stroke" }, mk.label));
-    }
-    // series
-    for (const [key, col] of [["v_load", "var(--s1)"], ["v_dg", "var(--s2)"]]) {
-      const d = pts.filter(p => p[key] != null).map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)},${Y(p[key]).toFixed(1)}`).join("");
-      svg.append(s("path", { d, fill: "none", stroke: col, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-    }
-    // direct labels at the line ends
-    const lp = pts[pts.length - 1];
-    const ly = [[Y(lp.v_load), "load"], [Y(lp.v_dg), "DG"]].sort((a, b) => a[0] - b[0]);
-    if (ly[1][0] - ly[0][0] < 12) ly[1][0] = ly[0][0] + 12;
-    for (const [y, txt] of ly) svg.append(s("text", { x: Math.min(X(lp.t) + 4, W - 2), y: y + 4, "font-size": 11, fill: "var(--ink-2)", "text-anchor": X(lp.t) + 30 > W ? "end" : "start" }, txt));
-    if (pts.some(p => p.v_load < Y_LO || p.v_dg < Y_LO || p.v_load > Y_HI || p.v_dg > Y_HI))
-      svg.append(s("text", { x: W - m.r, y: H - m.b - 6, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, "values outside 0.80–1.20 pu clipped"));
-    // crosshair + tooltip
-    const hair = s("line", { y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1, visibility: "hidden" });
-    const dots = [s("circle", { r: 4, fill: "var(--s1)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" }),
-                  s("circle", { r: 4, fill: "var(--s2)", stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" })];
-    svg.append(hair, ...dots);
-    const hit = s("rect", { x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: "transparent" });
-    svg.append(hit);
-    const hide = () => { hair.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); tip.style.display = "none"; };
-    hit.addEventListener("pointerleave", hide);
-    hit.addEventListener("pointermove", ev => {
-      const rect = svg.getBoundingClientRect(), px = (ev.clientX - rect.left) * W / rect.width;
-      let best = pts[0], bd = 1e9;
-      for (const p of pts) { const d = Math.abs(X(p.t) - px); if (d < bd) { bd = d; best = p; } }
-      const x = X(best.t);
-      hair.setAttribute("x1", x); hair.setAttribute("x2", x); hair.setAttribute("visibility", "visible");
-      [["v_load", 0], ["v_dg", 1]].forEach(([k, i]) => { dots[i].setAttribute("cx", x); dots[i].setAttribute("cy", Y(best[k])); dots[i].setAttribute("visibility", "visible"); });
-      const row = (col, val, name) => h("div", { class: "row" }, h("span", { class: "lk", style: `background:${col}` }), h("b", {}, val), h("span", { class: "muted" }, name));
-      tip.replaceChildren(h("div", { class: "muted" }, `+${dur(best.t - t0)} into the run`),
-        row("var(--s1)", `${num(best.v_load)} pu`, "load bus"), row("var(--s2)", `${num(best.v_dg)} pu`, "DG bus"),
-        h("div", { class: "muted" }, `${best.ctrl_mode === 1 ? "MANUAL" : "auto"} · ${num(best.dg_setpoint, 1)} kW · ${best.abnormal ? "abnormal" : "in band"}`));
-      tip.style.display = "block";
-      const left = x * rect.width / W;
-      tip.style.left = `${Math.min(left + 12, rect.width - tip.offsetWidth - 4)}px`;
-      tip.style.top = "8px";
+    events.sort((a, b) => a.x - b.x).forEach((e, i) => { e.row = i; });
+    const np = r.phases.find(p => p.name === "normal");
+    const learn = np?.start_t && r.learn_s ? [{ x1: np.start_t - t0, x2: Math.min(np.start_t - t0 + r.learn_s, xMax) }] : [];
+    const last = pts[pts.length - 1];
+    const state = p => `${p.ctrl_mode === 1 ? "MANUAL control" : "automatic control"} · ${p.abnormal ? "out of the normal band" : "in the normal band"}`;
+    const told = p => [`${UI.rel(p.t, t0)} since run start`,
+      `load bus ${num(p.v_load)} pu · DG bus ${num(p.v_dg)} pu`,
+      `DG setpoint ${num(p.dg_setpoint, 1)} kW${p.p_dg != null ? ` · DG output ${num(p.p_dg, 1)} kW` : ""}`,
+      ...(p.line_load != null ? [`line loading ${num(p.line_load, 1)} %`] : []), state(p)].join("\n");
+    const chart = UI.plot({
+      width: Math.max(320, box.clientWidth || 600), height: 250, marginLeft: 48, marginRight: 64, marginBottom: 38,
+      ariaLabel: `Bus voltages for ${r.id}${unit != null ? `, feeder unit ${unit}` : ""}`,
+      x: { domain: [0, xMax], ...UI.timeAxis(xMax, "run start") },
+      y: { domain: [lo, hi], nice: true, grid: true, label: "voltage (pu)", labelArrow: "none", tickFormat: v => v.toFixed(2) },
+      marks: [
+        Plot.rect(learn, { x1: "x1", x2: "x2", y1: () => lo, y2: () => hi, fill: "var(--wash)" }),
+        Plot.text(learn, { x: "x1", text: () => "learned model is being fitted", frameAnchor: "bottom-left", dx: 4, dy: -4, fill: "var(--muted)", textAnchor: "start" }),
+        Plot.rect([band], { x1: () => 0, x2: () => xMax, y1: d => d[0], y2: d => d[1], fill: "var(--wash)", stroke: "var(--axis)", strokeOpacity: 0.6 }),
+        // One rule per turning point, its label stacked under the one before it.
+        ...events.flatMap(e => [Plot.ruleX([e.x], { stroke: "var(--ink-2)", strokeDasharray: e.dash }),
+          Plot.text([e], { x: "x", text: "label", frameAnchor: "top", dx: 5, dy: 4 + e.row * 13, textAnchor: "start",
+            fill: "var(--ink-2)", stroke: "var(--surface)", strokeWidth: 3 })]),
+        Plot.lineY(pts, { x: "x", y: "v_load", stroke: "var(--s1)", strokeWidth: 2 }),
+        Plot.lineY(pts, { x: "x", y: "v_dg", stroke: "var(--s2)", strokeWidth: 2 }),
+        // Each line named at its end, so that it is not told apart by colour alone.
+        Plot.text([last], { x: "x", y: "v_load", text: () => "load", dx: 6, dy: last.v_load >= last.v_dg ? -5 : 5, textAnchor: "start", fill: "var(--ink-2)" }),
+        Plot.text([last], { x: "x", y: "v_dg", text: () => "DG", dx: 6, dy: last.v_dg > last.v_load ? -5 : 5, textAnchor: "start", fill: "var(--ink-2)" }),
+        // The sample under the pointer: a hairline, both readings, and what the plant recorded then.
+        Plot.ruleX(pts, Plot.pointerX({ x: "x", stroke: "var(--ink)", strokeWidth: 1 })),
+        Plot.dot(pts, Plot.pointerX({ x: "x", y: "v_load", r: 4, fill: "var(--s1)", stroke: "var(--surface)", strokeWidth: 2 })),
+        Plot.dot(pts, Plot.pointerX({ x: "x", y: "v_dg", r: 4, fill: "var(--s2)", stroke: "var(--surface)", strokeWidth: 2 })),
+        UI.plotTip(pts, { x: "x", y: "v_load", title: told }),
+      ],
     });
-    box.insertBefore(svg, tip);
+    box.append(chart);
   }
-
   // ── the two sides of the run ──────────────────────────────────────────────
   // Folded from the ledger into run.x by reduce(): what the attacker recorded
   // (its agent, its recon, or the people at the red console) and the defender
@@ -1033,69 +1013,67 @@
 
   // One lane per side and one for the plant, on the run's timeline; the
   // vertical line is the time shown. A mark is a fact: click it to go there.
-  const LANE_HELP = {
-    attacker: "Attacker: ● step done · ✗ step failed · thin tick a Modbus write",
-    defender: "Defender: ▲ finding · ◇ decision · ■ countermeasure (green applied, red failed)",
-    plant: "Plant: red band = voltages out of the normal band · dashed amber = control in MANUAL",
+  const LANE_KEY = {
+    attacker: [["●", "var(--critical)", "attack step done"], ["✕", "var(--critical)", "attack step failed"], ["|", "var(--critical)", "write to the plant"]],
+    defender: [["▲", "var(--s1)", "finding"], ["◇", "var(--s1)", "decision"], ["■", "var(--good)", "countermeasure applied"],
+      ["□", "var(--good)", "countermeasure reverted"], ["■", "var(--critical)", "countermeasure failed"]],
+    plant: [["▬", "var(--critical)", "voltages out of the normal band"], ["┅", "var(--warning)", "control in MANUAL"]],
   };
   function drawLanes(box, r, t, lanes) {
     box.replaceChildren();
-    if (!r.start_t) return;
-    const x = sides(r), red = x.red;
-    const W = Math.max(320, box.clientWidth || 600), LH = 26, m = { l: 70, r: 12, t: 4, b: 22 };
-    const H = m.t + m.b + lanes.length * LH, t0 = r.start_t;
-    const times = [...red.steps, ...r.writes, ...r.findings, ...r.decisions, ...r.actions, ...r.plant].map(e => e.t).filter(v => v != null);
-    const tEnd = Math.max(t0 + 10, ...times, ...r.phases.map(p => p.end_t || 0));
-    const plannedEnd = t0 + r.phases.reduce((a, p) => a + (p.planned_s || 0), 0);
-    const xMax = (r.status === "running" ? Math.max(tEnd, plannedEnd) : tEnd) - t0;
-    const X = v => m.l + (W - m.l - m.r) * Math.min(1, Math.max(0, v - t0) / Math.max(xMax, 1));
-    const row = name => lanes.indexOf(name), Yc = i => m.t + LH * i + LH / 2;
-    const g = s("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Timeline of ${lanes.join(", ")} for ${r.id}` });
-    lanes.forEach((ln, i) => {
-      g.append(s("line", { x1: m.l, x2: W - m.r, y1: Yc(i), y2: Yc(i), stroke: "var(--grid)" }));
-      const lab = s("text", { x: m.l - 8, y: Yc(i) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--ink-2)" }, ln);
-      lab.append(s("title", {}, LANE_HELP[ln])); g.append(lab);
+    if (!r.start_t) { box.append(UI.empty(reused(r) || "This run has not started: there is no timeline yet.")); return; }
+    const x = sides(r), red = x.red, t0 = r.start_t, N = namer(r);
+    // Every fact as a point of its lane, with the sentence its tooltip says.
+    const fact = (lane, e, shape, colour, text) => ({ lane, x: e.t - t0, t: e.t, shape, colour, text });
+    const facts = [];
+    if (lanes.includes("attacker")) {
+      for (const w of r.writes) facts.push(fact("attacker", w, "write", "var(--critical)", `write to the plant: ${w.register} = ${w.value}${where(r, w)}${w.ok === false ? " (refused)" : ""}`));
+      for (const st of red.steps) facts.push(fact("attacker", st, st.ok ? "done" : "failed", "var(--critical)", `attack step ${st.ok ? "done" : "failed"}: ${N.text(st.node)}`));
+    }
+    if (lanes.includes("defender")) {
+      for (const f of r.findings) facts.push(fact("defender", f, "finding", "var(--s1)", `finding by ${UI.termText(f.detector)}: ${pretty(f.klass)}${where(r, f)}`));
+      for (const d of r.decisions) facts.push(fact("defender", d, "decision", "var(--s1)", `decision: ${d.actions.map(N.text).join(", ") || "no action"}`));
+      for (const a of r.actions) if (a.id !== "notify")
+        facts.push(fact("defender", a, a.op === "revert" ? "revert" : "action", a.ok ? "var(--good)" : "var(--critical)", `countermeasure ${didWhat(a)}: ${N.text(a.id)}`));
+    }
+    // Every feeder's spans on the one lane: each says which feeder it is.
+    const bands = [], manual = [];
+    if (lanes.includes("plant")) for (const [, plant, name] of feeders(r)) {
+      for (const [a, b] of spans(plant, p => p.abnormal)) bands.push({ lane: "plant", x1: a - t0, x2: Math.max(b - t0, a - t0 + 0.5), x: a - t0, t: a, text: `voltages out of the normal band${name}, for ${num(b - a, 1)} s` });
+      for (const [a, b] of spans(plant, p => p.ctrl_mode === 1)) manual.push({ lane: "plant", x1: a - t0, x2: b - t0, x: a - t0, t: a, text: `control in MANUAL${name}, for ${num(b - a, 1)} s` });
+    }
+    const xMax = runSpan(r, [...facts, ...bands, ...manual].map(e => e.t).concat(r.plant.map(p => p.t)));
+    const of = shape => facts.filter(f => f.shape === shape);
+    const point = [...facts, ...bands, ...manual];
+    const chart = UI.plot({
+      width: Math.max(320, box.clientWidth || 600), height: 44 + lanes.length * 28, marginLeft: 70, marginRight: 14, marginBottom: 36, marginTop: 6,
+      ariaLabel: `Timeline of ${lanes.join(", ")} for ${r.id}`,
+      x: { domain: [0, xMax], ...UI.timeAxis(xMax, "run start") },
+      y: { domain: lanes, label: null, tickSize: 0, padding: 0.3 },
+      marks: [
+        Plot.ruleY(lanes, { stroke: "var(--grid)" }),
+        Plot.barX(bands, { x1: "x1", x2: "x2", y: "lane", fill: "var(--critical)", fillOpacity: 0.45, insetTop: 2, insetBottom: 2 }),
+        Plot.ruleY(manual, { x1: "x1", x2: "x2", y: "lane", stroke: "var(--warning)", strokeWidth: 2, strokeDasharray: "4 3", dy: -9 }),
+        Plot.tickX(of("write"), { x: "x", y: "lane", stroke: "var(--critical)", strokeOpacity: 0.5, strokeWidth: 2 }),
+        Plot.dot(of("finding"), { x: "x", y: "lane", symbol: "triangle", r: 4, fill: "var(--s1)", fillOpacity: 0.6 }),
+        Plot.dot(of("done"), { x: "x", y: "lane", r: 5, fill: "var(--critical)", stroke: "var(--surface)", strokeWidth: 1 }),
+        Plot.dot(of("failed"), { x: "x", y: "lane", symbol: "times", r: 5, stroke: "var(--critical)", strokeWidth: 2.5 }),
+        Plot.dot(of("decision"), { x: "x", y: "lane", symbol: "diamond", r: 6, fill: "var(--surface)", stroke: "var(--s1)", strokeWidth: 2 }),
+        // A countermeasure, by how it went; a revert is the same square, hollow: no longer in force.
+        ...["var(--good)", "var(--critical)"].flatMap(colour => [
+          Plot.dot(of("action").filter(f => f.colour === colour), { x: "x", y: "lane", symbol: "square", r: 5, fill: colour, stroke: "var(--surface)", strokeWidth: 1 }),
+          Plot.dot(of("revert").filter(f => f.colour === colour), { x: "x", y: "lane", symbol: "square", r: 5, fill: "var(--surface)", stroke: colour, strokeWidth: 2 })]),
+        ...(t != null ? [Plot.ruleX([t - t0], { stroke: "var(--ink)", strokeWidth: 1.5 })] : []),
+        // The fact nearest the pointer: ringed, and said in words.
+        Plot.dot(point, Plot.pointer({ x: "x", y: "lane", r: 9, stroke: "var(--ink)", strokeWidth: 1.5 })),
+        UI.plotTip(point, { near: true, x: "x", y: "lane", title: e => `${e.text}\n${UI.rel(e.t, t0)} since run start — click to show the run at this time` }),
+      ],
     });
-    const put = (el, at, text) => {
-      el.append(s("title", {}, `${text} — click to show the run at this time`));
-      el.setAttribute("style", "cursor:pointer");
-      el.addEventListener("click", () => UI.setTime(at));
-      g.append(el);
-    };
-    if (row("attacker") >= 0) {
-      const y = Yc(row("attacker"));
-      for (const w of r.writes) put(s("line", { x1: X(w.t), x2: X(w.t), y1: y - 9, y2: y + 9, stroke: "var(--critical)", opacity: 0.5, "stroke-width": 2 }), w.t, `write ${w.register} = ${w.value}${where(r, w)}`);
-      for (const st of red.steps) {
-        const cx = X(st.t);
-        put(st.ok ? s("circle", { cx, cy: y, r: 5, fill: "var(--critical)" })
-          : s("path", { d: `M${cx - 5},${y - 5} L${cx + 5},${y + 5} M${cx + 5},${y - 5} L${cx - 5},${y + 5}`, stroke: "var(--critical)", "stroke-width": 2.5 }),
-          st.t, `${st.node} ${st.ok ? "done" : "failed"}`);
-      }
-    }
-    if (row("defender") >= 0) {
-      const y = Yc(row("defender"));
-      for (const f of r.findings) { const cx = X(f.t), cy = y - 3;
-        put(s("path", { d: `M${cx - 4},${cy + 6} L${cx + 4},${cy + 6} L${cx},${cy - 2}Z`, fill: "var(--s1)", opacity: 0.6 }), f.t, `${f.detector}: ${f.klass}${where(r, f)}`); }
-      for (const d of r.decisions) { const cx = X(d.t);
-        put(s("path", { d: `M${cx},${y - 6} L${cx + 6},${y} L${cx},${y + 6} L${cx - 6},${y}Z`, fill: "var(--surface)", stroke: "var(--s1)", "stroke-width": 2 }), d.t, `decision: ${d.actions.join(", ") || "no action"}`); }
-      // A revert is the same square, hollow: the countermeasure is no longer in force.
-      for (const a of r.actions) if (a.id !== "notify") {
-        const col = a.ok ? "var(--good)" : "var(--critical)", undo = a.op === "revert";
-        put(s("rect", { x: X(a.t) - 4, y: y - 4, width: 8, height: 8, fill: undo ? "var(--surface)" : col, stroke: col, "stroke-width": undo ? 2 : 0 }), a.t, `${a.id} ${didWhat(a)}`);
-      }
-    }
-    if (row("plant") >= 0) {
-      const y = Yc(row("plant"));
-      // Every feeder's spans on the one lane: each says which feeder it is.
-      for (const [, plant, name] of feeders(r)) {
-        for (const [a, b] of spans(plant, p => p.abnormal)) put(s("rect", { x: X(a), y: y - 6, width: Math.max(2, X(b) - X(a)), height: 12, fill: "var(--critical)", opacity: 0.45 }), a, `plant out of its band${name}`);
-        for (const [a, b] of spans(plant, p => p.ctrl_mode === 1)) put(s("line", { x1: X(a), x2: X(b), y1: y - 10, y2: y - 10, stroke: "var(--warning)", "stroke-width": 2, "stroke-dasharray": "4 3" }), a, `control in MANUAL${name}`);
-      }
-    }
-    const step = tickStep(xMax);
-    for (let v = 0; v <= xMax; v += step) g.append(s("text", { x: X(t0 + v), y: H - 6, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, tickLabel(v)));
-    if (t != null) g.append(s("line", { x1: X(t), x2: X(t), y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1.5 }));
-    box.append(g);
+    // Plot keeps the fact under the pointer as the chart's value.
+    chart.style.cursor = "pointer";
+    chart.addEventListener("click", () => { if (chart.value) UI.setTime(chart.value.t); });
+    box.append(chart, h("div", { class: "legend" }, ...lanes.flatMap(lane => LANE_KEY[lane].map(([mark, colour, label]) =>
+      h("span", {}, h("span", { style: `color:${colour};font-weight:700` }, mark), label)))));
   }
   // The intervals over which a plant condition held.
   function spans(plant, pred) {
@@ -1152,36 +1130,54 @@
       kpi("who is ahead", ahead, a0 == null ? null : reached > seen ? "var(--critical)" : "var(--s1)"));
     if (reused(r)) { box.replaceChildren(none(reused(r))); return; }
     if (!rows.length) { box.replaceChildren(kpis, none("No attack step yet: each row will compare when the attacker did a step with when the defender saw it.")); return; }
-    // One bar per step on a shared axis, from the attack's start to its last fact.
-    const times = rows.flatMap(x => [x.did, x.failed, x.sus, x.conf, x.c?.t]).filter(v => v != null);
-    const lo = Math.min(t0, ...times), hi = Math.max(lo + 1, ...times, t ?? -Infinity);
-    const W = 360, X = v => 6 + (W - 12) * (v - lo) / (hi - lo);
-    const bar = x => {
-      const g = s("svg", { viewBox: `0 0 ${W} 18`, width: W, height: 18, role: "img", "aria-label": `timeline of ${x.n}` });
-      g.append(s("line", { x1: 6, x2: W - 6, y1: 9, y2: 9, stroke: "var(--grid)" }));
-      const at = (v, el, text) => { if (v == null) return; el.append(s("title", {}, text)); g.append(el); };
-      if (x.did != null) at(x.did, s("circle", { cx: X(x.did), cy: 9, r: 5, fill: "var(--critical)" }), `attacker did it ${rel(x.did, t0)}`);
-      if (x.failed != null) at(x.failed, s("path", { d: `M${X(x.failed) - 4},5 L${X(x.failed) + 4},13 M${X(x.failed) + 4},5 L${X(x.failed) - 4},13`, stroke: "var(--critical)", "stroke-width": 2 }), `attacker failed it ${rel(x.failed, t0)}`);
-      if (x.sus != null) at(x.sus, s("path", { d: `M${X(x.sus) - 5},15 L${X(x.sus) + 5},15 L${X(x.sus)},5Z`, fill: "var(--s1)", opacity: 0.8 }), `defender suspected it ${rel(x.sus, t0)}`);
-      if (x.conf != null) at(x.conf, s("path", { d: `M${X(x.conf)},3 L${X(x.conf) + 6},9 L${X(x.conf)},15 L${X(x.conf) - 6},9Z`, fill: "var(--s1)" }), `defender confirmed it ${rel(x.conf, t0)}`);
-      if (x.c) at(x.c.t, s("rect", { x: X(x.c.t) - 4, y: 5, width: 8, height: 8, fill: "var(--good)" }), `${N.text(x.c.id)}: applied ${rel(x.c.t, t0)}`);
-      if (t != null) g.append(s("line", { x1: X(t), x2: X(t), y1: 0, y2: 18, stroke: "var(--ink)" }));
-      return g;
-    };
+    // Every step on one axis, counted from the start of the attack: when the
+    // attacker did it, when the defender suspected and confirmed it, and when
+    // a countermeasure covering it was applied.
+    const short = n => clip(N.text(n), 38);
+    const at = (x, n, v, kind, text) => v == null ? [] : [{ step: short(x.n), x: v - t0, t: v, kind, text: `${N.text(x.n)}\n${text} ${rel(v, t0)} since attack start` }];
+    const facts = rows.flatMap(x => [...at(x, x.n, x.did, "did", "the attacker did it"), ...at(x, x.n, x.failed, "failed", "the attacker tried and failed"),
+      ...at(x, x.n, x.sus, "suspected", "the defender first suspected it"), ...at(x, x.n, x.conf, "confirmed", "the defender confirmed it"),
+      ...(x.c ? at(x, x.n, x.c.t, "countered", `countered by "${N.text(x.c.id)}", applied`) : [])]);
+    const lo = Math.min(0, ...facts.map(f => f.x)), hi = Math.max(lo + 1, ...facts.map(f => f.x), t == null ? -Infinity : t - t0);
+    const kind = k => facts.filter(f => f.kind === k);
+    const timeline = h("div", { class: "lanes" });
+    queueMicrotask(() => {
+      const chart = UI.plot({
+        width: Math.max(360, box.clientWidth || 700), height: 46 + rows.length * 26, marginLeft: 250, marginRight: 16, marginBottom: 36, marginTop: 6,
+        ariaLabel: `Kill chain of ${r.id}: each attack step against the defender's view of it`,
+        x: { domain: [lo, hi], ...UI.timeAxis(hi - lo, "attack start") },
+        y: { domain: rows.map(x => short(x.n)), label: null, tickSize: 0, padding: 0.3 },
+        marks: [
+          Plot.ruleY(rows.map(x => short(x.n)), { stroke: "var(--grid)" }),
+          Plot.dot(kind("suspected"), { x: "x", y: "step", symbol: "triangle", r: 5, fill: "var(--s1)", fillOpacity: 0.7 }),
+          Plot.dot(kind("confirmed"), { x: "x", y: "step", symbol: "diamond", r: 6, fill: "var(--s1)", stroke: "var(--surface)", strokeWidth: 1 }),
+          Plot.dot(kind("countered"), { x: "x", y: "step", symbol: "square", r: 5, fill: "var(--good)", stroke: "var(--surface)", strokeWidth: 1 }),
+          Plot.dot(kind("did"), { x: "x", y: "step", r: 5, fill: "var(--critical)", stroke: "var(--surface)", strokeWidth: 1 }),
+          Plot.dot(kind("failed"), { x: "x", y: "step", symbol: "times", r: 5, stroke: "var(--critical)", strokeWidth: 2.5 }),
+          ...(t != null ? [Plot.ruleX([t - t0], { stroke: "var(--ink)", strokeWidth: 1.5 })] : []),
+          Plot.dot(facts, Plot.pointer({ x: "x", y: "step", r: 9, stroke: "var(--ink)", strokeWidth: 1.5 })),
+          UI.plotTip(facts, { near: true, x: "x", y: "step", title: "text" }),
+        ],
+      });
+      chart.style.cursor = "pointer";
+      chart.addEventListener("click", () => { if (chart.value) UI.setTime(chart.value.t); });
+      timeline.replaceChildren(chart);
+    });
     const lag = x => { const a = x.did ?? x.failed; return a == null || x.sus == null ? "—" : rel(x.sus, a); };
     const SINCE = "counted from the start of the attack";
+    const key = (mark, colour, label) => h("span", {}, h("span", { style: `color:${colour};font-weight:700` }, mark), label);
     box.replaceChildren(kpis,
-      h("div", { class: "legend" }, h("span", {}, h("span", { class: "dot", style: "background:var(--critical)" }), "attacker did it (✗ failed)"),
-        h("span", {}, "▲ defender suspected"), h("span", {}, "◆ confirmed"), h("span", {}, h("span", { class: "dot", style: "background:var(--good);border-radius:1px" }), "countermeasure applied")),
       h("p", { class: "sub", style: "margin:6px 0" }, "Times are counted from the start of the attack: the attacker's first step, or its first write to the plant."),
+      timeline,
+      h("div", { class: "legend" }, key("●", "var(--critical)", "the attacker did the step"), key("✕", "var(--critical)", "tried and failed"),
+        key("▲", "var(--s1)", "the defender suspected it"), key("◆", "var(--s1)", "confirmed it"), key("■", "var(--good)", "a countermeasure covering it was applied")),
       table([th("attack step", "A step of the attack tree the attacker ran, or the defender has an opinion on; hover for the name it is recorded under"),
-        th("timeline", `The step's facts on one axis, ${SINCE}; the black line is the time shown`),
         th("attacker did it", `When the attacker did the step, ${SINCE}; ✗ when it tried and failed`, true),
         th("defender suspected", `When the defender first believed the step possible, ${SINCE}`, true),
         th("defender confirmed", `When the defender was first sure of it, ${SINCE}`, true),
         th("suspected after", "How long after the attacker's step the defender first suspected it. Negative: the defender expected the step before the attacker got to it", true),
         th("countered by", `The first countermeasure that covered the step and was applied, and when (${SINCE})`)],
-        rows.map(x => h("tr", jump(x.did ?? x.failed ?? x.sus ?? t0), h("td", { class: "wrap" }, N.el(x.n)), h("td", {}, bar(x)),
+        rows.map(x => h("tr", jump(x.did ?? x.failed ?? x.sus ?? t0), h("td", { class: "wrap" }, N.el(x.n)),
           h("td", { class: "num" }, x.did != null ? rel(x.did, t0) : x.failed != null ? h("span", { style: "color:var(--critical)" }, `✗ ${rel(x.failed, t0)}`) : "—"),
           h("td", { class: "num" }, rel(x.sus, t0)), h("td", { class: "num" }, rel(x.conf, t0)),
           h("td", { class: "num" }, lag(x)),
@@ -1432,7 +1428,6 @@
   let UI = null;
   // The page invokes this once, with its own handles.
   (window.CyberRangePanels ||= {})["cps"] = ui => {
-    s = ui.svg;
     UI = ui;
     return {
       queue: () => queue(ui),

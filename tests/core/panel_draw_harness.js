@@ -59,7 +59,7 @@ const els = {};
 globalThis.document = { createElementNS: (ns, t) => new El(t, ns), createElement: t => new El(t, XHTML),
   createTextNode: t => String(t), createDocumentFragment: () => new El("#fragment"),
   getElementById: id => els[id] || (els[id] = new El("div")),
-  documentElement: { dataset: {}, namespaceURI: XHTML } };
+  documentElement: { dataset: {}, namespaceURI: XHTML }, defaultView: globalThis };
 document.documentElement.ownerDocument = document;
 // A panel may defer drawing to a microtask (once its box is on the page): run it
 // now, so that what it throws is caught and named like the rest.
@@ -79,7 +79,7 @@ let VIEW = null, TIME = null;
 // The run's structure as the page hands it to a panel; null while it loads.
 let STRUCTURE = null;
 const api = { get S() { return S; }, $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table,
-  now: () => 200, statusBadge, structure: () => STRUCTURE,
+  plot, plotTip, timeAxis, now: () => 200, statusBadge, structure: () => STRUCTURE,
   shownRunId: () => "r1", select() {}, render() {}, stepCell: () => h("td"), queueTable() {},
   time: () => TIME, setTime(t) { TIME = t; }, view: () => VIEW };
 

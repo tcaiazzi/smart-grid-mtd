@@ -210,7 +210,7 @@ td.wrap { white-space: normal; min-width: 280px; }
       <div class="phases" id="d-phases"></div>
       <div class="chips" id="d-chips"></div>
       <div class="legend" id="d-legend"></div>
-      <div class="chart" id="d-chart"><div class="tip" id="tip"></div></div>
+      <div class="chart" id="d-chart"></div>
       <div class="err" id="d-err"></div>
       <p class="sub" id="d-notes" style="margin:6px 0 0"></p>
       <h2 style="margin-top:14px" id="f-title"></h2>
@@ -219,7 +219,7 @@ td.wrap { white-space: normal; min-width: 280px; }
     </section>
 
   <section class="card" id="graph-card"
-    data-help="The lab as structure, drawn as of the time the bar above selects.&#10;Topology: zones, hosts, addresses, services and the allowed flows.&#10;Knowledge graph: every typed node and how they relate (hover a node).&#10;Attack tree: the ways to the plant's impact. The switches above the drawing choose what is shown; the legend says what each colour and mark means.">
+    data-help="The lab as structure, drawn as of the time the bar above selects. Drag a drawing to move it; zoom with − + or Ctrl + wheel.&#10;Topology: zones, hosts, addresses, services and the allowed flows.&#10;Knowledge graph: every typed node and how they relate (hover a node).&#10;Attack tree: the ways to the plant's impact. The switches above the drawing choose what is shown; the legend says what each colour and mark means.">
     <h2>Topology · knowledge graph · attack tree</h2>
     <p class="sub" id="g-sub">Select a run.</p>
     <div class="gbar">
@@ -229,6 +229,12 @@ td.wrap { white-space: normal; min-width: 280px; }
         <button type="button" data-view="tree" aria-pressed="false">Attack tree</button>
       </div>
       <span id="g-options"></span>
+      <span class="spacer"></span>
+      <span class="tabs" role="group" aria-label="Zoom" title="Drag the drawing to move it. Zoom with these buttons, or with Ctrl + mouse wheel.">
+        <button type="button" id="g-zoom-out" aria-label="Zoom out">−</button>
+        <button type="button" id="g-zoom-in" aria-label="Zoom in">+</button>
+        <button type="button" id="g-zoom-reset" title="Back to the whole drawing">Fit</button>
+      </span>
     </div>
     <div class="legend" id="g-legend"></div>
     <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
@@ -530,6 +536,30 @@ function term(id, label, help) {
   const text = termText(id, label);
   return h("span", { class: "term", title: [text === id ? null : `recorded as: ${id}`, help].filter(Boolean).join("\n") || null }, text);
 }
+// ── charts ──────────────────────────────────────────────────────────────────
+// Every chart of the page and of the panels is drawn by Observable Plot, through
+// this one door: the page's type and colours (CSS variables, so a chart follows
+// the theme without being redrawn), and tooltips that sit on the page's surface.
+function plot(options) {
+  return Plot.plot({
+    style: { fontFamily: "inherit", fontSize: "11px", color: "var(--ink-2)", background: "none", overflow: "visible" },
+    ...options,
+  });
+}
+// A tooltip of the page's own look, following the pointer along x (or to the
+// nearest mark, with `near`): `title` is the text it shows for a datum.
+function plotTip(data, { x, y, title, near, ...more }) {
+  return Plot.tip(data, (near ? Plot.pointer : Plot.pointerX)({ x, y, title, fill: "var(--surface)", stroke: "var(--axis)",
+    textPadding: 8, lineHeight: 1.25, lineWidth: 40, ...more }));
+}
+// An axis of time counted from an origin, in one unit throughout: seconds for a
+// short span, minutes:seconds beyond. `since` names the origin in the label.
+function timeAxis(span, since) {
+  const long = span >= 180;
+  return { label: `time since ${since}${long ? " (min:s)" : " (s)"}`, labelAnchor: "center", labelArrow: "none",
+    ticks: 8, tickFormat: v => long ? dur(v) : String(+v.toFixed(1)), tickSize: 4 };
+}
+
 // A box with nothing to show says why: an empty panel reads as a broken one.
 const empty = why => h("div", { class: "empty" }, why);
 // A table from headers [label, help, kind] (kind "num" right-aligns) and rows of
@@ -587,7 +617,7 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 //                               mode(mode, run) = a run's mode as a sentence
 const panelApi = {
   get S() { return S; },
-  $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table,
+  $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table, plot, plotTip, timeAxis,
   now, statusBadge, queueTable, stepCell,
   // The run's recorded structure (knowledge graph, attack tree), or null while it
   // loads: the page draws again when it arrives. It names the tree's nodes.
@@ -1052,6 +1082,26 @@ function graphOpts(g) {
   return gOpts;
 }
 
+// Any structure drawing can be moved and enlarged (d3.zoom): dragged to move,
+// zoomed with the buttons or Ctrl + wheel. The plain wheel is left to the page,
+// which is long: a drawing that swallowed it would trap the reader's scroll.
+// Each view keeps where the reader left it across the redraws a live run causes.
+const gZoom = {};
+let gZoomTo = null;
+function zoomable(drawing) {
+  if (!drawing) return;
+  const view = gView, inner = svg("g");
+  inner.append(...drawing.childNodes);
+  drawing.append(inner);
+  const zoom = d3.zoom().scaleExtent([0.5, 8])
+    .filter(e => e.type === "wheel" ? e.ctrlKey || e.metaKey : !e.button)
+    .on("zoom", e => { inner.setAttribute("transform", e.transform); gZoom[view] = e.transform; });
+  const sel = d3.select(drawing).call(zoom).on("dblclick.zoom", null);
+  drawing.style.cursor = "grab";
+  if (gZoom[view]) sel.call(zoom.transform, gZoom[view]);
+  gZoomTo = how => how === "reset" ? sel.call(zoom.transform, d3.zoomIdentity) : sel.call(zoom.scaleBy, how);
+}
+
 function renderGraph() {
   // The card exists only for a scenario that declares a graph to draw in it.
   const g = panel()?.graph;
@@ -1082,7 +1132,7 @@ function renderGraph() {
   const ov = g.overlayAt(r, T.t);
   const draw = { topology: g.drawTopology, kg: g.drawKG, tree: g.drawTree }[gView];
   let legend = [];
-  try { legend = draw($("g-view"), st, ov, { width, tip: gTip, ...opts }) || []; }
+  try { legend = draw($("g-view"), st, ov, { width, tip: gTip, ...opts }) || []; zoomable($("g-view").querySelector("svg.graph")); }
   catch (e) { $("g-view").replaceChildren(h("div", { class: "err" }, `could not draw: ${e.message}`)); }
   // A legend entry with no colour heads the group of entries after it.
   $("g-legend").replaceChildren(...legend.map(([c, label]) => c
@@ -1275,6 +1325,9 @@ $("g-time").addEventListener("input", e => {
   render();
 });
 $("g-live").addEventListener("click", () => { setPlaying(false); gTime = null; render(); });
+$("g-zoom-in").addEventListener("click", () => gZoomTo?.(1.4));
+$("g-zoom-out").addEventListener("click", () => gZoomTo?.(1 / 1.4));
+$("g-zoom-reset").addEventListener("click", () => gZoomTo?.("reset"));
 $("t-prev").addEventListener("click", () => { setPlaying(false); stepFact(-1); });
 $("t-next").addEventListener("click", () => { setPlaying(false); stepFact(1); });
 $("t-play").addEventListener("click", () => setPlaying(!playing));
