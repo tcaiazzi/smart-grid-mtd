@@ -42,9 +42,16 @@ that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
 
 Next to it: `nodes/soc/` (the SOC's analytics and its operator console),
 `nodes/redteam/` (the attacker node's brains: the autonomous tree-guided
-attacker `red_agent.py` with its planner, and the red team's console) and
-`nodes/common/` (what any host a person works on needs: the web terminal and
-SSH set-up around `ttyd` and OpenSSH, and the record of the commands typed).
+attacker `red_agent.py` with its planner, the recon that builds its own tree,
+and the red team's console), `nodes/soar/` (DFIR-IRIS's start-up and the SOC's
+module for it) and `nodes/common/`. The last holds what more than one kind of
+node runs:
+
+- what any host a person works on needs: the web terminal and SSH set-up around
+  `ttyd` and OpenSSH, and the record of the commands typed;
+- the knowledge graph, the attack tree's model and its generator
+  (`soar_kg.py`, `soar_trees.py`, `techniques.py`, `attack_graph.py`), which the
+  SOC runs on its inventory and the recon attacker on what it found.
 
 The agents under `cyberrange/planes/*/agents/` predate this boundary: they are
 node software too, and are meant to move here.
@@ -55,6 +62,9 @@ Ask what its lifecycle is:
 
 - **Is it the configuration or glue of a tool a node runs?** → `nodes/<tool>/`,
   and add it to the scenario's `guest_files.py`.
+- **Is it node software that more than one kind of node runs?** →
+  `nodes/common/`, staged by each manifest that needs it (a scenario that lists
+  it where another one does too counts it as shared in `make platform-loc`).
 - **Does it run inside a container?** → `planes/<plane>/agents/`, and add it to
   the scenario's `guest_files.py`. It must be a flat module that imports only the
   stdlib and what its node image installs (`docker/<scenario>/Dockerfile`),
@@ -101,7 +111,8 @@ tracked source file is counted by somebody.
 
 | Question | Answer |
 |---|---|
-| Does the lab still deploy the same thing? | `tests/core/test_deploy_contract.py` freezes every scenario's guest paths and startup commands (`make lab-conf` renders them without Docker) |
+| Does the lab still deploy the same thing? | `tests/core/test_deploy_contract.py` freezes every scenario's guest paths and startup commands (`make lab-conf` renders them without Docker), and refuses a lab that gives one address to two NICs on a link |
+| Does the SOC still reason on the same tree? | `tests/nodes/test_tree_snapshot.py` freezes the generated attack tree and countermeasures of the CPS lab and of two variants |
 | Do the entry points exist? | `tests/core/test_entry_points.py` resolves every `-m <module>` that the makefiles, scripts and campaigns invoke, and every `make` target they call |
 | Is the layering intact, and the platform/node boundary? | `tests/core/test_layering.py` |
 | Are the node tools pinned? | `tests/core/test_guest_imports.py` (pip pins against `requirements.txt`; apt pins of the Wazuh packages, agent and manager on one version) |

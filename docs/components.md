@@ -236,11 +236,11 @@ from the HMI onto the workstation, which stands on the OT link.
 | **Starts** | `python3 ews_maint.py --port P --token T --allow CLIENT_IP --access-log /ews_maint.access.jsonl` |
 | **Artifacts** | `<node>.ews_maint.log`, `<node>.ews_maint.access.jsonl`; `<node>.ot_mitm.jsonl` when an attack stood between the PLC and the engine (what the engine said, what the PLC was given) |
 
-### `ScriptedChain(mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5)`
+### `ScriptedChain(mode, target_url, engine_ip, engine_port, repeat=None, interval=0.5, node="attacker")`
 
 The fixed chain of one attack mode: RCE on the web app, then a pivot from the
 HMI (an allowed host), then unauthorized Modbus writes. `exploit_client.py`
-runs on the attacker node.
+runs on the attacker `node` (the CPS scenario passes the lab's `it-host`).
 
 | `mode` | Writes | Effect |
 |---|---|---|
@@ -260,7 +260,7 @@ runs on the attacker node.
 | **Artifacts** | `attacker.exploit.log` |
 | **`label`** | the mode, used for the attack phase and `run_start.mode` |
 
-### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5, tree=None)`
+### `PlannedAttacker(profile, target_url, engine_ip, engine_port, goal=None, dwell=0.0, max_steps=12, interval=0.5, tree=None, node="attacker")`
 
 A reactive attacker whose brain runs **in the lab** (`nodes/redteam/red_agent.py`,
 with the planner), the red counterpart of `SocAnalytics`. This component launches
@@ -287,6 +287,26 @@ closes its path, it tries another branch, or stops.
 | **When the agent dies** | With no record at all, `attack(ctx)` raises and the run fails: it would otherwise be scored as a run without an attack. With a record cut short, the host writes the `attack_end` itself (`aborted`, the stage of the last step that succeeded). |
 | **Artifacts** | `attacker.red_agent.log` (every step's output), `attacker.red_actions.jsonl` |
 | **`label`** | `planner:<profile>` |
+
+### `ReconAttacker(profile, it_cidr, scan_ports="22,80,502,5020,8080", goal=None, dwell=0.0, max_steps=12, interval=0.5, node="attacker")`
+
+A `PlannedAttacker` that is **not handed the tree**: given only a scan scope (its
+own IT subnet and a port list), it derives the tree in the lab
+(`nodes/redteam/red_recon_agent.py`). nmap on its own box finds the IT side;
+through the foothold on the HMI it reads the OS and the HMI's own pymodbus to
+find the engine and its registers. `belief_tree.py` writes what it found as an
+inventory and builds the tree from it with the SOC's own generator
+(`nodes/common/attack_graph.py`), then the agent plans on it as the
+`PlannedAttacker` does. Its node needs the `kathara/redteam` image (nmap,
+networkx).
+
+| | |
+|---|---|
+| **Call** | `attack(ctx)`, blocking |
+| **Ground truth** | as `PlannedAttacker`, plus `recon` per stage (foothold, engine address, Modbus reached) |
+| **Ledger** | as `PlannedAttacker`, plus `recon` (what was found, in full) and `attacker_belief` (the tree it built) |
+| **Artifacts** | as `PlannedAttacker` (the agent's log, `/red_recon_agent.log`, still downloads as `<node>.red_agent.log`), plus `<node>.belief_tree.json`, which `metrics.py` scores as tree fidelity |
+| **`label`** | `recon:<profile>` |
 
 ### `PassiveFingerprinter(node, iface, model, scaler, block_policy="top1", threshold=None)`
 
@@ -324,7 +344,7 @@ Detection and response, both proactive (MTD) and reactive (sensors, and the
 SOC that decides on what they find). Guest sensors write telemetry with `cyberrange/planes/defense/agents/mtd_telemetry.py`,
 declare it as a `TelemetrySource`, and map it onto the ledger with `mirror`.
 
-### `OtSensor(node, iface, engine_ip, engine_port, plc_ip, hmi_ip, detectors, learn_seconds, dashboard_port=None, responder_ip=None)`
+### `OtSensor(node, iface, engine_ip, engine_port, plc_ip, hmi_ip, detectors, learn_seconds, dashboard_port=None, responder_ip=None, plant_b64=None)`
 
 Passive Modbus deep-packet inspection on the OT link. It sniffs a promiscuous
 NIC with no address and reports on its management NIC. It is stdlib + numpy
@@ -421,6 +441,29 @@ its artifacts, and hold no logic of their own.
 Timings measured in the lab: manager and agents ready about 8 s after start;
 finding → manager alert 0.5 s (median); API call → response started on the
 host 0.1–0.5 s.
+
+### The SOC's tools: `WazuhIndexer`, `WazuhDashboard`, `AlertShipper`, `IrisAlertForwarder`, `IrisService`
+
+The tools of a real SOC, for the blue team of `cps-soc`
+([scenario-cps-soc.md](scenario-cps-soc.md)): Wazuh's indexer and dashboard as
+the SIEM, DFIR-IRIS as case management. The software is the projects' own,
+installed by the images (`docker/wazuh-*`, `docker/iris-*`) and configured from
+`nodes/wazuh/` and `nodes/soar/`; each node starts idle on a shell
+(`Node.entrypoint`) and its component starts the service once the lab has
+addressed it. The services dial each other by the names the lab's certificates
+carry (`wazuh.indexer`, `wazuh.dashboard`, `wazuh.manager`, `iris.lab`), which the
+scenario resolves in each node's `/etc/hosts`.
+
+| | |
+|---|---|
+| **`WazuhIndexer(node, passwords)`** | The SIEM's store (OpenSearch). `passwords` is `{"admin", "shipper", "kibanaserver", "blue"}`: the administrator's (handed to no one), the alert shipper's (it may only write alerts), the dashboard's own connection's, the blue team's login. Starts `wazuh-indexer-start.sh`. Artifact: `<node>.wazuh-cluster.log`. |
+| **`WazuhDashboard(node, kibanaserver_password)`** | The SIEM's interface, served on the node's published port; installs the lab's views (the attack tree and the knowledge graph) as soon as it answers. Starts `wazuh-dashboard-start.sh`. |
+| **`AlertShipper(node, indexer_password)`** | Filebeat on the manager's node: every alert into the indexer, as the `filebeat` user, as a Wazuh server does. The SOC analytics keeps reading `alerts.json`. Starts `wazuh-shipper-start.sh`. |
+| **`IrisAlertForwarder(node, iris_url, iris_key)`** | The manager's integration with IRIS (`nodes/wazuh/manager/iris_forward.py`): the sensor alerts worth a person's look become IRIS alerts, aggregated per host, rule, class and source within 120 s. Artifact: `<node>.integrations.log`. |
+| **`IrisService(node, role, env)`** | One of IRIS's services — `db`, `mq`, `app`, `worker` or `web` — with IRIS's own environment (`env`, the variables of its compose file). Each waits for the services it needs (`nodes/soar/iris-start.sh`), so they start in any order. |
+
+Every secret (the indexer's users, IRIS's keys and passwords) is drawn per run
+by the scenario and reaches the team only through `teams.json`.
 
 ### `QkdCertBootstrap(ca_node, client_node, shared_key, server_ips, client_ips, ca_ip="10.1.0.2", ca_port=9999, server_cn="semp", client_cn="scmc1")`
 
@@ -526,11 +569,11 @@ sensor's, and the IT sensor's on the HMI).
 ### CPS advisor run (`cyberrange/scenarios/cps_advisor/scenario.py`)
 
 The CPS run, with `SocAnalytics(approval="operator:<s>", operator_port=…,
-operator_token=…, operator_terminal=…)` and, through the two hooks of the base
-scenario:
+operator_token=…, operator_terminal=…)` and what the `People` feature adds
+through its hooks:
 
 ```
-services     … the CPS services, then (extra_services):
+services     … the CPS services, then (People.services):
              WebTerminal(soc) → RecordedShell(soc, blue) → JumpHost(soc, {firewall, sensor, hmi})
              → RecordedShell(host, blue, intruder=red, jump=SOC, entry=…) on each managed host
 normal       as CPS

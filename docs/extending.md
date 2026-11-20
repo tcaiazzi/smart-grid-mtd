@@ -66,21 +66,36 @@ topology, episode, CLI, campaign, deploy manifest, metrics, and its `analysis/` 
 [Architecture](platform.md) is the full contract; the `cyberrange-scenario` skill
 walks through it.
 
+## Adding to the CPS family
+
+A new CPS experiment is mostly data, not code:
+
+- **A different lab** is a `LabSpec` (`cyberrange/scenarios/cps/lab.py`): zones,
+  hosts by role with their interfaces and services, the flows the boundary
+  forwards. Addresses, routes, the firewall, the Wazuh agents and the SOC's
+  inventory follow; the spec refuses a lab that breaks what the rest relies on.
+  Return it from `lab_spec(args)`.
+- **A different plant** is a description for `ot_registers.plant()`: feeders,
+  each a Modbus unit, with their lines, load and generator. Return it from
+  `plant_spec(args)`; bind each PLC and HMI to its feeder with `Host.unit`.
+- **The attack tree and the countermeasures** follow from the graph
+  (`nodes/common/attack_graph.py`). A new kind of impact is one entry in
+  `nodes/common/techniques.py`, plus the places that name it by kind
+  ([SOAR — KG & attack trees](kg-and-attack-trees.md) §9).
+- **Something added to the run** — people, tools, another attacker — is a
+  `Feature` (`cyberrange/scenarios/cps/feature.py`) in the new scenario's own
+  directory. The scenario is `CpsScenario` with a tuple of features; existing
+  ones (`People`, `SocTools`, `Recon`) compose with it.
+
 ## The gate before a change is done
 
 ```bash
 make fmt          # ruff format: layout only, never logic (the formatter owns layout)
-make lint         # dead imports, long lines — what fmt cannot fix
-make selftest     # the whole suite (no Kathará, no Docker)
+make check        # lint, the whole suite (no Kathará, no Docker), and a dry run of every target
 ```
 
-And dry-run every target, because campaigns shell out to them:
-
-```bash
-for t in $(grep -hoE '^[a-zA-Z0-9_.-]+:' Makefile make/*.mk | tr -d ':' | sort -u); do
-    make -n "$t" >/dev/null 2>&1 || echo "BROKEN: $t"
-done
-```
+The dry run is there because campaigns shell out to the targets: one that no
+longer expands is found otherwise hours into a run.
 
 ## Guardrails you will meet
 

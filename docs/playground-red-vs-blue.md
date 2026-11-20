@@ -30,21 +30,26 @@ and is not applied.
    │ hmi        10.10.0.20  │──▶│ only HMI → engine │──▶│ engine   10.20.0.20   │
    │  (operator workstation │   │ Modbus tcp/5020   │    │  (plant, Modbus       │
    │   + diagnostics app)   │   │ passes            │    │   tcp/5020)           │
+   │ ews        10.10.0.30 ─┼───┼──────────────────┼────┼─ ews      10.20.0.30   │
    └───────────┬────────────┘   └────────┬─────────┘    └──────────┬────────────┘
                │                          │                         │ passive listening
    ────────────┴──────────────────────────┴─────────────────────────┴────────────
       MANAGEMENT NETWORK (MGMT) 10.30.0.0/24
       hmi 10.30.0.30    firewall 10.30.0.1    sensor 10.30.0.10    soc 10.30.0.20
+      ews 10.30.0.50
 ```
 
 Three facts to keep in mind:
 
 1. **The attacker cannot reach the plant directly.** The firewall lets a single flow
    through to the OT network: from the HMI to the engine, over Modbus.
-2. **The HMI is the only door.** It is the operator's workstation, it runs a
-   vulnerable diagnostics web application, and it is connected to both of the networks
-   that matter: IT and management.
-3. **The sensor listens without speaking.** It sees all of the OT network's Modbus
+2. **The HMI is the only door through the firewall.** It is the operator's
+   workstation, it runs a vulnerable diagnostics web application, and it is connected
+   to both of the networks that matter: IT and management.
+3. **The engineering workstation (`ews`) is a door around it.** It stands on IT and on
+   the plant's own network, as the machine that programs a PLC does. It forwards
+   nothing, but whoever takes it is next to the PLC and the engine.
+4. **The sensor listens without speaking.** It sees all of the OT network's Modbus
    traffic and sends what it detects to the SOC over the management network.
 
 ### The plant's commands
@@ -176,6 +181,8 @@ At the top you choose the **SOC mode**:
 | `isolate_hmi` | hmi | cuts the HMI off the network (the legitimate operator too) | yes |
 | `force_auto` | firewall | returns control to the PLC and the setpoint to its nominal value | — |
 | `restore_breaker` | firewall | recloses the breaker | — |
+| `isolate_ews` | ews | takes the engineering workstation off the plant's network | yes |
+| `repair_arp` | firewall | tells the PLC and the engine each other's true address again | — |
 
 If the game is started with the IT-side sensor (`CPS_IT=1`) the SOC also sees the
 early steps of the attack on the HMI, and two more countermeasures are added:
@@ -193,6 +200,26 @@ A shell on the SOC, which is also the bridge to the other defence hosts: from he
 `ssh firewall`, `ssh sensor`, `ssh hmi` work over the management network. Use it to
 look at a host's state, the firewall rules, the logs — everything the console does not
 show. Here too every command is recorded.
+
+### On the SOC's tools (`make cps-soc-teams`)
+
+The same game, with the blue team on the tools of a real SOC instead of the SOC's
+console (technical details in [scenario-cps-soc.md](scenario-cps-soc.md)). The blue
+team's links, written to `output/cps-soc/run-1/teams.json`, are three: the
+terminal, the **SIEM** (the Wazuh dashboard, with the run's login) and the **cases**
+(DFIR-IRIS, same login). The certificates come from the lab's own authority: the
+browser asks for an exception once.
+
+- **Suggestions are tasks** of the run's case in IRIS. Close a task to approve it,
+  cancel it to reject it; one left open expires.
+- **Applying or revoking a countermeasure by hand**, and switching the SOC between
+  *advise* and *automatic*, are entries of IRIS's menus: on a countermeasure's task,
+  and on the case.
+- **The attack tree and the knowledge graph** are in the Wazuh dashboard
+  (*Attack tree*), coloured by what the SOC believes; the time picker shows them as
+  they were at any moment. The case summary in IRIS carries the tree as text.
+- **Alerts** worth a look arrive on IRIS's *Alerts* page, to merge into the case,
+  escalate or close.
 
 ## 6. Referee (control dashboard)
 

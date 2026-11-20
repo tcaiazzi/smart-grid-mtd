@@ -416,8 +416,9 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   `reachable(g, src, dst, port)` decides whether a host can reach a port on
   another from zones, addresses and rules. The CPS binding lives in
   `cyberrange/scenarios/cps/inventory.py` — the node software itself knows no scenario.
-- **Attack tree** (`nodes/common/soar_trees.py`), a template of the chain grounded on the
-  graph: access to the HMI's web app (T1190) → execution on the HMI (T1059) →
+- **Attack tree**, generated from the graph (`nodes/common/attack_graph.py`, on
+  the steps of `techniques.py` and the model of `soar_trees.py`). On this lab:
+  access to the HMI's web app (T1190) → execution on the HMI (T1059) →
   the sanctioned HMI→plant flow → one of six impacts: setpoint out of range
   (T0855), breaker open (T0855), MANUAL hijack (T0831), setpoint ramp (T0831),
   setpoint oscillation (T0831), breaker chatter (T0855). A second branch goes
@@ -425,7 +426,8 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   unauthorized write from it (T0855), or the position between the PLC and the
   engine (T0830) and the falsified measurements (T0856). Preconditions are
   checked on the graph, so removing the allow rule makes a branch infeasible.
-  The ATT&CK mapping still has open review notes.
+  A lab with several HMIs or feeders gets a way in per HMI and the actions per
+  feeder, under qualified ids. The ATT&CK mapping still has open review notes.
 - **Countermeasures**, the defence tree; each one *prevents* or *restores* tree
   nodes:
   - `block_flow` — an iptables DROP at the top of FORWARD on the firewall;
@@ -541,7 +543,14 @@ IT/OT boundary, and detection. The response loop above sits on top of them as a
 deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see the
 internal plan `docs/internal/piano-wp2-wp3.md`). Still to do:
 
-- automatic generation of the attack trees;
+- the attack tree's generator chains the steps of a fixed template (the ways
+  in, the actions per feeder): chaining arbitrary techniques by their pre- and
+  postconditions, and the probability and time of each step, are still to come
+  ([kg-and-attack-trees.md](kg-and-attack-trees.md) §10);
+- a scenario on a larger lab and plant: the description is there (`LabSpec`,
+  `ot_registers.plant()`), but the attacker executes only the first way in and
+  the first feeder, the sensor's model learns only the first feeder, and zones
+  OT apart behind their own RTUs are not modelled;
 - the stochastic game model;
 - real energy measurement of the countermeasures;
 - the management network in the attack tree (reaching the manager's API from
@@ -557,7 +566,9 @@ internal plan `docs/internal/piano-wp2-wp3.md`). Still to do:
 | PLC and HMI | `cyberrange/planes/traffic/agents/plc_controller.py`, `hmi_client.py` |
 | Attack chain | `cyberrange/planes/attack/agents/`, `cyberrange/planes/attack/active_attack.py` |
 | Sensor and model | `cyberrange/planes/defense/agents/ot_sensor.py`, `ot_model.py` |
-| SOAR: graph, tree, mapping, policies | `nodes/soc/soar_*.py` (node software), bound to this lab by `cyberrange/scenarios/cps/inventory.py` |
+| The lab as data, the variants | `cyberrange/scenarios/cps/lab.py` (`LabSpec`), `feature.py` (`Feature`) |
+| SOAR: graph, tree model, tree generator | `nodes/common/soar_kg.py`, `soar_trees.py`, `techniques.py`, `attack_graph.py` (shared with the recon attacker) |
+| SOAR: belief, policies | `nodes/soc/soar_mapping.py`, `soar_policy.py`, bound to this lab by `cyberrange/scenarios/cps/inventory.py` |
 | SOC analytics (the decision loop) | `nodes/soc/soc_analytics.py`; offline on the host through `cyberrange/scenarios/cps/soc_tool.py` and `responder.py` (`make cps-replay`) |
 | Wazuh: manager rules, agent profile, active response | `nodes/wazuh/manager/`, `nodes/wazuh/agent/` |
 | The same lab with people in the loop | [scenario-cps-advisor.md](scenario-cps-advisor.md) |

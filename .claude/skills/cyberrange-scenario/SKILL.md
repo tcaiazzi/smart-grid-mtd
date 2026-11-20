@@ -40,15 +40,20 @@ the adapter inside `cyberrange/core/topology.py` — not for scenario work here.
 
 ## A scenario built on another
 
-When the experiment is an existing lab with a difference, subclass that
-scenario instead of copying it — `cps-advisor` subclasses `CpsScenario`. Give
-it its own `name` and `lab_name`, vary only what the base exposes as a hook or
-a class attribute (`extra_services`, `engage`, `operator_api`, `check_approval`,
-`DEFAULT_*`, `topology(args, name=, extras=)`), and add a hook to the base
-rather than a test on the scenario's name. The base must not know the derived
-one exists. Its `SOURCES` list only its own directory and its manifests only
-what it adds, so the shared lab is counted once. `docs/platform.md` §2 has the
-table.
+When the experiment is an existing lab with a difference, build on that
+scenario instead of copying it. In the CPS family the difference is a
+`Feature` (`cyberrange/scenarios/cps/feature.py`) in the new scenario's own
+directory, and the scenario is a thin `CpsScenario` subclass with its own
+`name`, `lab_name`, `DEFAULT_*` and a tuple of features:
+`cps-soc = (SocTools(), People(console=False))`. A feature adds through hooks
+(`add_arguments`, `validate`, `check_approval`, `host_ports`, `prepare`,
+`run_info`, `extras`, `nodes`, `links`, `operator_api`, `services`, `engage`,
+`attacker`); add a hook to `Feature` rather than a test on the scenario's name.
+A different lab or plant is data: `lab_spec(args)` returns a `LabSpec`
+(`cps/lab.py`), `plant_spec(args)` a plant description
+(`ot_registers.plant()`). The base must not know the derived one exists. Its
+`SOURCES` list only its own directory and its manifests only what it adds, so
+the shared lab is counted once. `docs/platform.md` §2 has the tables.
 
 ## What a scenario owns
 
@@ -59,6 +64,7 @@ cyberrange/scenarios/<name>/
   __init__.py      docstring + SOURCES + GUEST_MANIFESTS (the code-size accounting)
   topology.py      the lab as data: Node, Iface, Route, zones, addresses
   scenario.py      the Scenario subclass: options, phases, episode, hooks
+  feature.py       CPS family: what this scenario adds to the cps one (a Feature)
   cli.py           three lines wrapping core.cli.main
   guest_files.py   which files each node is staged with
   metrics.py       compute_metrics(run_dir) -> flat dict

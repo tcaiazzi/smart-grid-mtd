@@ -38,7 +38,7 @@ from a lab node are prefixed with that node's name (`<node>.<file>`):
 | `<node>.telemetry.jsonl` | What a sensor reported (e.g. `sensor.telemetry.jsonl`, `hmi.it_telemetry.jsonl`). |
 | `response.jsonl` | The SOC's findings, suggestions, verdicts and responses (CPS scenarios). |
 | `<node>.*.log` | Each node's logs (the PLC, the engine, Wazuh, the SOC analytics, …). |
-| `metrics.json` / `metrics.md` | The scored metrics for the run, as data and as a report (see below). |
+| `metrics.json` / `metrics.md` | The scored metrics, as data and as a report. A campaign writes them for each of its runs. A single run puts its score on its ledger (`run_metrics`, what the dashboard shows); `make cps-metrics` writes `metrics.md` and prints the data (see below). |
 
 Campaigns write under `output/campaigns/<name>/`, one directory per run in `runs/`,
 plus:
@@ -75,6 +75,7 @@ make dashboard                 # http://127.0.0.1:8765 — every scenario
 make cps-dashboard             # restricted to the CPS runs/campaigns
 make cps-advisor-dashboard     # the advisor runs: suggestions and operator answers
 make cps-recon-dashboard       # the recon runs: what the attacker has discovered
+make cps-soc-dashboard         # the cps-soc runs
 ```
 
 The dashboard reads `progress.jsonl` as it is written, so it works for a live run

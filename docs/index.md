@@ -17,8 +17,10 @@ from reusable *plane* components, and every run is seeded, scored and recorded.
 | [`cps`](scenario-cps.md) | A cyber-physical OT/Modbus plant: an IT→OT attack, DPI and host sensors, and a SOC (Wazuh + analytics) that decides and responds inside the lab. |
 | [`cps-advisor`](scenario-cps-advisor.md) | The `cps` lab with people in it: the SOC *advises* an operator instead of acting, and a [red team can play against a blue team](playground-red-vs-blue.md). |
 | [`cps-recon`](scenario-cps-recon.md) | The `cps` lab with an attacker that is *not* handed the attack tree: it derives it by reconnaissance, and the run scores how close the derived tree is to the true one. |
+| [`cps-soc`](scenario-cps-soc.md) | The `cps-advisor` lab with the tools of a real SOC for the blue team: Wazuh as SIEM and DFIR-IRIS as case management. |
 
-New here? Start with [Set-up and first run](getting-started.md).
+New here? The [Overview](platform-overview.md) introduces the platform and the CPS
+scenario in one read; [Set-up and first run](getting-started.md) gets one running.
 
 ## Architecture at a glance
 
@@ -32,11 +34,11 @@ flowchart LR
     direction LR
     core["core<br/>topology · lifecycle · context<br/>campaigns · ledger · dashboard"]
     planes["planes<br/>traffic · attack · defense · monitor"]
-    scenarios["scenarios<br/>mqtt_mtd · cps · cps_advisor · cps_recon"]
+    scenarios["scenarios<br/>mqtt_mtd · cps · cps_advisor · cps_recon · cps_soc"]
     scenarios -->|imports| planes
     planes -->|imports| core
   end
-  nodes["nodes/<br/>Wazuh set-up · SOC analytics &amp; SOAR<br/>red-team agents &amp; consoles"]
+  nodes["nodes/<br/>Wazuh set-up · SOC analytics &amp; SOAR<br/>red-team agents &amp; consoles<br/>knowledge graph &amp; attack-tree generator"]
   nodes -. "no imports either way" .- cyberrange
 ```
 
@@ -44,7 +46,7 @@ The four **planes** are the reusable building blocks a scenario composes:
 
 - **traffic** — background trace replay, the nanogrid MQTT publishers, the plant and PLC;
 - **attack** — the fingerprinting classifier, the attack chains, the in-lab tree-guided and recon-driven attackers, the red team's console;
-- **defense** — the MTD coordinators (fixed-timer and RL), the OT/IT sensors, Wazuh and the SOC's analytics;
+- **defense** — the MTD coordinators (fixed-timer and RL), the OT/IT sensors, Wazuh, the SOC's analytics and the SOC's tools (Wazuh indexer and dashboard, DFIR-IRIS);
 - **monitor** — capture, the telemetry/plant mirrors, the web terminals and the record of what people type in them.
 
 Each plane exposes its components in `components.py`; one scenario directory holds

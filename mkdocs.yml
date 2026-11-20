@@ -56,6 +56,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Getting started:
+      - Overview: platform-overview.md
       - Set-up and first run: getting-started.md
       - Running and measuring: running-and-metrics.md
   - Scenarios:

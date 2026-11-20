@@ -17,7 +17,8 @@ never "make it green".
 
 | Guardrail | Freezes | Red means |
 |---|---|---|
-| `tests/core/test_deploy_contract.py` | `tests/snapshots/lab-<scenario>.json`: every node's interfaces, image, **guest paths** and startup commands | what a container receives changed |
+| `tests/core/test_deploy_contract.py` | `tests/snapshots/lab-<scenario>.json`: every node's interfaces, image, **guest paths** and startup commands; and no two NICs with one address on a link | what a container receives changed, or a lab clashes |
+| `tests/nodes/test_tree_snapshot.py` | `tests/snapshots/tree-cps.json`: the attack tree and countermeasures generated for the CPS lab and two variants (ids, gates, ATT&CK, impacts, feasibility, prevents/restores/cuts) | the SOC would reason, and the attacker plan, on another tree |
 | `tests/core/test_entry_points.py` | every `-m <module>` that `make -n` prints, plus the ones in scripts and campaigns, and every `make` target they call | a module path or target name went stale |
 | `tests/core/test_layering.py` | `core` imports no plane and no scenario; a plane imports no scenario | an import points backwards |
 | `tests/core/test_loc_coverage.py` | `tests/snapshots/loc-totals.json` + every `SOURCES`/`CORE` pattern matching ≥1 file, no file counted twice, no tracked source counted by nobody | the paper's code-size table moved |
@@ -115,10 +116,7 @@ the test regenerate it: deletion is how the guarantee is lost without trace.
 ## The gate before saying a change is done
 
 ```sh
-.venv/bin/python -m pytest tests -q
-for t in $(grep -hoE '^[a-zA-Z0-9_.-]+:' Makefile make/*.mk | tr -d ':' | sort -u); do
-    make -n "$t" >/dev/null 2>&1 || echo "BROKEN: $t"
-done
+make check            # lint, the whole suite, a dry run of every make target
 make lab-conf SCENARIO=cps && make lab-conf SCENARIO=cps-advisor && make lab-conf SCENARIO=mqtt-mtd
 ```
 

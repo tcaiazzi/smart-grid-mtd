@@ -6,7 +6,7 @@ Moving Target Defense (MTD) for MQTT communications in a smart grid, which is
 still its first scenario.
 
 The repository is a **platform** for testing attacks and defences on emulated
-cyber-physical systems safely, reproducibly and observably, with three
+cyber-physical systems safely, reproducibly and observably, with five
 **scenarios** running on it:
 
 | Scenario | What it studies | Read |
@@ -15,6 +15,10 @@ cyber-physical systems safely, reproducibly and observably, with three
 | `cps` | A cyber-physical OT/Modbus plant: active IT→OT attack, DPI and IT sensors, a SOC (Wazuh + analytics) that decides and responds inside the lab | [docs/scenario-cps.md](docs/scenario-cps.md) |
 | `cps-advisor` | The `cps` lab with people in it: the SOC advises an operator instead of acting, and a red team can attack by hand against a blue team | [docs/scenario-cps-advisor.md](docs/scenario-cps-advisor.md), and for the players [docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md) |
 | `cps-recon` | The `cps` lab with an attacker that is not handed the attack tree: it derives it by reconnaissance (nmap, then living off the land on the HMI), and the run scores how close the derived tree is to the true one | [docs/scenario-cps-recon.md](docs/scenario-cps-recon.md) |
+| `cps-soc` | The `cps-advisor` lab with the tools of a real SOC for the blue team: Wazuh as SIEM, DFIR-IRIS as case management, each service on its own node | [docs/scenario-cps-soc.md](docs/scenario-cps-soc.md) |
+
+New to the project? [docs/platform-overview.md](docs/platform-overview.md) introduces the
+platform and the CPS scenario in one read.
 
 How the platform is built and how to add a scenario:
 **[docs/platform.md](docs/platform.md)**. Every reusable component of the four
@@ -69,7 +73,9 @@ Node images:
 docker build -t kathara/mqtt docker/mqtt/   # MQTT scenario
 make cps-image                              # cps and cps-advisor: kathara/cps (plant nodes, Wazuh agent,
                                             # ttyd) and kathara/soc (Wazuh manager, ttyd)
-make cps-recon-image                        # cps-recon: kathara/redteam (the attacker's box: nmap)
+make cps-recon-image                        # cps-recon: kathara/redteam (the attacker's box: nmap, networkx)
+make cps-soc-image                          # cps-soc: the lab CA, the SOC with Filebeat, Wazuh indexer and
+                                            # dashboard, DFIR-IRIS (after cps-image)
 ```
 
 The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in
@@ -164,6 +170,7 @@ its defaults and where it writes. Beyond that:
 make fmt                  # ruff format: layout only, never logic
 make lint                 # what fmt cannot fix: dead imports, long lines
 make selftest-fast        # the suite without the heavy tests
+make check                # lint + the whole suite + a dry run of every target: before calling a change done
 make platform-loc         # how much code is platform and how much is scenario
 make docs-serve           # the documentation site, live, on http://127.0.0.1:8000
 ```

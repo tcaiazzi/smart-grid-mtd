@@ -119,27 +119,31 @@ After a verdict:
 
 ## 4. How it is built on `cps`
 
-`CpsAdvisorScenario` subclasses `CpsScenario` and adds no episode of its own
-(`cyberrange/scenarios/cps_advisor/scenario.py`):
+`CpsAdvisorScenario` is the `cps` scenario with one feature, `People`
+(`cyberrange/scenarios/cps_advisor/feature.py`), and its own defaults
+(`--respond solver`, `--approval operator:120`). It adds no episode of its own.
+`People` contributes through the features' hooks ([platform.md](platform.md)
+§2, "A scenario built on another"):
 
-- **the lab** is `cps.topology.topology(args, name="cps-advisor", extras=…)`:
-  the same nodes under another lab name — so both labs can be up side by
-  side — plus, per node, the files, published ports and `iptables` rules that
-  people need. The managed hosts get the access scripts; the SOC also its
+- **the lab** (`extras`): the same nodes under the lab name `cps-advisor` — so
+  both labs can be up side by side — plus, per node, the files, published ports
+  and `iptables` rules that people need. The managed hosts (by role: the
+  boundary, the sensor, the HMI) get the access scripts; the SOC also its
   console page and two published ports; with `--teams` the attacker gets the
   red console and two more;
-- **the SOC** is the same `SocAnalytics`, started with
-  `--approval operator:<s>` and the `operator_*` arguments
-  (`operator_api`);
-- **the blue team's access** starts with the services (`extra_services`):
-  `WebTerminal` and `RecordedShell` on the SOC, `JumpHost` from it to
-  firewall, sensor and HMI, a `RecordedShell` on each of those;
-- **the red team's access** starts in `engage`, after the normal phase and once
-  the ground truth is open: `WebTerminal`, `RecordedShell` and `RedConsole` on
-  the attacker.
+- **the SOC** (`operator_api`): the same `SocAnalytics`, started with
+  `--approval operator:<s>` and the `operator_*` arguments;
+- **the blue team's access** (`services`): `WebTerminal` and `RecordedShell` on
+  the SOC, `JumpHost` from it to the managed hosts, a `RecordedShell` on each of
+  those;
+- **the red team's access** (`engage`), after the normal phase and once the
+  ground truth is open: `WebTerminal`, `RecordedShell` and `RedConsole` on the
+  attacker;
+- **what may be decided** (`check_approval`): only `operator:<seconds>`.
 
-The components are described in [components.md](components.md); the hooks of
-the base scenario in [platform.md](platform.md) §2.
+`cps-soc` uses the same feature without the SOC's console
+(`People(console=False)`). The components are described in
+[components.md](components.md).
 
 What the scenario refuses before deploying anything: `--respond off` (an
 advisor with no policy has nothing to suggest), an `--approval` other than

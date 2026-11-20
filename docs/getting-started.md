@@ -35,7 +35,8 @@ Each scenario runs on container images you build once:
 ```bash
 docker build -t kathara/mqtt docker/mqtt/   # mqtt-mtd
 make cps-image                              # cps and cps-advisor: kathara/cps + kathara/soc
-make cps-recon-image                        # cps-recon: the attacker's box (nmap); needs cps-image too
+make cps-recon-image                        # cps-recon: the attacker's box (nmap, networkx); needs cps-image too
+make cps-soc-image                          # cps-soc: the lab CA, Wazuh indexer/dashboard, DFIR-IRIS; needs cps-image too
 ```
 
 ## Verify the checkout without Docker
@@ -86,6 +87,7 @@ the figures at the end — runs as one campaign:
 ```bash
 make cps-advisor     # attack the lab; the SOC suggests, you approve/reject at its console (:8766)
 make cps-teams       # red team vs blue team, each from its own console — see the playground guide
+make cps-soc         # the same with the blue team on Wazuh (:8770) and DFIR-IRIS (:8771); ~3 GB more memory
 ```
 
 The [red vs blue playground guide](playground-red-vs-blue.md) explains the
@@ -97,6 +99,7 @@ team-vs-team mode end to end.
 make help            # the authoritative catalogue: every target, its defaults, where it writes
 make dashboard       # follow any run or campaign live, any scenario
 make selftest        # the whole test suite — no Kathará, no Docker
+make check           # lint + the suite + a dry run of every target: before calling a change done
 make fmt             # ruff format: layout only, never logic
 make lint            # what fmt cannot fix: dead imports, long lines
 make clean           # remove everything under output/

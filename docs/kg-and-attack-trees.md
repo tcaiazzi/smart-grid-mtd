@@ -64,16 +64,18 @@ JSON-serialisable document, in
 
 | Inventory key | Source | Becomes |
 |---|---|---|
-| `hosts` | the declared `Topology`: each `Node`'s name, `role`, image and interfaces (`name`, `zone`, `cidr`) | hosts, zones, addresses; the `role` attribute of each host, `may_write` edges |
-| `boundary` | the boundary host and `topology.firewall_rules()`, the iptables commands its startup runs | `flow_rule` nodes |
-| `services` | `topology.services()`: `{host: [(name, proto, port, app)]}` | `service` nodes |
-| `plant_service` | `("engine", "modbus")` | which service exposes the registers |
+| `hosts` | the run's `LabSpec`: each host's name, `role`, image and interfaces (`name`, `zone`, `cidr`); `unit`, the feeder a controller is bound to | hosts, zones, addresses; the `role` attribute of each host, `may_write` edges to its feeder's registers |
+| `boundary` | the boundary host and `LabSpec.boundary_rules()`, the iptables commands its startup runs | `flow_rule` nodes |
+| `services` | each host's services: `{host: [(name, proto, port, app)]}` | `service` nodes |
+| `plant_service` | `("engine", "modbus")`; absent, the graph has no registers | which service exposes the registers |
+| `plant` | the run's plant (`ot_registers.plant()`): its feeders and limits | one set of registers per feeder, with that feeder's envelope; `g.graph["plant"]`, `g.graph["limits"]` |
+| `known_registers` | optional: the holding registers known, for an inventory written from reconnaissance (`nodes/redteam/belief_tree.py`) | only those holding registers |
 
-The registers and the access policy are not inputs: they come from the plant
-contract `planes/defense/ot_registers.py`
-(`ACTUATOR_REGISTERS`, `SENSOR_REGISTERS`, `SENSITIVE_ACTUATORS`,
-`ROLE_POLICY`), which the PLC, the engine and the DPI sensor share. The graph
-therefore describes the same contract that the sensor enforces.
+The register map and the access policy are the plant contract
+`planes/defense/ot_registers.py` (`ACTUATOR_REGISTERS`, `SENSOR_REGISTERS`,
+`SENSITIVE_ACTUATORS`, `ROLE_POLICY`), which the PLC, the engine and the DPI
+sensor share; the inventory says how many feeders carry it. The graph therefore
+describes the same contract that the sensor enforces.
 
 Addresses come from the `addresses` meta that `core.topology.build_lab` sets on
 every Kathará machine (`{"eth0": "10.10.0.20/24"}`). A machine without it gets

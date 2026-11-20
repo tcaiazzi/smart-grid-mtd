@@ -12,7 +12,8 @@ lab with an attacker that derives its own attack tree by reconnaissance) and
 cyberrange/core/       the platform: topology, lifecycle, context, campaigns, ledger, dashboard
 cyberrange/planes/     traffic | attack | defense | monitor — components.py + agents/ (guest code)
 cyberrange/scenarios/  mqtt_mtd/, cps/, cps_advisor/, cps_recon/ and cps_soc/ — one directory per experiment, whole
-nodes/                 software of the lab's nodes that is not the platform's (Wazuh set-up, rules, responses)
+nodes/                 software of the lab's nodes that is not the platform's (Wazuh set-up, the SOC,
+                       the red team; nodes/common/: the knowledge graph and attack-tree generator they share)
 make/ scripts/ tools/ tests/ docs/
 ```
 
@@ -61,13 +62,9 @@ make lint                                # what fmt cannot fix: dead imports, lo
 make help                                # every target, with what it writes where
 ```
 
-Before saying a change is done, run the suite **and** dry-run every target:
-
-```sh
-for t in $(grep -hoE '^[a-zA-Z0-9_.-]+:' Makefile make/*.mk | tr -d ':' | sort -u); do
-    make -n "$t" >/dev/null 2>&1 || echo "BROKEN: $t"
-done
-```
+Before saying a change is done, run `make check`: lint, the suite **and** a dry
+run of every target (campaigns shell out to them, so one that no longer
+expands fails hours into a run).
 
 ## Style
 

@@ -57,7 +57,7 @@ flowchart TB
     scenarios -->|imports| planes
     planes -->|imports| core
   end
-  nodes["<b>nodes/</b><br/>Wazuh set-up · SOC analytics &amp; SOAR · red-team agents &amp; consoles<br/><i>software the lab's nodes run</i>"]
+  nodes["<b>nodes/</b><br/>Wazuh set-up · SOC analytics &amp; SOAR · red-team agents &amp; consoles<br/>knowledge graph &amp; attack-tree generator, shared by the SOC and the attacker<br/><i>software the lab's nodes run</i>"]
   nodes -. "no imports either way" .- cyberrange
 ```
 
@@ -147,8 +147,10 @@ CPS panel is described in [§2.9](#29-following-a-run).
 | `cps-soc` | The `cps-advisor` lab, with the tools of a real SOC for the blue team: Wazuh SIEM and DFIR-IRIS case management. |
 
 The last three are built on `cps`. They deploy the same lab under their own
-name, so they can run side by side, and each one only adds what it needs on top
-of it.
+name, so they can run side by side, and each one is `cps` with one or two
+**features** — `People` (an operator, teams), `SocTools` (Wazuh and IRIS),
+`Recon` (an attacker that finds its own way) — composed rather than inherited:
+a new combination is a tuple, not a new class.
 
 ### 1.9 Technology
 
@@ -297,6 +299,15 @@ access policy, through a single **plant contract**
 (`cyberrange/planes/defense/ot_registers.py`). The PLC, the engine, the sensor
 and the SOC's knowledge graph all read the same definition.
 
+**The plant is a description too.** `ot_registers.plant()` holds the feeders —
+their lines, load and generator, the generator's rating — and the plant's
+limits; the feeder above is the default one. A plant may have several feeders
+on the same slack bus, each served by the engine as a Modbus unit of its own,
+with the same register map. Every party that needs the plant receives the same
+description: the engine solves all of it in one power flow, each PLC and HMI is
+bound to its feeder, the sensor keeps each feeder's state apart, and the SOC
+gets one set of registers per feeder in its knowledge graph.
+
 **A command can be legal and still dangerous.** The feeder is sized so that the
 DG at 100% of its rating, a perfectly valid value, causes an overvoltage. That is
 what makes the scenario interesting: a range check alone cannot stop an attacker
@@ -337,10 +348,16 @@ Every attack starts the same way:
 
 #### The attack tree
 
-The SOC and the tree-guided attacker reason on the same attack tree. It is
-built from the knowledge graph of the lab, so every precondition is checked
-against the real network: if the firewall rule is removed, the "through the
-HMI" branch becomes infeasible.
+The SOC and the tree-guided attacker reason on the same attack tree. Nobody
+writes it: it is **generated** from the knowledge graph of the lab
+(`nodes/common/attack_graph.py`). The steps are data (`techniques.py`), and the
+graph says where they apply: a way in through every host that may command the
+plant and serves an application, a direct way from the hosts without a Modbus
+role on the plant's network, and the actions on every feeder. Every
+precondition is checked against the real network: if the firewall rule is
+removed, the "through the HMI" branch becomes infeasible. A step that recurs —
+two HMIs, two feeders — takes an id qualified by where it is
+(`breaker_open@hmib:u2`); on the lab below every step occurs once.
 
 ```mermaid
 flowchart TB
@@ -366,6 +383,10 @@ flowchart TB
   aitm --> L8["ot_aitm · T0830"]
   aitm --> L9["meas_fdi · T0856"]
 ```
+
+The recon-driven attacker builds its own tree with the same generator, on what
+its reconnaissance found: what it never saw is absent or not feasible, and the
+run scores the difference.
 
 The IT steps (`it_access`, `it_exec`, `pivot`) are **not observable** by the OT
 sensor. The SOC *infers* them once it observes a later OT step, unless the IT
@@ -481,8 +502,9 @@ and does four things:
    addresses, services, the plant's registers, who may write them, and the
    firewall rules. It can answer questions such as "can host X reach port P on
    host Y?".
-2. **Attack tree.** It grounds the attack tree (§2.5) on the graph, so that
-   only the branches feasible on this network are kept.
+2. **Attack tree.** It generates the attack tree (§2.5) from the graph, with
+   each branch feasible or not on this network, and the countermeasures that
+   annotate it.
 3. **Belief.** It maps each finding to weighted evidence on tree nodes. Each node
    becomes *suspected*, *confirmed* or *inferred*. Command evidence (a wrong
    write) is kept apart from consequence evidence (the voltage left the band),
@@ -506,7 +528,8 @@ detection-only run carries the same load and stays comparable.
 #### Act: the countermeasures
 
 Each countermeasure **prevents** some tree nodes (it closes the path) or
-**restores** them (it undoes the effect):
+**restores** them (it undoes the effect). What it prevents is derived from the
+graph: the steps whose path through the network its effect takes away.
 
 | Countermeasure | Runs on | What it does | Prevents / restores |
 |---|---|---|---|
@@ -633,8 +656,12 @@ make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5
 - The response loop is deliberately small. It is a prototype meant to fix the
   interfaces of WP2 (knowledge graph, attack trees, response) and WP3 (the
   attacker–defender game).
-- The attack tree is a template grounded on the graph, not yet generated
-  automatically.
+- The attack tree is generated, but from a fixed template of ways in and
+  actions: chaining arbitrary techniques by their pre- and postconditions, and
+  the probability and time of each step, are still to come.
+- The lab and the plant can be larger than today's, but the attacker executes
+  only the first way in and the first feeder, and the sensor's behavioural model
+  learns only the first feeder.
 - The stochastic game model between attacker and defender is still to come; the
   tree-guided planner is its baseline adversary.
 - The energy cost of the countermeasures is estimated, not measured.
