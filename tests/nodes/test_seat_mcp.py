@@ -110,6 +110,26 @@ class TheRedSeat(Seated):
             (rows[0]["id"], rows[0]["note"], rows[0]["team"]), ("it_access", "first", "red")
         )
         self.assertTrue(all(r["kind"] == "player_call" and r["duration_s"] >= 0 for r in rows))
+        self.assertEqual(
+            [r.get("result_ok") for r in rows],
+            [True, None, None, None, None],
+            "a call the seat refused was given an outcome of the action it never took",
+        )
+
+    def test_a_step_that_ran_and_failed_is_told_from_one_that_worked(self):
+        self.console.bench.run = lambda cmd: (
+            1,
+            json.dumps({"phase": cmd.split()[-1], "ok": False}),
+        )
+        self.player.call("run_step", {"id": "pivot"})
+        self.player.call("shell", {"cmd": "id"})
+        self.player.call("list_steps", {})
+        self.assertEqual(
+            [(r["tool"], r["outcome"], r.get("result_ok")) for r in self.rows()],
+            [("run_step", "ok", False), ("shell", "ok", True), ("list_steps", "ok", None)],
+            "the transcript says the seat took the call, not whether the step worked: "
+            "a harness repeating a failed step cannot be told from one that is getting on",
+        )
 
     def test_a_wrong_call_is_told_to_the_harness_so_it_can_correct_itself(self):
         said, failed = self.player.call("run_step", {"step": "pivot"})

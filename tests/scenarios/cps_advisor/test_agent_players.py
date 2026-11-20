@@ -277,6 +277,25 @@ class TheSeatPlayer(unittest.TestCase):
         self.player.mirror({"t": 9.0, "kind": "player_exit", "rc": 0})
         self.assertTrue(self.player.exited)
 
+    def test_the_firewalls_counters_are_saved_before_the_lab_goes(self):
+        class Ctx:
+            ran = []
+
+            def run(self, node, cmd, **_kw):
+                self.ran.append((node, cmd))
+                return b"", b"", 0
+
+        ctx = Ctx()
+        self.player.stop(ctx)
+        self.assertEqual(
+            ctx.ran, [("redplayer", f'bash -c "iptables-save -c > {SeatPlayer.FIREWALL}"')]
+        )
+        self.assertIn(
+            "player-red.firewall.txt",
+            [a.local_name for a in self.player.artifacts()],
+            "what the node refused is saved on the node and never brought back",
+        )
+
 
 def transcript(team):
     rows = [

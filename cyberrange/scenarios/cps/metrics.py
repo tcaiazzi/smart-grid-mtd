@@ -47,6 +47,7 @@ import json
 import os
 
 from cyberrange.planes.defense import ot_registers as reg
+from cyberrange.scenarios.cps import scorecard
 
 V_NOMINAL = 1.0
 # Register name by holding-register address, for writes recorded without one.
@@ -209,16 +210,6 @@ HMI_CUTTING = ("block_flow", "isolate_way")
 OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
 AGENT = "agent:"  # how a harness names itself as operator (nodes/common/seat.py)
 MANUAL = "manual"  # the mode of an attack run at the red console (attack.RedConsole)
-# The tools of a seat that act on the lab, as the seat's adapter names them
-# (nodes/players/seat_mcp.py); the others only look.
-ACTING_TOOLS = (
-    "run_step",
-    "shell",
-    "answer_suggestion",
-    "apply_countermeasure",
-    "revert_countermeasure",
-    "set_mode",
-)
 
 
 def _plant_acts(gt, ok_only=False):
@@ -325,51 +316,6 @@ def _operator(resp):
             r.get("waited_s") for r in closed["granted"] + closed["rejected"]
         ),
     }
-
-
-def _players(out_dir):
-    """One scorecard per team a harness played, from the transcript the seat's
-    adapter kept (player-<team>.jsonl): who played, what it spent, how it
-    behaved. The outcome of the game is in the run's other metrics; this is
-    what tells two harnesses apart when the outcome is the same. A figure the
-    harness did not report stays None."""
-    out = {}
-    for path in sorted(glob.glob(os.path.join(out_dir, "player-*.jsonl"))):
-        rows = _read_jsonl(path)
-        team = os.path.basename(path)[len("player-") : -len(".jsonl")]
-
-        def last(kind, rows=rows):
-            return next((r for r in reversed(rows) if r.get("kind") == kind), {})
-
-        calls = [r for r in rows if r.get("kind") == "player_call"]
-        acting = [r for r in calls if r.get("tool") in ACTING_TOOLS]
-        outcomes = {}
-        for r in calls:
-            outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
-        start, usage, end = last("player_start"), last("player_usage"), last("player_exit")
-        out[team] = {
-            "harness": start.get("harness"),
-            "harness_version": start.get("harness_version"),
-            "model": start.get("model"),
-            "calls": len(calls),
-            "actions": len(acting),
-            "call_latency_median_s": _median(r.get("duration_s") for r in calls),
-            "action_latency_median_s": _median(r.get("duration_s") for r in acting),
-            # Calls the seat did not carry out, by why: a harness that asks
-            # for what does not exist, or keeps asking past its terms.
-            "failed_calls": {k: n for k, n in sorted(outcomes.items()) if k != "ok"},
-            "failed_call_rate": _rate(len(calls) - outcomes.get("ok", 0), len(calls)),
-            "played_s": (
-                round(end["t"] - start["t"], 3) if end.get("t") and start.get("t") else None
-            ),
-            "turns": usage.get("turns"),
-            "input_tokens": usage.get("input_tokens"),
-            "output_tokens": usage.get("output_tokens"),
-            "cost_usd": usage.get("cost_usd"),
-            "stop_reason": usage.get("stop_reason"),
-            "exit_code": end.get("rc"),
-        }
-    return out or None
 
 
 def _tree_countermeasures(out_dir):
@@ -643,7 +589,7 @@ def compute_metrics(out_dir: str) -> dict:
         if resp is not None
         else None
     )
-    return {
+    m = {
         "attack": attack_start is not None,
         "attack_mode": mode,
         # Combined detection (kept flat for backwards compatibility)
@@ -684,9 +630,6 @@ def compute_metrics(out_dir: str) -> dict:
         "stage_reached": attack_end_ev.get("stage_reached") if staged else None,
         "attack_succeeded": (bool(attack_end_ev.get("success")) if staged else None),
         "prevented": (not _plant_acts(gt, ok_only=True) if staged else None),
-        # The harnesses that played a team's seat, each with what it spent and
-        # how it behaved; None for a run nobody played that way.
-        "players": _players(out_dir),
         "plan_steps": [
             {"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")} for e in plan_steps
         ]
@@ -702,6 +645,20 @@ def compute_metrics(out_dir: str) -> dict:
         "energy_kwh_during_attack": energy_attack,
         "n_frames": len(frames),
     }
+    # The harnesses that played a team's seat, each with how it played; taken
+    # last, because a card reads the run's own outcome rather than work it out
+    # again.
+    kinds = _kinds(out_dir)
+    m["players"] = scorecard.players(
+        out_dir,
+        gt,
+        resp,
+        findings,
+        m,
+        called_for=expected_response(gt) | justified_response(gt),
+        kind_of=lambda action: kinds.get(action, action),
+    )
+    return m
 
 
 def format_report(m: dict) -> str:

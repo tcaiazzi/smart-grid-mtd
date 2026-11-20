@@ -126,6 +126,11 @@ BY_ACTION = {
 }
 
 
+# The tools that act on the lab and say nothing of how it went beyond having
+# been taken: a verdict, a countermeasure, a mode.
+ACTS = ("answer_suggestion", "apply_countermeasure", "revert_countermeasure", "set_mode")
+
+
 class RpcError(Exception):
     """A request this server cannot serve, as a JSON-RPC error."""
 
@@ -224,7 +229,20 @@ class Player:
             "calls_left": None if self.max_calls is None else max(0, self.max_calls - self.calls),
         }
 
-    def _log(self, tool_name, started, outcome, args):
+    @staticmethod
+    def _worked(name, result):
+        """Whether an action the seat carried out did what it was for: a step
+        that succeeded, a command that exited 0. None for a call that only
+        looks, and for one the seat does not say it of."""
+        if not isinstance(result, dict):
+            return None
+        if name == "run_step":
+            return bool(result.get("ok"))
+        if name == "shell":
+            return result.get("rc") == 0
+        return True if name in ACTS else None
+
+    def _log(self, tool_name, started, outcome, args, worked=None):
         if not self._transcript:
             return
         row = {
@@ -236,6 +254,10 @@ class Player:
             "duration_s": round(self.clock() - started, 3),
             "outcome": outcome,
         }
+        if worked is not None:
+            # "ok" above says the seat took the call; this, that the action
+            # did what it was for. A step can be run and fail.
+            row["result_ok"] = worked
         # What was asked for, not what came back: a step's output or a shell's
         # may hold anything, and the seat keeps its own record of both.
         row.update({k: args[k] for k in ("id", "verdict", "mode", "cmd", "note") if k in args})
@@ -292,7 +314,8 @@ class Player:
                 outcome, result = "ok", self._do(name, args)
             except SeatError as e:
                 outcome, result = e.outcome, str(e)
-        self._log(name, started, outcome, args if isinstance(args, dict) else {})
+        worked = self._worked(name, result) if outcome == "ok" else None
+        self._log(name, started, outcome, args if isinstance(args, dict) else {}, worked)
         return result, outcome != "ok"
 
 

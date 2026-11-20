@@ -166,20 +166,49 @@ now hold for an attack played at the console as well as for a driven one:
 | `response.*` | what the blue team applied, whether it was called for, how fast |
 | `response.operator.by_kind` | suggestions answered and median latency, apart for people and harnesses |
 
-Next to it, `players.<team>` is each harness's scorecard, read from the
-transcript the adapter kept (`player-<team>.jsonl`):
+Next to it, `players.<team>` is each harness's scorecard
+(`cyberrange/scenarios/cps/scorecard.py`): what tells two harnesses apart when
+the outcome is the same. It is read from the transcript the adapter kept
+(`player-<team>.jsonl`), the ground truth, the SOC's record, the sensors'
+findings and the counters of the node's firewall.
 
-| Field | Meaning |
-|---|---|
-| `harness`, `harness_version`, `model` | who played; the version is read from the harness itself |
-| `calls`, `actions` | tool calls made, and those that act on the lab |
-| `call_latency_median_s`, `action_latency_median_s` | how long a call took |
-| `failed_calls`, `failed_call_rate` | calls the seat did not carry out, by why: `bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool` |
-| `turns`, `input_tokens`, `output_tokens`, `cost_usd` | what the harness reports of its own run; `null` where it reports nothing |
-| `stop_reason`, `exit_code`, `played_s` | how and when it stopped; `null` for a harness still playing when the engagement ended |
+For either team:
 
-A figure a harness does not give is `null`, never a guess: it would be compared
-with real ones.
+| Group | Fields | Meaning |
+|---|---|---|
+| — | `harness`, `harness_version`, `model` | who played; the version and the model are the ones the harness reports of itself |
+| — | `calls`, `actions`, `failed_calls`, `failed_call_rate` | tool calls made, those that act on the lab, and those the seat did not carry out, by why (`bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool`) |
+| — | `turns`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped; `null` for a harness still playing when the engagement ended |
+| `decision` | `think_median_s`, `first_action_s` | how long it takes between one call and the next, and before its first action |
+| | `look_ratio`, `noted_action_rate` | the share of calls that only look; the share of actions it gave a reason for |
+| | `actions_that_worked_rate`, `repeats_after_failure` | actions that did what they were for; the same action again right after it failed |
+| `efficiency` | `tokens_per_action`, `cost_per_action_usd` | what an action costs |
+| `sandbox` | `refused_packets`, `refused_to` | what the node's firewall refused, by destination: what the harness tried to reach beyond its seat and its model |
+
+For the red team:
+
+| Group | Fields | Meaning |
+|---|---|---|
+| `progress` | `steps_tried`, `steps_that_worked`, `step_success_rate`, `distinct_steps`, `repeats_after_failure` | how the attack's steps went |
+| | `stages_reached`, `stage_first_s` | how far it got, and the second each stage was first reached |
+| `impact` | `plant_affected`, `writes_accepted`, `writes_refused` | whether the plant took a write |
+| | `time_to_impact_s`, `out_of_band_s`, `manual_control_s`, `max_deviation_pu` | what it did to the plant: a write accepted is not yet a physical effect |
+| `adaptation` | `countermeasures_faced`, `turned_after_median_s`, `steps_that_worked_after_first` | after a countermeasure, how long until it tried something else, and what still worked |
+| `stealth` | `noise_mean`, `findings`, `findings_per_step`, `detection_latency_s` | how noticeable the steps it chose are, and what the sensors made of them |
+| — | `cost_per_stage_usd` | what a stage reached cost |
+
+For the blue team:
+
+| Group | Fields | Meaning |
+|---|---|---|
+| `verdicts` | `suggestions`, `answered`, `expired`, `latency_median_s` | what the SOC put to it and how fast it answered |
+| | `approved_called_for`, `approved_not_called_for`, `rejected_called_for`, `rejected_not_called_for` | its verdicts against what the attack gave cause for |
+| `containment` | `first_countermeasure_s`, `attacker_acted_for_s`, `plant_affected`, `out_of_band_s` | how soon it acted, and how long the attacker kept acting on the plant |
+| `cost` | `accurate`, `not_called_for`, `before_any_attack`, `hmi_unavailable_s` | what the defence cost the plant's operators |
+
+A figure that is not there is `null`, never a guess: it would be compared with
+real ones. There is no single score: an attack that lands loudly and one that
+fails quietly are different results, and a number that ranks them hides which.
 
 ## 6. Adding a harness
 

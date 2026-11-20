@@ -558,6 +558,8 @@ class RedConsole(GuestAgent):
                 self._reached = max(self._reached, (row["stage_rank"], row.get("stage")))
             if row.get("note"):
                 step["note"] = row["note"]  # the reason the operator gave, when they gave one
+            if row.get("detectability") is not None:
+                step["detectability"] = row["detectability"]
             ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
             ctx.emit("red_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **step)
             for e in row.get("phases") or []:

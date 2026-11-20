@@ -132,6 +132,7 @@ class SeatPlayer(GuestAgent):
     TRANSCRIPT = f"{HOME}/player.jsonl"
     TOKEN, TERMS, SECRETS = f"{HOME}/seat.token", f"{HOME}/terms.env", f"{HOME}/secrets.env"
     RUN = "bash /player-run.sh"  # nodes/players/player-run.sh, staged by the scenario
+    FIREWALL = f"{HOME}/firewall.txt"  # the firewall's counters, saved when the player stops
     EVENTS = ("player_start", "player_call", "player_usage", "player_exit")
 
     def __init__(
@@ -143,7 +144,10 @@ class SeatPlayer(GuestAgent):
             "player.log",
             plane=plane,
             name=f"player:{team}",
-            artifacts=[Artifact(node, self.TRANSCRIPT, f"player-{team}.jsonl")],
+            artifacts=[
+                Artifact(node, self.TRANSCRIPT, f"player-{team}.jsonl"),
+                Artifact(node, self.FIREWALL, f"player-{team}.firewall.txt"),
+            ],
         )
         self.team, self.harness, self.token = team, harness, token
         ip, port, iface = seat
@@ -171,6 +175,12 @@ class SeatPlayer(GuestAgent):
         ctx.upload(self.node, self.TERMS, self._env(self.terms))
         ctx.upload(self.node, self.SECRETS, self._env(self.secrets))
         super().start(ctx)
+
+    def stop(self, ctx):
+        # What the node's firewall refused, by destination: what the harness
+        # tried to reach beyond its seat and its model. Saved before the lab
+        # goes, as root — the player itself cannot read the rules.
+        ctx.run(self.node, f'bash -c "iptables-save -c > {self.FIREWALL}"')
 
     def telemetry(self):
         return [TelemetrySource(self.node, self.TRANSCRIPT, "player")]
