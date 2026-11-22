@@ -843,7 +843,7 @@
       : writes.length ? `a fixed script (${r.mode || "scripted"}): no plan, no feedback` : null;
     const states = r.states.filter(u), st = last(states);
     const open = {};
-    for (const a of x.blue.alerts.filter(u)) { const k = `${a.detector}: ${a.klass}${where(r, a)}`; if (a.state === "cleared") delete open[k]; else open[k] = a; }
+    for (const a of x.blue.alerts.filter(u)) { const k = `${UI.termText(a.detector)}: ${pretty(a.klass)}${where(r, a)}`; if (a.state === "cleared") delete open[k]; else open[k] = a; }
     const approvals = Object.values(r.approvals).filter(a => u({ t: a.asked_t }))
       .map(a => ({ ...a, state: a.t != null && u({ t: a.t }) ? a.state : "requested" }));
     return {
@@ -860,7 +860,7 @@
     // attacker
     status: "Where the attacker is: planning, at a step (done or failed), finished, or stopped by the defence",
     "aims at": "The impact it is going for, and the steps it still needs to get there",
-    steps: "Every step it ran: ✓ worked · ✗ failed (a countermeasure closed the path, or the step itself failed). Hover a step for its ATT&CK technique",
+    steps: "Each step it ran, with how its last try went: ✓ worked · ✗ failed (a countermeasure closed the path, or the step itself failed). Times are counted from the start of the attack. Click a step to show the run at its last try; hover it for its ATT&CK technique",
     writes: "Modbus writes it sent to the plant, by register: how many, the last value, how many the plant refused",
     knowledge: "Where its picture of the target comes from",
     "hosts found": "Hosts and open ports its network scan found",
@@ -880,6 +880,7 @@
     latest: "The latest finding: its class, where it came from, and the attack step it points to",
     "alerts open": "Alerts raised and not cleared yet",
     "attack tree": "What the defender believes of each step: confirmed · inferred (implied by a confirmed later step) · suspected, with its belief 0–1",
+    believes: "What the defender believes of each step of the attack tree, by how sure it is: confirmed · inferred (implied by a later step it confirmed) · suspected. Belief runs from 0 to 1. Click a line to open or close its list",
     "expects next": "The steps the defender's analytics expects the attacker to take next",
     "hosts implicated": "Hosts the defender believes the attacker controls",
     "model threshold": "Anomaly score above which the learned model reports (fitted on the normal phase)",
@@ -960,40 +961,77 @@
   const jump = t => ({ class: "click", tabindex: "0", title: "Show the run at this time",
     onclick: () => UI.setTime(t), onkeydown: e => { if (e.key === "Enter") UI.setTime(t); } });
 
-  function redDoing(v, N) {
-    const R = v.red, lastStep = last(R.steps);
-    const status = R.end ? (R.end.success ? "finished: it reached its impact" : `stopped: defended (reached ${R.end.stage_reached ? N.text(R.end.stage_reached) : "nothing"})`)
-      : lastStep ? `at "${N.text(lastStep.node)}" — ${lastStep.ok ? "done" : "failed, re-planning"}`
-      : R.start ? "planning its first step" : R.writes.length ? "writing to the plant" : null;
+  // One thing a line: a list of names set side by side cannot wrap between two
+  // of them and runs out of its column, over the one beside it.
+  const lines = items => h("div", { class: "lines" }, ...items.map(x => h("div", {}, x)));
+  const tick = ok => h("span", { class: "tick", style: `color:${ok == null ? "var(--ink-2)" : ok ? "var(--good)" : "var(--critical)"}` }, ok == null ? "◎" : ok ? "✓" : "✗");
+  const note = text => h("span", { class: "muted" }, text);
+  // A list that folds under a line saying how many it holds. It stays open or
+  // shut as the reader left it, across the redraws a live run causes.
+  const folds = {};
+  function fold(key, summary, body, open) {
+    const d = h("details", { class: "fold", open: (folds[key] ?? open) ? "" : null }, h("summary", {}, summary), body);
+    d.addEventListener("toggle", () => { folds[key] = d.open; });
+    return d;
+  }
+  // A write to the plant in words, by the register it changes.
+  const WRITE_WORDS = {
+    ctrl_mode: v => `control switched to ${+v === 1 ? "MANUAL" : "automatic"}`,
+    dg_setpoint: v => `DG setpoint set to ${num(+v, 1)} kW`,
+    switch_cmd: v => `feeder breaker ${+v ? "opened" : "closed"}`,
+  };
+  const writeWords = (reg, v) => WRITE_WORDS[reg] ? WRITE_WORDS[reg](v) : `${pretty(reg)} set to ${v}`;
+
+  function redDoing(v, N, r) {
+    const R = v.red, lastStep = last(R.steps), t0 = t0Of(r, R);
+    const status = R.end ? (R.end.success ? "Finished: it reached its impact on the plant" : `Stopped short of its impact: it got as far as ${R.end.stage_reached ? `"${N.text(R.end.stage_reached)}"` : "nothing"}`)
+      : lastStep ? `${lastStep.ok ? "Just did" : "Just failed"}: ${N.text(lastStep.node)}`
+      : R.start ? "Planning its first step" : R.writes.length ? "Writing to the plant" : null;
+    // Each step once, with how its attempts went: a player tries a step many times.
+    const byStep = new Map();
+    for (const s of R.steps) {
+      const e = byStep.get(s.node) || { node: s.node, tries: 0, worked: 0, attck: s.attck };
+      byStep.set(s.node, Object.assign(e, { tries: e.tries + 1, worked: e.worked + (s.ok ? 1 : 0), ok: s.ok, t: s.t, by: s.by }));
+    }
+    const steps = [...byStep.values()].map(s => h("div", { ...jump(s.t), title: [`Show the run at this step's last attempt`, `recorded as: ${s.node}`,
+        s.attck ? `ATT&CK ${s.attck}` : null, s.by !== "agent" ? `by ${s.by}` : null].filter(Boolean).join("\n") },
+      tick(s.ok), N.text(s.node),
+      note(s.tries === 1 ? ` — ${rel(s.t, t0)}`
+        : s.worked === s.tries ? ` — done ${s.tries} times, last at ${rel(s.t, t0)}`
+        : s.worked === 0 ? ` — failed ${s.tries} times, last at ${rel(s.t, t0)}`
+        : ` — worked ${s.worked} of ${s.tries} times; the last try ${s.ok ? "worked" : "failed"}, at ${rel(s.t, t0)}`)));
     const byReg = {};
     for (const w of R.writes) { const k = w.register || "?"; (byReg[k] = byReg[k] || { n: 0, v: w.value, ok: 0 }).n++; byReg[k].v = w.value; if (w.ok !== false) byReg[k].ok++; }
-    const writes = Object.entries(byReg).map(([k, w]) => `${k} ×${w.n} (last ${w.v}${w.ok < w.n ? `, ${w.n - w.ok} refused` : ""})`).join(" · ");
-    return status || R.steps.length ? kv([
-      ["status", status],
-      ["aims at", R.target ? h("span", {}, N.el(R.target), ...(R.remaining.length ? [" — still to do: ", ...N.list(R.remaining, " → ")] : [])) : null],
-      ["steps", R.steps.length ? h("span", {}, ...R.steps.map(s => mark(s.ok, N.text(s.node),
-        [`recorded as: ${s.node}`, s.attck ? `ATT&CK ${s.attck}` : null, s.by !== "agent" ? `by ${s.by}` : null].filter(Boolean).join(" · ")))) : null],
-      ["writes", writes || null],
-    ]) : none("No attack activity yet.");
+    const writes = Object.entries(byReg).map(([k, w]) => h("div", { title: `register ${k}, last value ${w.v}` }, writeWords(k, w.v),
+      note(` — ${w.n} write${w.n === 1 ? "" : "s"}${w.ok < w.n ? `, ${w.n - w.ok} refused by the plant` : ""}`)));
+    return status || R.steps.length ? h("div", {}, status ? h("p", { class: "now" }, status) : null, kv([
+      ["aims at", R.target ? h("span", {}, N.el(R.target), ...(R.remaining.length ? [note(" — still to do: "), ...N.list(R.remaining, " → ")] : [])) : null],
+      ["steps", steps.length ? h("div", { class: "lines" }, ...steps) : null],
+      ["writes", writes.length ? h("div", { class: "lines" }, ...writes) : null],
+    ])) : none("No attack activity yet.");
   }
   function redKnows(v, N) {
     const R = v.red;
     const who = R.steps.map(s => s.observed?.whoami).find(Boolean);
+    // `id` prints uid=0(root) gid=…: the user's name is what matters, the rest is on hover.
+    const user = who ? (/uid=\d+\(([^)]+)\)/.exec(who) || [])[1] || who : null;
     const it = last(R.recon.filter(c => c.stage === "it")), ot = last(R.recon.filter(c => c.stage === "ot"));
-    const pivot = R.steps.find(s => s.node === "pivot");
+    const pivot = last(R.steps.filter(s => s.node === "pivot"));
     const regs = ot && ot.registers ? Object.entries(ot.registers) : [];
     const countNodes = n => n ? 1 + (n.children || []).reduce((a, c) => a + countNodes(c), 0) : 0;
     const P = R.plan;
     return R.source || R.recon.length ? kv([
       ["knowledge", R.source],
-      ["hosts found", it ? it.hosts.map(x => `${x.ip} (${(x.ports || []).map(p => p.port ?? p).join(", ")})`).join(" · ") : null],
-      ["foothold", who ? `runs as ${who}${it?.foothold ? ` on ${it.foothold.ip ?? it.foothold}` : ""}` : (it?.foothold ? `${it.foothold.ip ?? it.foothold}` : null)],
-      ["plant reached", ot ? `${ot.engine_ip}:${ot.modbus_port} — Modbus ${ot.modbus_ok ? "answers" : "silent"}`
-        : pivot ? `${pivot.ok ? "reachable" : "unreachable"}${pivot.observed?.detail ? ` (${pivot.observed.detail})` : ""}` : null],
+      ["hosts found", it ? lines(it.hosts.map(x => `${x.ip}, open ports ${(x.ports || []).map(p => p.port ?? p).join(", ") || "none"}`)) : null],
+      ["foothold", user ? h("span", { class: "term", title: `as its own command reported: ${who}` }, `runs as ${user}${it?.foothold ? ` on ${it.foothold.ip ?? it.foothold}` : ""}`)
+        : (it?.foothold ? `${it.foothold.ip ?? it.foothold}` : null)],
+      ["plant reached", ot ? `${ot.engine_ip}:${ot.modbus_port} — its Modbus server ${ot.modbus_ok ? "answers" : "does not answer"}`
+        : pivot ? h("span", { class: pivot.observed?.detail ? "term" : null, title: pivot.observed?.detail ? `what its last try printed: ${pivot.observed.detail}` : null },
+          pivot.ok ? "yes, through the HMI" : "no: its last try through the HMI failed") : null],
       ["registers read", regs.length ? regs.slice(0, 6).map(([a, x]) => `${a}=${x}`).join(" · ") + (regs.length > 6 ? ` … (${regs.length})` : "") : null],
       ["its belief", R.belief ? `a tree of ${countNodes(R.belief.tree)} nodes` : null],
-      ["options", P && P.candidates.length ? P.candidates.map(c => `${N.text(c.node)}${c.impact != null ? ` (impact weight ${c.impact})` : ""}`).join(" · ") : null],
-      ["paths closed", P && P.blocked.length ? h("span", {}, ...N.list(P.blocked, " · ")) : null],
+      ["options", P && P.candidates.length ? lines(P.candidates.map(c => [N.el(c.node), note(c.impact != null ? ` — impact weight ${c.impact}` : "")])) : null],
+      ["paths closed", P && P.blocked.length ? lines(P.blocked.map(id => N.el(id))) : null],
     ]) : none("Nothing yet.");
   }
   function blueDoing(v, r, N) {
@@ -1001,16 +1039,24 @@
     const advise = Object.keys(r.approvals).length > 0, d = last(B.decisions), cms = {};
     for (const a of B.actions) if (a.id !== "notify") cms[a.id] = a;
     const pending = B.approvals.filter(a => a.state === "requested");
-    return kv([
-      ["response", policy ? `${policy}${advise ? ", advising an operator" : ", automatic"}` : "watching only: no response policy"],
-      ["last decision", d ? h("span", {}, ...(d.actions.length ? N.list(d.actions) : ["no action"]), d.rationale ? ` — ${d.rationale}` : null) : (policy ? "none yet" : null)],
+    const inForce = Object.values(cms).filter(a => a.ok && a.op !== "revert").length;
+    const status = !policy ? "Watching only: this run has no response policy"
+      : pending.length ? `Waiting for its operator on ${pending.length} suggestion${pending.length === 1 ? "" : "s"}`
+      : inForce ? `${inForce} countermeasure${inForce === 1 ? "" : "s"} in force`
+      : d ? "Has decided, nothing in force yet" : "Nothing to respond to yet";
+    return h("div", {}, h("p", { class: "now" }, status), kv([
+      ["response", policy ? `${policy} policy${advise ? ", suggesting to an operator" : ", acting on its own"}` : null],
+      ["last decision", d ? h("div", { class: "lines" },
+        ...(d.actions.length ? d.actions.map(id => h("div", {}, N.el(id))) : [h("div", {}, "no action")]),
+        d.trigger_klass ? h("div", {}, note(`after the finding "${pretty(d.trigger_klass)}", ${rel(d.t, r.start_t)} since run start`)) : null,
+        d.rationale ? fold("why", "why (the policy's own words)", h("div", { class: "muted" }, d.rationale), false) : null) : (policy ? "none yet" : null)],
       // Each countermeasure by its latest action: in force, reverted since, or failed.
-      ["countermeasures", Object.keys(cms).length ? h("div", {}, ...Object.values(cms).map(a => h("div", {},
-        a.op === "revert" && a.ok ? h("span", { class: "muted" }, "↩ ") : mark(a.ok, ""),
-        N.el(a.id), h("span", { class: "muted" }, `${a.machine ? ` on ${a.machine}` : ""}${a.op === "revert" ? ` — ${didWhat(a)}, no longer in force` : a.ok ? "" : " — failed"}`)))) : null],
-      ["awaiting operator", pending.length ? h("span", {}, "⏳ ", ...N.list(pending.map(a => a.action), " · ⏳ ")) : null],
-      ["plant writes", B.respWrites.length ? `${B.respWrites.length} restoring write${B.respWrites.length === 1 ? "" : "s"}` : null],
-    ]);
+      ["countermeasures", Object.keys(cms).length ? lines(Object.values(cms).map(a => [
+        a.op === "revert" && a.ok ? h("span", { class: "tick muted" }, "↩") : tick(a.ok),
+        N.el(a.id), note(`${a.machine ? ` — on ${a.machine}` : ""}${a.op === "revert" ? `, ${didWhat(a)}: no longer in force` : a.ok ? "" : ", failed"}`)])) : null],
+      ["awaiting operator", pending.length ? lines(pending.map(a => [h("span", { class: "tick" }, "⏳"), N.el(a.action)])) : null],
+      ["plant writes", B.respWrites.length ? `${B.respWrites.length} write${B.respWrites.length === 1 ? "" : "s"} to put the plant back` : null],
+    ]));
   }
   function blueSees(v, r, N) {
     const B = v.blue, byDet = {};
@@ -1018,19 +1064,24 @@
     const lf = last(B.findings);
     const nodes = Object.entries(B.st?.nodes || {}).filter(([, s]) => s[0] in STATE_RANK)
       .sort((a, b) => STATE_RANK[a[1][0]] - STATE_RANK[b[1][0]] || b[1][1] - a[1][1]);
+    // What it believes of the attack tree, by how sure it is: the steps it has
+    // confirmed in sight, the rest one click away.
+    const believed = Object.keys(STATE_RANK).map(state => [state, nodes.filter(([, s]) => s[0] === state)]).filter(([, list]) => list.length)
+      .map(([state, list]) => fold(`belief-${state}`, [h("span", { class: "dot", style: `background:${STATE_STYLE[state].stroke};margin-right:6px` }),
+        `${state}: ${list.length} step${list.length === 1 ? "" : "s"}`],
+        lines(list.map(([id, s]) => [N.el(id), note(` — belief ${num(s[1], 2)}`)])), state === "confirmed"));
+    const next = B.st?.next || [];
     return B.findings.length || nodes.length ? kv([
-      ["findings", Object.entries(byDet).map(([k, n]) => `${UI.termText(k)} ×${n}`).join(" · ")],
+      ["findings", lines(Object.entries(byDet).map(([k, n]) => [UI.termText(k), note(` — ${n}`)]))],
       ["latest", lf ? `${pretty(lf.klass)}${lf.src ? ` from ${lf.src}` : ""}${lf.unit != null ? ` on unit ${lf.unit}` : ""}${lf.maps_to ? ` — points to the step "${N.text(lf.maps_to)}"` : ""}` : null],
-      ["alerts open", B.open.length ? B.open.join(" · ") : null],
-      // One line per step it has an opinion on: the step, how sure, the belief behind it.
-      ["attack tree", nodes.length ? h("div", {}, ...nodes.map(([id, s]) => h("div", {},
-        h("span", { class: "dot", style: `background:${STATE_STYLE[s[0]].stroke};margin-right:6px` }), N.el(id),
-        h("span", { class: "muted" }, ` — ${s[0]}, belief ${num(s[1], 2)}`)))) : null],
-      ["expects next", B.st?.next?.length ? h("span", {}, ...N.list(B.st.next, " · ")) : null],
+      ["alerts open", B.open.length ? lines(B.open) : null],
+      ["believes", believed.length ? h("div", {}, ...believed) : null],
+      ["expects next", next.length ? fold("next", `${next.length} step${next.length === 1 ? "" : "s"} the attacker could take next`, lines(next.map(id => N.el(id))), false) : null],
       ["hosts implicated", B.st?.hosts?.length ? B.st.hosts.join(" · ") : null],
       ["model threshold", r.threshold != null ? `${r.threshold} (anomaly score, no unit)` : null],
     ]) : none("Nothing observed yet.");
   }
+
   const side = (who, label, parts) => h("div", { class: `side ${who}` },
     h("b", { style: `color:${who === "red" ? "var(--critical)" : "var(--s1)"}` }, label),
     ...parts.flatMap(([title, body]) => [h("h3", {}, title), body]));
@@ -1038,10 +1089,10 @@
   // One lane per side and one for the plant, on the run's timeline; the
   // vertical line is the time shown. A mark is a fact: click it to go there.
   const LANE_KEY = {
-    attacker: [["●", "var(--critical)", "attack step done"], ["✕", "var(--critical)", "attack step failed"], ["|", "var(--critical)", "write to the plant"]],
-    defender: [["▲", "var(--s1)", "finding"], ["◇", "var(--s1)", "decision"], ["■", "var(--good)", "countermeasure applied"],
-      ["□", "var(--good)", "countermeasure reverted"], ["■", "var(--critical)", "countermeasure failed"]],
-    plant: [["▬", "var(--critical)", "voltages out of the normal band"], ["┅", "var(--warning)", "control in MANUAL"]],
+    attacker: [["●", "var(--critical)", "attack step done", "done"], ["✕", "var(--critical)", "attack step failed", "failed"], ["|", "var(--critical)", "write to the plant", "write"]],
+    defender: [["▲", "var(--s1)", "finding", "finding"], ["◇", "var(--s1)", "decision", "decision"], ["■", "var(--good)", "countermeasure applied", "action var(--good)"],
+      ["□", "var(--good)", "countermeasure reverted", "revert var(--good)"], ["■", "var(--critical)", "countermeasure failed", "action var(--critical)"]],
+    plant: [["▬", "var(--critical)", "voltages out of the normal band", "band"], ["┅", "var(--warning)", "control in MANUAL", "manual"]],
   };
   function drawLanes(box, r, t, lanes) {
     box.replaceChildren();
@@ -1096,8 +1147,11 @@
     // Plot keeps the fact under the pointer as the chart's value.
     chart.style.cursor = "pointer";
     chart.addEventListener("click", () => { if (chart.value) UI.setTime(chart.value.t); });
-    box.append(chart, h("div", { class: "legend" }, ...lanes.flatMap(lane => LANE_KEY[lane].map(([mark, colour, label]) =>
-      h("span", {}, h("span", { style: `color:${colour};font-weight:700` }, mark), label)))));
+    // The legend names the marks this timeline has, not every mark there could be.
+    const drawn = new Set([...facts.map(f => f.shape), ...facts.map(f => `${f.shape} ${f.colour}`), ...(bands.length ? ["band"] : []), ...(manual.length ? ["manual"] : [])]);
+    box.append(chart, h("div", { class: "legend" }, ...lanes.flatMap(lane => LANE_KEY[lane].filter(([, , , kind]) => drawn.has(kind)).map(([mark, colour, label]) =>
+      h("span", {}, h("span", { style: `color:${colour};font-weight:700` }, mark), label))),
+      ...(point.length ? [h("span", { class: "muted" }, "click a mark to show the run at that time")] : [h("span", { class: "muted" }, "nothing has happened yet on these lanes")])));
   }
   // The intervals over which a plant condition held.
   function spans(plant, pred) {
@@ -1226,7 +1280,7 @@
     if (!keep(box, r, t)) return;
     const v = sidesAt(r, t), N = namer(r);
     box.replaceChildren(h("div", { class: "cols2" },
-      side("red", "Attacker", [["doing", redDoing(v, N)], ["knows", redKnows(v, N)]]),
+      side("red", "Attacker", [["doing", redDoing(v, N, r)], ["knows", redKnows(v, N)]]),
       side("blue", "Defender", [["doing", blueDoing(v, r, N)], ["sees / believes", blueSees(v, r, N)]])),
       lanesBox(r, t, ["attacker", "defender", "plant"]));
   }
@@ -1264,7 +1318,7 @@
             ? `${(c.hosts || []).map(x => `${x.ip} (${(x.ports || []).map(p => p.port ?? p).join(", ")})`).join(" · ") || "no host"}${c.foothold ? ` — foothold ${c.foothold.ip ?? c.foothold}:${c.foothold.port ?? ""}` : ""}`
             : `${c.engine_ip || "?"}:${c.modbus_port || "?"} Modbus ${c.modbus_ok ? "answers" : "silent"}${c.registers ? ` — ${Object.entries(c.registers).map(([a, x]) => `${a}=${x}`).join(" · ")}` : ""}`))), "")] : [];
     box.replaceChildren(h("div", { class: "cols2" },
-      side("red", "Doing", [["now", redDoing(v, N)]]), side("red", "Knows", [["of the target", redKnows(v, N)]])),
+      side("red", "Doing", [["now", redDoing(v, N, r)]]), side("red", "Knows", [["of the target", redKnows(v, N)]])),
       lanesBox(r, t, ["attacker", "plant"]),
       h("h3", { class: "sub", style: "margin:14px 0 4px" }, "Its steps"), steps, ...plans, ...recon);
   }

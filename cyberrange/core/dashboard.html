@@ -163,7 +163,20 @@ td.wrap { white-space: normal; min-width: 280px; }
 .side h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); margin: 10px 0 4px; font-weight: 600; }
 .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 13px; }
 .kv dt { color: var(--ink-2); }
-.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv dd { margin: 0; overflow-wrap: anywhere; min-width: 0; }
+/* What a side is doing right now, in one line that leads its column. */
+.side .now { font-size: 15px; font-weight: 600; margin: 4px 0 8px; overflow-wrap: anywhere; }
+/* A list, one thing a line; a line wraps under its own text, clear of its mark. */
+.lines > div { padding: 1px 0 1px 20px; text-indent: -20px; }
+.lines > div.click { cursor: pointer; border-radius: 4px; }
+.lines > div.click:hover { background: var(--wash); }
+.lines > div > * { text-indent: 0; }
+.tick { display: inline-block; width: 20px; text-indent: 0; font-weight: 700; }
+/* A list folded under a line that says how many it holds. */
+.fold > summary { cursor: pointer; color: var(--ink-2); padding: 1px 0; }
+.fold > summary:hover { color: var(--ink); }
+.fold[open] > summary { color: var(--ink); }
+.fold > .lines, .fold > div { margin: 2px 0 6px 14px; }
 .lanes { position: relative; margin-top: 12px; }
 .lanes svg { display: block; width: 100%; overflow: visible; }
 </style>
