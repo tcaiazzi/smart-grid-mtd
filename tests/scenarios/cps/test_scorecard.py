@@ -310,6 +310,48 @@ class ACard(unittest.TestCase):
         self.assertEqual(red["waits_cut_short"], 1)
         self.assertEqual(red["decision"]["woken_to_action_s"], 0.5)
 
+    def test_a_team_that_was_given_its_tree_has_no_reconnaissance_to_score(self):
+        self.assertIsNone(self.cards()["red"]["recon"])
+
+    def test_how_a_team_found_its_own_tree(self):
+        def told(t, steps):
+            return {"t": T0 + t, "kind": "recon", "stage": "report", "steps": steps}
+
+        self.gt += [
+            told(5, []),
+            told(8, ["it_access", "it_exec"]),
+            told(20, ["it_access", "it_exec", "pivot"]),
+            told(25, ["it_access", "it_exec", "pivot"]),
+        ]
+        self.metrics["tree_fidelity"] = {
+            "precision": 1.0,
+            "recall": 0.25,
+            "missing": ["ot_foothold"],
+            "extra": [],
+        }
+        r = self.cards()["red"]["recon"]
+        self.assertEqual((r["reports"], r["steps_listed"]), (4, 3))
+        self.assertEqual(r["first_report_s"], 5.0)
+        self.assertEqual(r["first_step_listed_s"], 8.0, "an empty list counted as a first step")
+        self.assertEqual(r["all_steps_listed_s"], 20.0, "a report that found nothing new counted")
+        self.assertEqual(r["reports_that_opened_nothing"], 2, "the empty and the repeated report")
+        self.assertEqual((r["precision"], r["recall"], r["missing"]), (1.0, 0.25, ["ot_foothold"]))
+
+    def test_approving_what_a_false_alarm_suggested_is_not_called_for(self):
+        write(
+            os.path.join(self.d, "player-blue.jsonl"),
+            [{"t": T0, "kind": "player_start", "harness": "h2"}],
+        )
+        for row in self.resp:
+            if row.get("request") == "r1" and row.get("state") == "requested":
+                row["t"] = T0 + 2  # the attack starts at T0 + 10
+        v = self.cards(called_for={"block_flow", "force_auto"})["blue"]["verdicts"]
+        self.assertEqual(
+            (v["approved_called_for"], v["approved_not_called_for"]),
+            (0, 2),
+            "a block raised before the attack was credited to it",
+        )
+
     def test_a_figure_that_is_not_there_is_none(self):
         write(
             os.path.join(self.d, "player-red.jsonl"),

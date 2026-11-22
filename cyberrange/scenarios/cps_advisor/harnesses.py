@@ -44,5 +44,14 @@ HARNESSES = {
             for team, policies in OPPONENTS.items()
             for policy in policies
         ),
+        # For a red seat that is given no tree (--red-knowledge recon): the
+        # range's own reconnaissance, then the steps in order. Not one of the
+        # graded opponents, which play a seat that is given its tree.
+        Harness(
+            "scripted-recon",
+            image="kathara/player",
+            launcher=f"{SCRIPTED} --policy recon",
+            seats=("red",),
+        ),
     )
 }

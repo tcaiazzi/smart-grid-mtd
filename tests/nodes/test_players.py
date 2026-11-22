@@ -12,8 +12,17 @@ import unittest
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.SOC, guest_paths.REDTEAM, guest_paths.PLAYERS)
+# ATTACK_AGENTS and DEFENSE: what the tree generator of a red console that is
+# given no tree imports.
+guest_paths.add(
+    guest_paths.SOC,
+    guest_paths.REDTEAM,
+    guest_paths.PLAYERS,
+    guest_paths.ATTACK_AGENTS,
+    guest_paths.DEFENSE,
+)
 
+import belief_tree  # noqa: E402  (flat guest import, needs the path set above)
 import claude_player  # noqa: E402  (flat guest import, needs the path set above)
 import harness_kit  # noqa: E402  (flat guest import, needs the path set above)
 import red_console as R  # noqa: E402  (flat guest import, needs the path set above)
@@ -168,6 +177,61 @@ class TheScriptedPlayer(unittest.TestCase):
             [("abc", "approve", "agent:scripted")],
             "the suggestion was answered more than once, or not in the player's name",
         )
+
+
+class TheScriptedReconnaissance(TheScriptedPlayer):
+    """The yardstick for a red seat that is given no tree: the range's own
+    reconnaissance, through the seat like anyone's."""
+
+    FOUND = {
+        "foothold": {"ip": "10.10.0.20", "port": 8080},
+        "ot": {"engine_ip": "10.20.0.10", "modbus_port": 502, "registers": {"0": 200, "1": 1}},
+    }
+
+    def recon_console(self, found):
+        self.ran, self.typed = [], []
+
+        def run(cmd):
+            self.ran.append(cmd.split()[cmd.split().index("--step") + 1])
+            return 0, json.dumps({"phase": self.ran[-1], "ok": True})
+
+        def shell(cmd):
+            self.typed.append(cmd)
+            return 0, "nmap noise\nFOUND " + json.dumps(found) + "\n", ""
+
+        bench = R.Bench([], run=run)
+        belief = os.path.join(tempfile.mkdtemp(prefix="belief-"), "belief_tree.json")
+        recon = R.Recon(bench, belief_tree.build, belief_path=belief)
+        place = seat.Seat("red", (*R.ACTIONS, R.REPORT), "recon", audit_log=os.devnull, run=shell)
+        return R.RedConsole(bench, TOKEN, host="127.0.0.1", seat=place, recon=recon).start()
+
+    def test_it_finds_reports_and_then_attacks_what_it_found(self):
+        player = self.player(self.recon_console(self.FOUND))
+        self.assertEqual(
+            scripted_player.play(player, sleep=lambda _s: None, policy="recon"), "done"
+        )
+        self.assertEqual(self.typed, [scripted_player.RECON_CMD])
+        self.assertEqual(self.ran[:3], ["it_access", "it_exec", "pivot"])
+        self.assertIn("impact", self.ran, "it found the registers and caused no effect")
+        with open(self.transcript) as f:
+            tools = [json.loads(line)["tool"] for line in f]
+        self.assertEqual(tools[:2], ["shell", "report_findings"])
+
+    def test_with_nothing_found_it_attacks_nothing(self):
+        player = self.player(self.recon_console({"foothold": None, "ot": {}}))
+        self.assertEqual(
+            scripted_player.play(player, sleep=lambda _s: None, policy="recon"), "nothing_found"
+        )
+        self.assertEqual(self.ran, [])
+
+    def test_at_a_seat_that_was_given_its_tree_it_does_not_play(self):
+        player = self.player(self.red_console())
+        said = scripted_player.play(player, sleep=lambda _s: None, policy="recon")
+        self.assertEqual((said, self.ran), ("this_seat_was_given_its_tree", []))
+
+    def test_its_command_is_one_the_shell_can_run(self):
+        code = scripted_player.RECON_CMD[len('python3 -c "') : -1]
+        compile(code, "recon", "exec")
 
 
 class TheGradedOpponents(TheScriptedPlayer):

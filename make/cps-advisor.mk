@@ -30,8 +30,13 @@ ENGAGEMENT_S        ?= 900
 MAX_CALLS           ?=
 # Name servers of the players' nodes (empty: the scenario's default, public ones).
 PLAYER_DNS          ?=
+# What the red team knows of the attack: tree (default: its console lists the
+# attack's steps) or recon (it finds the lab itself and reports to its console;
+# its node then needs the red-team image, `make cps-recon-image`).
+RED_KNOWLEDGE       ?=
 CPS_AGENTS_OUT      ?=
-CPS_PLAYER_FLAGS := $(if $(RED_MODEL),--red-model $(RED_MODEL)) \
+CPS_PLAYER_FLAGS := $(if $(RED_KNOWLEDGE),--red-knowledge $(RED_KNOWLEDGE)) \
+	$(if $(RED_MODEL),--red-model $(RED_MODEL)) \
 	$(if $(BLUE_MODEL),--blue-model $(BLUE_MODEL)) $(if $(MAX_CALLS),--max-calls $(MAX_CALLS)) \
 	$(if $(PLAYER_DNS),--player-dns $(PLAYER_DNS))
 CPS_ADVISOR_FLAGS := --respond $(CPS_ADVISOR_RESPOND) --approval operator:$(CPS_ADVISOR_TIMEOUT) \
@@ -83,7 +88,8 @@ cps-bench:                 ## benchmark harnesses: each one as red and blue vs g
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
 		--respond $(CPS_ADVISOR_RESPOND) --approval operator:$(CPS_ADVISOR_TIMEOUT) \
 		--engagement-s $(BENCH_ENGAGEMENT_S) --max-calls $(BENCH_MAX_CALLS) \
-		$(if $(PLAYER_DNS),--player-dns $(PLAYER_DNS)) $(CPS_IT_FLAG) $(if $(DRY),--dry-run)
+		$(if $(PLAYER_DNS),--player-dns $(PLAYER_DNS)) $(CPS_IT_FLAG) $(if $(DRY),--dry-run) \
+		$(if $(RED_KNOWLEDGE),--red-knowledge $(RED_KNOWLEDGE))
 
 cps-players-image:         ## build the images of the players' nodes (the sandbox a harness plays from)
 	docker build -t kathara/player docker/player/

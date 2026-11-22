@@ -17,6 +17,7 @@ from cyberrange.core.cli import default_args
 from cyberrange.core.component import SeatPlayer
 from cyberrange.core.harness import Harness
 from cyberrange.core.topology import build_lab
+from cyberrange.planes.attack import components as attack
 from cyberrange.scenarios.cps import scenario as cps_scenario
 from cyberrange.scenarios.cps.metrics import compute_metrics
 from cyberrange.scenarios.cps_advisor import cli as advisor
@@ -65,6 +66,13 @@ class Options(unittest.TestCase):
                 self.s, teams=True, red_harness="scripted-quiet", blue_harness="scripted-slow"
             )
         )
+
+    def test_a_scripted_red_plays_the_seat_its_policy_is_for(self):
+        recon = dict(teams=True, blue_harness="scripted", red_knowledge="recon")
+        self.assertIn("scripted-recon", self.refused(**recon, red_harness="scripted-loud"))
+        self.assertIn("scripted-recon", self.refused(**{**BOTH, "red_harness": "scripted-recon"}))
+        self.s.validate(default_args(self.s, **recon, red_harness="scripted-recon"))
+        self.assertIn("--teams", self.refused(red_knowledge="recon"))
 
     def test_a_harness_whose_secret_the_host_lacks_is_refused_before_the_lab_starts(self):
         with mock.patch.dict(os.environ, clear=False) as env:
@@ -197,6 +205,46 @@ class TheLab(unittest.TestCase):
         topo, _machines, _startups = self.build(teams=True, playground=True, red_harness="scripted")
         self.assertEqual([n.name for n in topo.nodes if n.role == "player"], ["redplayer"])
         self.assertNotIn("seatblue", [f.link for f in topo.node("soc").ifaces])
+
+
+class ARedTeamThatFindsItsOwnTree(TheLab):
+    RECON = dict(
+        teams=True, red_harness="scripted-recon", blue_harness="scripted", red_knowledge="recon"
+    )
+
+    def test_its_node_has_the_tools_and_its_console_is_told_nothing_of_the_lab(self):
+        topo, _machines, _startups = self.build(**self.RECON)
+        attacker = topo.node("attacker")
+        self.assertEqual(attacker.image, "kathara/redteam", "the scanner is not on the node")
+        staged = {guest for _host, guest in attacker.files}
+        self.assertLessEqual({"/belief_tree.py", "/attack_graph.py", "/recon.py"}, staged)
+        given, _m, _s = self.build(**BOTH)
+        self.assertNotEqual(given.node("attacker").image, "kathara/redteam")
+        self.assertNotIn("/belief_tree.py", {g for _h, g in given.node("attacker").files})
+
+    def test_the_console_is_started_without_the_tree_or_an_address(self):
+        s = CpsAdvisorScenario()
+        spec = s.lab_spec(default_args(s, **self.RECON))
+        p = cps_scenario.plant_of(spec)
+        console = attack.RedConsole(
+            "attacker", 8090, "tok", None, None, None, None, briefing="b", knowledge="recon"
+        )
+        self.assertIn("--knowledge recon", console.command)
+        self.assertNotIn("--tree-b64", console.command)
+        for known in (p.hmi_ip, p.engine_ip):
+            self.assertNotIn(known, console.command, "the team could read the lab off its console")
+        self.assertIn("attacker.belief_tree.json", [a.local_name for a in console.artifacts()])
+
+    def test_it_is_briefed_on_its_own_network_and_on_nothing_else(self):
+        s = CpsAdvisorScenario()
+        args = default_args(s, **self.RECON)
+        spec = s.lab_spec(args)
+        text = briefing("red", spec, args, engaged=True)
+        p = cps_scenario.plant_of(spec)
+        self.assertIn(spec.ip("attacker"), text)
+        self.assertIn("report_findings", text)
+        for secret in (*p.ways.values(), p.hmi_ip, p.engine_ip, spec.ip("ews")):
+            self.assertNotIn(secret, text, "the briefing gives away what the team is to find")
 
 
 class TheBriefing(unittest.TestCase):
@@ -346,8 +394,7 @@ class Episode(unittest.TestCase):
             normal_duration=0.2,
             learn_seconds=0.1,
             poll_interval=0.05,
-            **BOTH,
-            **over,
+            **{**BOTH, **over},
         )
         self.mgr, col = FakeManager(files=files), Collector()
         left = {
@@ -440,6 +487,37 @@ class Episode(unittest.TestCase):
             (m["stage_reached"], m["attack_succeeded"], m["prevented"]),
             ("ot_foothold", False, True),
         )
+
+    def test_what_a_red_team_reported_is_on_record_and_scored(self):
+        told = {
+            "t": 49.0,
+            "kind": "recon",
+            "stage": "report",
+            "reported": {"foothold_ip": "10.10.0.20", "foothold_port": 8080},
+            "steps": ["it_access", "it_exec"],
+            "operator": "agent:scripted-recon",
+        }
+        belief = {"t": 49.0, "kind": "belief", "tree": {"id": "impact", "children": []}}
+        record = [json.dumps(told) + "\n", json.dumps(belief) + "\n", *self.steps()]
+        _args, col = self.play(
+            {"/red_actions.jsonl": record, TRANSCRIPT: transcript("red")},
+            red_harness="scripted-recon",
+            red_knowledge="recon",
+        )
+        self.assertNotIn(
+            "--tree-b64",
+            next(c for c in self.mgr.commands("attacker") if "red_console.py" in c),
+            "a team that is to find its tree was handed it on its console's command line",
+        )
+        with open(os.path.join(self.out, "ground_truth.jsonl")) as f:
+            gt = [json.loads(line) for line in f]
+        (found,) = [e for e in gt if e["kind"] == "recon"]
+        self.assertEqual(found["steps"], ["it_access", "it_exec"])
+        self.assertEqual(
+            [e["tree"]["id"] for e in col.events if e["kind"] == "attacker_belief"], ["impact"]
+        )
+        card = compute_metrics(self.out)["players"]["red"]["recon"]
+        self.assertEqual((card["reports"], card["steps_listed"]), (1, 2))
 
     def test_each_harness_gets_its_scorecard(self):
         self.play({"/red_actions.jsonl": self.steps(), TRANSCRIPT: transcript("red")})

@@ -481,9 +481,16 @@ class RedConsole(GuestAgent):
     itself, and when the console is stopped the attack's end: how far it got
     and whether it reached the plant. Nobody tells a red team its attack is
     over, so without that last row a run played at the console could not be
-    scored like one that was driven."""
+    scored like one that was driven.
+
+    With ``knowledge="recon"`` the console is given no tree and no address of
+    the lab: the team reports what it finds and the console derives a belief
+    tree from that (``tree``, ``target_url`` and the engine are then unused).
+    Its reports are put on record as ``recon`` and the belief tree is kept as
+    an artifact, as a recon-driven attacker's are."""
 
     RECORD = "/red_actions.jsonl"
+    BELIEF = "/belief_tree.json"
     MODE = "manual"
 
     def __init__(
@@ -500,27 +507,62 @@ class RedConsole(GuestAgent):
         ways=None,
         plant_b64=None,
         briefing=None,
+        knowledge="tree",
     ):
-        packed = base64.b64encode(json.dumps(tree).encode()).decode()
-        where = "".join(f" --way {host}={url}" for host, url in (ways or {}).items())
+        recon = knowledge == "recon"
+        if recon:
+            # Nothing of the lab on the command line: the team could read it there.
+            where = " --knowledge recon"
+        else:
+            packed = base64.b64encode(json.dumps(tree).encode()).decode()
+            where = (
+                f" --tree-b64 {packed} --target-url {target_url} "
+                f"--engine-ip {engine_ip} --engine-port {engine_port}"
+            )
+            where += "".join(f" --way {host}={url}" for host, url in (ways or {}).items())
         where += f" --plant-b64 {plant_b64}" if plant_b64 else ""
         if briefing:
             where += f" --briefing-b64 {base64.b64encode(briefing.encode()).decode()}"
+        artifacts = [Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")]
+        if recon:
+            artifacts.append(Artifact(node, self.BELIEF, f"{node}.belief_tree.json"))
         super().__init__(
             node,
-            f"python3 red_console.py --port {port} --token {token} --tree-b64 {packed} "
-            f"--target-url {target_url} --engine-ip {engine_ip} --engine-port {engine_port} "
+            f"python3 red_console.py --port {port} --token {token} "
             f"--interval {interval}{where}" + (f" --terminal {terminal}" if terminal else ""),
             "red_console.log",
             plane=PLANE,
             name="red_console",
-            artifacts=[Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")],
+            artifacts=artifacts,
             watch="red_console.py",
         )
         self._cursor = None
         self._started = False
         self._reached = (-1, "none")  # (rank, stage) of the furthest step that worked
         self._acts_ok = 0  # writes and falsified readings the plant took
+
+    @staticmethod
+    def _found(row):
+        """A report of the team's, as the ledger shows a recon-driven
+        attacker's finds: which side of the lab it is about, and what the team
+        knows by now of the way in and of the plant."""
+        known, reported = row.get("known") or {}, row.get("reported") or {}
+        foothold = None
+        if known.get("foothold_ip"):
+            foothold = {"ip": known["foothold_ip"], "port": known.get("foothold_port")}
+        plant = any(k in reported for k in ("engine_ip", "engine_port", "registers"))
+        return {
+            "stage": "ot" if plant or "workstation_ip" in reported else "it",
+            "foothold": foothold,
+            "hosts": [{"ip": foothold["ip"], "ports": [{"port": foothold["port"]}]}]
+            if foothold
+            else [],
+            "engine_ip": known.get("engine_ip"),
+            "modbus_port": known.get("engine_port"),
+            "modbus_ok": bool(known.get("registers")),
+            "registers": {str(a): "read" for a in known.get("registers") or []} or None,
+            "workstation_ip": known.get("workstation_ip"),
+        }
 
     def stop(self, ctx):
         try:
@@ -543,6 +585,14 @@ class RedConsole(GuestAgent):
         if self._cursor is None:
             self._cursor = TelemetryCursor(tail_reader(ctx.exec_text, self.node, self.RECORD))
         for row in self._cursor.poll():
+            if row.get("kind") == "recon":
+                # What the team told its console it found, and the steps that
+                # gave it: the truth of what the team knew, and when.
+                told = {k: row.get(k) for k in ("stage", "reported", "steps", "operator")}
+                ctx.gt.record("recon", t=row.get("t"), mode=self.MODE, **told)
+                ctx.emit("recon", guest_t=row.get("t"), **{**told, **self._found(row)})
+            if row.get("kind") == "belief":
+                ctx.emit("attacker_belief", guest_t=row.get("t"), tree=row.get("tree"))
             if row.get("kind") != "red_step":
                 continue
             if not self._started:

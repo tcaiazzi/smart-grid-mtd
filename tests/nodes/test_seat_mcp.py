@@ -388,3 +388,45 @@ class OverStdio(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ARedSeatThatFindsItsTree(Seated):
+    def setUp(self):
+        bench = R.Bench([], run=lambda cmd: (0, ""))
+        said = {"known": {}, "steps": ["it_access"], "new": ["it_access"]}
+        self.reports = []
+
+        class Recon:
+            known = {}
+
+            def report(_self, doc, operator=None, note=None):
+                self.reports.append((doc, operator, note))
+                if doc.get("foothold_ip") == "nowhere":
+                    raise ValueError("foothold_ip must be an IP address")
+                return said
+
+        place = seat.Seat("red", (*R.ACTIONS, R.REPORT), "recon", "# Red", audit_log=os.devnull)
+        console = R.RedConsole(bench, TOKEN, host="127.0.0.1", seat=place, recon=Recon()).start()
+        self.player = self.sit(console)
+
+    def test_only_a_seat_that_finds_its_tree_is_offered_the_report(self):
+        self.assertIn("report_findings", self.player.tools)
+        given = self.sit(red_console())
+        self.assertNotIn("report_findings", given.tools)
+
+    def test_a_report_reaches_the_console_in_the_agents_name_and_the_transcript(self):
+        found = {"foothold_ip": "10.10.0.20", "foothold_port": 8080, "note": "nmap"}
+        said, failed = self.player.call("report_findings", found)
+        self.assertFalse(failed)
+        self.assertEqual(said["new"], ["it_access"])
+        doc, operator, note = self.reports[-1]
+        self.assertEqual((doc["foothold_port"], operator, note), (8080, "agent:scripted", "nmap"))
+        row = self.rows()[-1]
+        self.assertEqual((row["foothold_ip"], row["foothold_port"]), ("10.10.0.20", 8080))
+        self.assertTrue(row["result_ok"])
+
+    def test_a_report_the_console_cannot_read_is_told_to_the_harness(self):
+        said, failed = self.player.call("report_findings", {"foothold_ip": "nowhere"})
+        self.assertEqual((said, failed), ("foothold_ip must be an IP address", True))
+        said, failed = self.player.call("report_findings", {"foothold_port": "8080"})
+        self.assertIn("whole number", said)

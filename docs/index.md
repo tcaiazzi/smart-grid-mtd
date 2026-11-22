@@ -1,6 +1,6 @@
-# Smart Grid AI-MTD
+# Kathará Cyber Range
 
-A **cyber range for smart-grid security**, emulated with
+A **cyber range** emulated with
 [Kathará](https://github.com/KatharaFramework/Kathara). It began as AI-driven
 Moving Target Defense (MTD) for MQTT communications in a smart grid — still its
 first scenario — and grew into a platform for testing attacks and defences on

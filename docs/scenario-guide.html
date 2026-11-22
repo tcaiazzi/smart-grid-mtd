@@ -1126,6 +1126,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
      "/red_console.py"
     ],
     [
+     "nodes/redteam/belief_tree.py",
+     "/belief_tree.py"
+    ],
+    [
      "nodes/redteam/red_steps.py",
      "/red_steps.py"
     ],
@@ -1140,9 +1144,31 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
     [
      "nodes/redteam/tree_doc.py",
      "/tree_doc.py"
+    ],
+    [
+     "nodes/common/attack_graph.py",
+     "/attack_graph.py"
+    ],
+    [
+     "cyberrange/planes/defense/ot_registers.py",
+     "/ot_registers.py"
+    ],
+    [
+     "nodes/common/soar_kg.py",
+     "/soar_kg.py"
+    ],
+    [
+     "nodes/common/soar_trees.py",
+     "/soar_trees.py"
+    ],
+    [
+     "nodes/common/techniques.py",
+     "/techniques.py"
     ]
    ],
-   "needs": [],
+   "needs": [
+    "networkx"
+   ],
    "params": [
     {
      "default": null,
@@ -1191,6 +1217,10 @@ th { color: var(--ink-2); font-weight: 600; font-size: 12px; }
     {
      "default": "None",
      "name": "briefing"
+    },
+    {
+     "default": "'tree'",
+     "name": "knowledge"
     }
    ],
    "plane": "attack"

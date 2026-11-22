@@ -25,11 +25,13 @@ Impact, measured on the plant (independent of the attacker's knobs):
 Response (only when <out>/response.jsonl exists — the SOAR prototype):
   - policy, decisions, explained_decisions (coverage of the justification)
   - decision_latency_s     : first finding of the attack -> first countermeasure done
-  - actions / failed_actions, expected_actions, accurate (expected ⊆ applied),
+  - actions / failed_actions, expected_actions, accurate (expected ⊆ applied; for an attack
+    stopped before the plant, a countermeasure applied in answer to it),
     over_response (applied − expected)
   - attacker_writes_after_block : malicious writes that still succeeded after
                              the boundary block took effect
-  - false_responses        : countermeasures before the attack (or in a normal run)
+  - false_responses        : countermeasures applied before the attack, or in answer
+                             to an alert raised before it (or in a normal run)
   - hmi_unavailable_s      : operator HMI cut off by the response
   - countermeasure_times   : per countermeasure applied — dispatch_s, from the
                              request to its outcome on the host, and settle_s,
@@ -393,7 +395,17 @@ def _response(
     real = [a for a in applied if a["id"] != "notify"]
     block_t = min((a["done_t"] for a in applied if kind(a["id"]) in HMI_CUTTING), default=None)
     ok_writes = _plant_acts(gt, ok_only=True)
-    pre = [a for a in real if attack_start is None or a["done_t"] < attack_start - SLACK_S]
+
+    def unprovoked(a):
+        """Applied before the attack, or in answer to an alert raised before it:
+        an approval that comes late does not turn a false alarm into a cause."""
+        if attack_start is None:
+            return True
+        alert_t = a.get("alert_t")
+        early = alert_t is not None and alert_t < attack_start - SLACK_S
+        return early or a["done_t"] < attack_start - SLACK_S
+
+    pre = [a for a in real if unprovoked(a)]
     # Latency is measured to the first response to the attack: a false response
     # before it would give a negative value and drag the campaign median down.
     first_action = min((a["done_t"] for a in real if a not in pre), default=None)
@@ -403,7 +415,9 @@ def _response(
     if attack_start is None:
         accurate, over = (not pre), sorted(applied_ids - {"notify"})
     elif prevented:
-        accurate = bool(real)  # a countermeasure stopped it early
+        # A countermeasure stopped it early — one taken in answer to the attack:
+        # a block that was already up on a false alarm guessed, it did not respond.
+        accurate = any(a not in pre for a in real)
         over = []  # preventing before the plant is good
     else:
         accurate = expected <= applied_kinds

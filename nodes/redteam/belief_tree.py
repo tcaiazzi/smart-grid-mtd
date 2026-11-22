@@ -20,6 +20,7 @@ import ot_registers as reg
 import soar_kg as kgmod
 
 GATEWAY = "gateway"  # the boundary the attacker infers, not one it saw
+WORKSTATION = "ews"  # a host found next to the engine that is not one of the plant's
 
 
 def _net(ip):
@@ -38,10 +39,13 @@ def inventory_of(findings):
     """The lab as recon ``findings`` describe it:
 
         {"foothold": {"ip","port"} | None,   # an HTTP host found on the IT scan
-         "ot": {"engine_ip","modbus_ok","modbus_port","registers": {addr: raw}} | {}}
+         "ot": {"engine_ip","modbus_ok","modbus_port","registers": {addr: raw},
+                "workstation_ip"} | {}}
 
     A register is believed to exist when it was read, or — the engine answering
-    Modbus without an enumeration — from the known plant contract."""
+    Modbus without an enumeration — from the known plant contract. A
+    workstation is a host found on the engine's own network that is none of
+    the plant's devices: one that could write to the engine unasked."""
     foothold = findings.get("foothold")
     ot = findings.get("ot") or {}
     hosts, services, rules, plant_service, known = [], {}, [], None, None
@@ -57,6 +61,9 @@ def inventory_of(findings):
         known = sorted(int(a) for a in (ot.get("registers") or {}))
         if ot.get("modbus_ok") and not known:
             known = sorted(reg.ACTUATOR_REGISTERS)
+        if ot.get("workstation_ip"):
+            station = _iface("eth0", ot["workstation_ip"])
+            hosts.append({"name": WORKSTATION, "role": "engineering", "ifaces": [station]})
         if foothold:
             # The HMI talks to the engine on another network: something forwards
             # that flow, and — as far as the attacker knows — that flow only.

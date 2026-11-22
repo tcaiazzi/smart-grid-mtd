@@ -174,3 +174,28 @@ class Reconnoitre(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AWorkstationNextToTheEngine(unittest.TestCase):
+    """What opens the way to the plant from inside: a host found on the
+    engine's own network that is not one of the plant's devices."""
+
+    FOUND = {
+        "foothold": {"ip": "10.10.0.20", "port": 8080},
+        "ot": {"engine_ip": "10.20.0.10", "modbus_port": 502, "registers": {0: 1}},
+    }
+
+    def open_(self, findings):
+        return _feasible_leaves(belief_tree.build(findings), set())
+
+    def test_without_one_the_plant_is_reached_through_the_hmi_only(self):
+        self.assertNotIn("ot_foothold", self.open_(self.FOUND))
+
+    def test_with_one_there_is_a_foothold_on_the_plants_network(self):
+        found = {**self.FOUND, "ot": {**self.FOUND["ot"], "workstation_ip": "10.20.0.30"}}
+        self.assertIn("ot_foothold", self.open_(found))
+        self.assertEqual(
+            self.open_(found) - self.open_(self.FOUND),
+            {"ot_foothold", "ot_write_unknown", "ot_aitm", "meas_fdi"},
+            "the workstation changed what the tree says of the way through the HMI",
+        )

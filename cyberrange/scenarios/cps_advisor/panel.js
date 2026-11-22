@@ -8,6 +8,11 @@
 // any scenario. The panels are served together, so the cps one is there when a
 // run is shown; alone, this one draws nothing.
 //
+// A red team here may be given no tree and find its own (--red-knowledge
+// recon). What it believes is then drawn as the cps-recon panel draws a
+// recon-driven attacker's, so this panel builds on that one: on a run whose
+// red team was given its tree it adds nothing to the cps views.
+//
 // What this scenario adds is a results tab: a campaign of it is a benchmark
 // (cps_advisor/campaign.py), and its aggregate carries one row per cell of the
 // grid — a harness, the side it played, the opponent — with the mean and 95% CI
@@ -45,7 +50,8 @@
   }
 
   panels["cps-advisor"] = ui => {
-    const cps = panels["cps"] ? panels["cps"](ui) : {};
+    const under = panels["cps-recon"] || panels["cps"];
+    const cps = under ? under(ui) : {};
     const base = cps.results || { tabs: [], render() {} };
     return {
       ...cps,

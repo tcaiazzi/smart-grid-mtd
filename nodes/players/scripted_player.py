@@ -11,6 +11,9 @@ different strength (--policy):
     red   loud    the attack's steps in the order given, as each becomes ready
           quiet   the same, the least noticeable ready step first
           idle    no attack at all: what a defender does with nothing to defend
+          recon   for a seat that is given no tree: the range's own
+                  reconnaissance (red_recon_agent.py, on the team's node) run
+                  from the shell, reported whole, then the steps as loud does
     blue  fast    approves every suggestion as soon as it sees it
           slow    approves each one only after it has waited 20 seconds
           absent  answers nothing: the suggestions expire unapplied
@@ -23,6 +26,7 @@ Stdlib only.
 """
 
 import argparse
+import json
 import time
 
 import harness_kit
@@ -32,7 +36,44 @@ HARNESS = "scripted"
 VERSION = "2"
 PACE_S = 2.0  # between two looks at the seat
 SLOW_S = 20.0  # how long the slow defender lets a suggestion wait
-POLICIES = {"red": ("loud", "quiet", "idle"), "blue": ("fast", "slow", "absent")}
+POLICIES = {"red": ("loud", "quiet", "idle", "recon"), "blue": ("fast", "slow", "absent")}
+# The reconnaissance of the recon policy, as one command for the team's shell:
+# the scan of the node's own /24 and the look behind the foothold that the
+# recon-driven attacker does, printed as one JSON line. The seat's link is a
+# /30 and the node's way out a wider network, so the /24 is the lab's.
+RECON_CMD = (
+    'python3 -c "'
+    "import ipaddress, json, subprocess, red_recon_agent as r\n"
+    "rows = subprocess.run(['ip', '-4', '-o', 'addr'], capture_output=True, text=True).stdout\n"
+    "nets = [ipaddress.ip_interface(l.split()[3]).network for l in rows.splitlines()]\n"
+    "net = [n for n in nets if n.prefixlen == 24][0]\n"
+    "found, _url = r.reconnoitre(str(net), [22, 80, 502, 5020, 8080], '/dev/null')\n"
+    "print('FOUND ' + json.dumps(found))"
+    '"'
+)
+
+
+def reconnoitre(player):
+    """Find the lab from the team's shell and report it to the console.
+    -> whether there was anything to report."""
+    got, failed = player.call("shell", {"cmd": RECON_CMD, "note": "scan, then look behind"})
+    if failed:
+        return False
+    line = next((x for x in got.get("stdout", "").splitlines() if x.startswith("FOUND ")), None)
+    found = json.loads(line[len("FOUND ") :]) if line else {}
+    foothold, ot = found.get("foothold") or {}, found.get("ot") or {}
+    report = {
+        "foothold_ip": foothold.get("ip"),
+        "foothold_port": foothold.get("port"),
+        "engine_ip": ot.get("engine_ip"),
+        "engine_port": ot.get("modbus_port"),
+        "registers": ",".join(sorted(ot.get("registers") or {}, key=int)) or None,
+    }
+    report = {k: v for k, v in report.items() if v is not None}
+    if not report:
+        return False
+    _said, failed = player.call("report_findings", {**report, "note": "what the scan found"})
+    return not failed
 
 
 def wait_out(player, sleep):
@@ -51,6 +92,11 @@ def red(player, sleep, policy="loud", tries=2):
     once. Ends when nothing is left to try."""
     if policy == "idle":
         return wait_out(player, sleep)
+    if policy == "recon":
+        if "report_findings" not in player.tools:
+            return "this_seat_was_given_its_tree"
+        if not reconnoitre(player):
+            return "nothing_found"
     tried = {}
     while True:
         steps, failed = player.call("list_steps", {})

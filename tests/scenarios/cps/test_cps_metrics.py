@@ -505,6 +505,61 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertEqual(r["failed_actions"], ["block_flow"])
         self.assertIsNone(r["attacker_writes_after_block"])
 
+    def test_a_block_put_up_on_a_false_alarm_is_not_an_accurate_response(self):
+        _write(
+            self.d / "ground_truth.jsonl",
+            [
+                {"t": self.attack_t, "kind": "attack_start", "mode": "manual"},
+                {
+                    "t": self.write_t,
+                    "kind": "modbus_write",
+                    "register": 0,
+                    "value": 60,
+                    "ok": False,
+                },
+            ],
+        )
+        _write(
+            self.d / "response.jsonl",
+            [
+                {
+                    "t": 2000.0,
+                    "kind": "response_up",
+                    "policy": "solver",
+                    "approval": "operator:120",
+                },
+                {"t": 2005.0, "kind": "action", "id": "block_flow", "ok": True, "done_t": 2005.0},
+            ],
+        )
+        r = compute_metrics(str(self.d))["response"]
+        self.assertTrue(r["prevented_before_impact"])
+        self.assertEqual(r["false_responses"], 1)
+        self.assertFalse(r["accurate"], "a defence that cut the plant off unprovoked scored well")
+
+    def test_a_false_alarm_approved_after_the_attack_began_is_still_a_false_response(self):
+        _write(
+            self.d / "response.jsonl",
+            [
+                {
+                    "t": 2000.0,
+                    "kind": "response_up",
+                    "policy": "solver",
+                    "approval": "operator:120",
+                },
+                {
+                    "t": self.attack_t + 3.0,
+                    "kind": "action",
+                    "id": "block_flow",
+                    "ok": True,
+                    "alert_t": self.attack_t - 20.0,
+                    "done_t": self.attack_t + 3.0,
+                },
+            ],
+        )
+        r = compute_metrics(str(self.d))["response"]
+        self.assertEqual(r["false_responses"], 1, "the late approval hid where the block came from")
+        self.assertIsNone(r["decision_latency_s"], "a false alarm was timed as a response")
+
 
 class PlannerRun(unittest.TestCase):
     """A tree-guided attack stopped at the pivot (defended): no writes landed."""

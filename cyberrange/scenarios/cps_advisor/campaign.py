@@ -75,6 +75,8 @@ COLUMNS = {
         ("plant affected", "players.red.impact.plant_affected"),
         ("out of band (s)", "players.red.impact.out_of_band_s"),
         ("stages reached", "players.red.progress.stages_reached"),
+        ("tree found (recall)", "players.red.recon.recall"),
+        ("first report (s)", "players.red.recon.first_report_s"),
         ("steps that worked", "players.red.progress.step_success_rate"),
         ("repeats after failure", "players.red.progress.repeats_after_failure"),
         ("failed again", "players.red.progress.failed_again"),

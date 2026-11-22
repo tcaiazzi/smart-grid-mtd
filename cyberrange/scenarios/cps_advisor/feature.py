@@ -20,6 +20,13 @@ team's console and a way out to its model's API, and nothing else of the lab or
 of the host within reach. It sits at the same console as a person would, behind
 the same token. With a harness at both seats nobody has to be there: the
 episode gives them an engagement of fixed length and ends by itself.
+
+What the red team knows of the attack is an option (--red-knowledge). By
+default it is given the attack tree, as the steps of its console. With
+``recon`` it is given nothing of the lab but its own network: it finds its way
+with the tools of its node, reports what it finds to its console, and is listed
+the steps its reports make possible — the tree it derives is then scored
+against the true one.
 """
 
 import json
@@ -50,6 +57,8 @@ from cyberrange.scenarios.cps_advisor.guest_files import (
     TEAM_FILES,
 )
 from cyberrange.scenarios.cps_advisor.harnesses import HARNESSES
+from cyberrange.scenarios.cps_recon.feature import REDTEAM_IMAGE
+from cyberrange.scenarios.cps_recon.guest_files import RECON_FILES
 
 log = logging.getLogger("scenarios.cps_advisor")
 
@@ -68,6 +77,8 @@ ADAPTER, PLAYER_KIT = "nodes/players/seat_mcp.py", "nodes/players/harness_kit.py
 # addresses, of a range no lab uses (RFC 2544's, never routed).
 SEAT_NETS = {BLUE: "198.18.0.0", RED: "198.18.0.4"}
 PLANE_OF = {BLUE: defense.PLANE, RED: attack.PLANE}
+TREE, RECON = "tree", "recon"  # what the red team knows of the attack: given it, or found
+RECON_PLAYER = "scripted-recon"  # the scripted policy for a red seat that finds its tree
 
 
 def fresh_token():
@@ -133,6 +144,13 @@ class People(Feature):
         t.add_argument(
             "--red-shell-port", type=int, default=8769, help="host port of the red team's shell"
         )
+        t.add_argument(
+            "--red-knowledge",
+            choices=(TREE, RECON),
+            default=TREE,
+            help="what the red team knows of the attack: the tree, as its console's steps, "
+            "or only what it finds by reconnaissance and reports to its console",
+        )
         t.add_argument("--blue-token", default=None, help="default: a fresh one per run")
         t.add_argument("--red-token", default=None, help="default: a fresh one per run")
         if not self.console:
@@ -197,6 +215,16 @@ class People(Feature):
                     f"--{team}-harness {harness.name} needs {' or '.join(missing)} in the "
                     "environment: its node is given nothing else of this host"
                 )
+        if args.red_knowledge == RECON and not args.teams:
+            raise SystemExit("--red-knowledge recon: there is a red team only with --teams")
+        if RED in players and (players[RED].name == RECON_PLAYER) != (args.red_knowledge == RECON):
+            scripted = players[RED].name.startswith("scripted")
+            if scripted:
+                raise SystemExit(
+                    f"--red-harness {players[RED].name} with --red-knowledge "
+                    f"{args.red_knowledge}: {RECON_PLAYER} plays a seat that finds its tree, "
+                    "the other scripted policies one that is given it"
+                )
         if args.teams:
             if not self.engaged(args) and not getattr(args, "playground", False):
                 raise SystemExit(
@@ -234,6 +262,8 @@ class People(Feature):
 
     def run_info(self, args):
         info = {"approval": args.approval, "teams": bool(args.teams)}
+        if args.teams and args.red_knowledge != TREE:
+            info["red_knowledge"] = args.red_knowledge
         if args.teams:
             # Who plays each seat: what a comparison of harnesses is grouped by.
             played = self.players(args)
@@ -259,6 +289,7 @@ class People(Feature):
         if not args.teams:
             return {}
         card = {
+            "red_knowledge": args.red_knowledge,
             "seat_adapter": runcard.file_fingerprint(paths.resolve(ADAPTER)),
             "player_kit": runcard.file_fingerprint(paths.resolve(PLAYER_KIT)),
         }
@@ -325,6 +356,12 @@ class People(Feature):
                     T.TERMINAL_GUEST_PORT,
                 ),
             )
+            if args.red_knowledge == RECON:
+                # The scanner and the tree generator, on the red team's own
+                # image: none of it belongs on a host of the plant's.
+                out[attacker] = out[attacker].merged(
+                    T.Extra(files=RECON_FILES, image=REDTEAM_IMAGE)
+                )
             if RED in players:
                 out[attacker] = out[attacker].merged(seated(attacker, RED))
         if BLUE in players:
@@ -439,6 +476,7 @@ class People(Feature):
                 ways=p.ways,
                 plant_b64=reg.plant_b64(ctx.scenario.plant_spec(a)),
                 briefing=self.briefing(ctx.scenario, a, RED),
+                knowledge=a.red_knowledge,
             )
         )
         hand_over(RED, links)

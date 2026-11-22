@@ -16,8 +16,14 @@ import urllib.request
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.REDTEAM, guest_paths.COMMON)
+# The console of a team that reconnoitres derives its tree with the generator:
+# ATTACK_AGENTS and DEFENSE supply what that imports (the steps' client, the
+# register map).
+guest_paths.add(
+    guest_paths.REDTEAM, guest_paths.COMMON, guest_paths.ATTACK_AGENTS, guest_paths.DEFENSE
+)
 
+import belief_tree  # noqa: E402  (flat guest import, needs the path set above)
 import red_console as R  # noqa: E402  (flat guest import, needs the path set above)
 import seat  # noqa: E402  (flat guest import, needs the path set above)
 
@@ -257,3 +263,113 @@ class AConsoleNobodyGaveASeat(TheConsole):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ATeamThatFindsItsOwnTree(TheConsole):
+    """--knowledge recon: no tree is given; the steps come from what the team
+    reports, through the real generator."""
+
+    HMI = {"foothold_ip": "10.10.0.20", "foothold_port": 8080}
+    ENGINE = {"engine_ip": "10.20.0.10", "engine_port": 502}
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="recon-")
+        self.record = os.path.join(self.dir, "red_actions.jsonl")
+        self.belief = os.path.join(self.dir, "belief_tree.json")
+        self.ran = []
+        self.shell = self  # the inherited tests ask the shell what ran
+
+        def run(cmd):
+            self.ran.append(cmd)
+            return 0, json.dumps({"phase": cmd.split()[-1], "ok": True})
+
+        bench = R.Bench([], self.record, run=run)
+        self.recon = R.Recon(bench, belief_tree.build, belief_path=self.belief)
+        place = seat.Seat("red", (*R.ACTIONS, R.REPORT), "recon", "# Red", audit_log=os.devnull)
+        self.console = R.RedConsole(
+            bench, TOKEN, host="127.0.0.1", seat=place, recon=self.recon
+        ).start()
+        self.addCleanup(self.console.shutdown)
+
+    def report(self, **found):
+        code, body = self.call("POST", "/findings", body=found)
+        return code, json.loads(body)
+
+    def listed(self):
+        return [s["id"] for s in json.loads(self.call("GET", "/state")[1])["steps"]]
+
+    def rows(self, kind):
+        with open(self.record) as f:
+            return [r for r in map(json.loads, f) if r["kind"] == kind]
+
+    # The inherited tests are of a console that was given its steps.
+    test_a_step_is_run_from_the_console = None
+    test_the_state_does_not_carry_the_terminals_secret = None
+
+    def test_nothing_is_listed_before_anything_is_found(self):
+        self.assertEqual(
+            self.listed(), [], "a step was listed for a team that has found nothing yet"
+        )
+        self.assertEqual(json.loads(self.call("GET", "/seat")[1])["knowledge"], "recon")
+
+    def test_each_finding_lists_the_steps_it_makes_possible(self):
+        code, said = self.report(**self.HMI)
+        self.assertEqual((code, said["new"]), (200, ["it_access", "it_exec"]))
+        _code, said = self.report(**self.ENGINE)
+        self.assertEqual(said["new"], ["pivot"], "the engine alone gave a step that writes to it")
+        _code, said = self.report(registers="1")
+        self.assertEqual(sorted(said["new"]), ["breaker_chatter", "breaker_open"])
+        self.assertNotIn("setpoint_oor", self.listed(), "a register never read gave its step")
+        _code, said = self.report(workstation_ip="10.20.0.30")
+        self.assertEqual(said["new"], ["ot_foothold", "ot_aitm", "meas_fdi"])
+
+    def test_a_step_is_aimed_at_what_was_reported_and_at_nothing_else(self):
+        self.report(foothold_ip="10.10.0.99", foothold_port=81)
+        self.assertEqual(self.call("POST", "/steps/it_access", body={})[0], 200)
+        self.assertIn("--target-url http://10.10.0.99:81 ", self.ran[-1])
+
+    def test_a_report_is_put_on_record_with_the_tree_it_gave(self):
+        self.report(**self.HMI, operator="agent:x", note="nmap")
+        (told,) = self.rows("recon")
+        self.assertEqual(told["reported"], self.HMI)
+        self.assertEqual((told["operator"], told["note"]), ("agent:x", "nmap"))
+        self.assertEqual(told["steps"], ["it_access", "it_exec"])
+        (belief,) = self.rows("belief")
+        with open(self.belief) as f:
+            self.assertEqual(json.load(f), belief["tree"])
+
+    def test_the_tree_credits_the_team_with_nothing_it_did_not_find(self):
+        self.report(**self.HMI)
+        with open(self.belief) as f:
+            idx = R.tree_doc.index(json.load(f))
+        open_ = {i for i, n in idx.items() if R.steps.is_step(n) and R.tree_doc.feasible(n)}
+        self.assertEqual(
+            open_, {"it_access", "it_exec"}, "the fidelity would count a way never found"
+        )
+
+    def test_the_runs_so_far_outlive_a_new_list(self):
+        self.report(**self.HMI)
+        self.call("POST", "/steps/it_access", body={})
+        self.report(**self.ENGINE)
+        state = json.loads(self.call("GET", "/state")[1])
+        self.assertEqual([r["step"] for r in state["history"]], ["it_access"])
+        self.assertEqual(state["steps"][0]["outcome"], "done")
+        self.assertEqual(state["known"]["engine_ip"], "10.20.0.10")
+
+    def test_a_report_that_cannot_be_read_changes_nothing(self):
+        for wrong in (
+            {},
+            {"foothold_ip": "the hmi"},
+            {"foothold_ip": "10.10.0.20", "foothold_port": "8080"},
+            {"registers": "one,two"},
+        ):
+            code, said = self.report(**wrong)
+            self.assertEqual(code, 400, f"the console took {wrong}")
+            self.assertIn("must be" if wrong else "at least one", said["error"])
+        self.assertEqual((self.listed(), self.recon.known), ([], {}))
+
+    def test_a_console_that_was_given_its_tree_takes_no_report(self):
+        given = R.RedConsole(R.Bench(STEPS, run=FakeShell()), TOKEN, host="127.0.0.1").start()
+        self.addCleanup(given.shutdown)
+        self.console = given
+        self.assertEqual(self.report(**self.HMI)[0], 404)
