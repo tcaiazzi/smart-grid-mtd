@@ -123,6 +123,13 @@ class Bench:
                 "step": step_id,
                 "stage": stage,
                 **({"stage_rank": step["stage_rank"]} if "stage_rank" in step else {}),
+                # How noticeable the step is, by the registry's reckoning: kept
+                # with the run, so the range can say how quiet a team played.
+                **(
+                    {"detectability": step["detectability"]}
+                    if step.get("detectability") is not None
+                    else {}
+                ),
                 "ok": bool(said[-1]) if said else rc == 0,
                 "rc": rc,
                 "duration_s": round(self.clock() - started, 3),

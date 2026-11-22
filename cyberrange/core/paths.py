@@ -11,6 +11,8 @@ simply answers False, and a campaign concludes a step was "already built", or
 writes its output outside the repo, instead of failing.
 """
 
+import os
+import time
 from pathlib import Path
 
 # Files that only ever exist at the top of this repo.
@@ -41,3 +43,30 @@ def resolve(rel) -> Path:
     """
     path = Path(rel)
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+RUNS, LATEST = "runs", "latest"
+
+
+def new_run_dir(root, scenario, name=None, now=None) -> str:
+    """A directory of its own for one run of ``scenario`` under ``root``:
+    ``<root>/<scenario>/runs/<date-time>[-name]``, made here, with
+    ``<root>/<scenario>/latest`` pointing at it.
+
+    One directory per run, never a fixed one: a second run into the directory
+    of the first appends its ledger to the other's and overwrites its
+    artifacts, and what is left is neither run."""
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+    base = os.path.join(root, scenario, RUNS, f"{stamp}-{name}" if name else stamp)
+    path, n = base, 1
+    while os.path.exists(path):  # two runs started within the same second
+        n += 1
+        path = f"{base}-{n}"
+    os.makedirs(path)
+    link = os.path.join(root, scenario, LATEST)
+    # Only a link is replaced: a real directory of that name is someone's data.
+    if os.path.islink(link) or not os.path.exists(link):
+        tmp = f"{link}.{os.getpid()}"
+        os.symlink(os.path.relpath(path, os.path.dirname(link)), tmp)
+        os.replace(tmp, link)
+    return path

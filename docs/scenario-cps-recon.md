@@ -86,7 +86,7 @@ Or directly:
 
 ```bash
 .venv/bin/python -m cyberrange.scenarios.cps_recon --attack \
-    --attacker-profile opportunistic --out-dir output/cps-recon/run-1 --seed 1
+    --attacker-profile opportunistic --seed 1
 ```
 
 The run leaves `attacker.belief_tree.json` among the artifacts and a

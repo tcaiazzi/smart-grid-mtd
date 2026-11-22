@@ -53,8 +53,20 @@ ATTACK_MODES = (
     "meas-fdi",
 )
 KNOWN_MODES = ("normal",) + ATTACK_MODES
-# Set per run by the campaign, so not taken from the command line.
-PER_RUN = ("out_dir", "run_id", "seed", "attack", "attack_mode", "progress_file")
+# Set per run by the campaign, so not taken from the command line. The last
+# three say where a single run puts itself: a campaign names each run's
+# directory, and its own --out-root is where the campaign goes.
+PER_RUN = (
+    "out_dir",
+    "run_id",
+    "seed",
+    "attack",
+    "attack_mode",
+    "progress_file",
+    "out_root",
+    "run_name",
+    "overwrite",
+)
 
 
 def parse_seeds(spec):

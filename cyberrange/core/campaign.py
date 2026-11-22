@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 from cyberrange.core.progress import ProgressLog
-from cyberrange.core import lifecycle, paths
+from cyberrange.core import lifecycle, paths, runcard
 
 log = logging.getLogger("core.campaign")
 
@@ -149,6 +149,8 @@ class Campaign:
             json.dump(
                 {
                     "name": self.name,
+                    # The code every run of the campaign is made with.
+                    "code": runcard.code(),
                     "grid": self.grid(),
                     "params": self.params,
                     "units": [
@@ -270,14 +272,9 @@ class Campaign:
             # Scoring reads what the run left behind; one unreadable run
             # directory fails that run, not every unit after it.
             try:
-                m = s.metrics(s.run_dir)
-                m["run"] = {"run_id": rid, **_lbl(s)}
-                os.makedirs(s.run_dir, exist_ok=True)
-                with open(os.path.join(s.run_dir, "metrics.json"), "w") as f:
-                    json.dump(m, f, indent=2, default=str)
-                if s.report:
-                    with open(os.path.join(s.run_dir, "metrics.md"), "w") as f:
-                        f.write(s.report(m))
+                m = lifecycle.write_metrics(
+                    s.run_dir, s.metrics(s.run_dir), s.report, run_id=rid, **_lbl(s)
+                )
             except Exception as e:  # noqa: BLE001 — recorded as a failed run
                 log.warning("run %s could not be scored: %s", rid, e)
                 counts["failed"] += 1

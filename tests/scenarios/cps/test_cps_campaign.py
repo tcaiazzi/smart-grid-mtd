@@ -161,6 +161,21 @@ class PlannerGrid(unittest.TestCase):
             cc.parse_modes("planner:sneaky")
 
 
+class CommandLine(unittest.TestCase):
+    def test_the_campaigns_directory_is_its_own_not_a_single_runs(self):
+        cfg = cc.parse_args(["--name", "t", "--seeds", "1"])
+        self.assertEqual(
+            cfg.out_root,
+            "output/campaigns",
+            "a run's own --out-root replaced the campaign's: the campaign is written among "
+            "the single runs",
+        )
+        self.assertEqual(
+            cc.parse_args(["--out-root", "/tmp/x", "--respond", "rules"]).out_root, "/tmp/x"
+        )
+        self.assertEqual(cc.parse_args(["--respond", "rules"]).respond, "rules")
+
+
 class Campaign(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="campaign-")
@@ -217,9 +232,13 @@ class Campaign(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, f)), f)
         with open(os.path.join(d, "runs", "manual-hijack-s1", "metrics.json")) as f:
             m = json.load(f)
+        card = m["run"].pop("card")
         self.assertEqual(
             m["run"], {"run_id": "manual-hijack-s1", "mode": "manual-hijack", "seed": 1}
         )
+        self.assertIn("commit", card, "a scored run does not say what code it was made with")
+        with open(os.path.join(d, "campaign.json")) as f:
+            self.assertIn("commit", json.load(f)["code"])
 
     def test_resume_skips_scored_runs(self):
         cc.run_campaign(

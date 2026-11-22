@@ -10,6 +10,12 @@ harness in particular, which is what lets two of them be compared.
 from cyberrange.core.harness import Harness
 from cyberrange.scenarios.cps_advisor.guest_files import CLAUDE_PLAYER_FILES
 
+SCRIPTED = "python3 /scripted_player.py"
+# The scripted policies of each side (nodes/players/scripted_player.py), from
+# the hardest opponent to none: what a harness in the other seat is graded
+# against.
+OPPONENTS = {"blue": ("fast", "slow", "absent"), "red": ("loud", "quiet", "idle")}
+
 HARNESSES = {
     h.name: h
     for h in (
@@ -25,7 +31,18 @@ HARNESSES = {
             secret_env=("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"),
         ),
         # No model: a fixed policy. The yardstick, and the opponent that stays
-        # the same while the other seat's harness changes.
-        Harness("scripted", image="kathara/player", launcher="python3 /scripted_player.py"),
+        # the same while the other seat's harness changes. It plays either
+        # side with that side's plainest policy; the graded ones are below.
+        Harness("scripted", image="kathara/player", launcher=SCRIPTED),
+        *(
+            Harness(
+                f"scripted-{policy}",
+                image="kathara/player",
+                launcher=f"{SCRIPTED} --policy {policy}",
+                seats=(team,),
+            )
+            for team, policies in OPPONENTS.items()
+            for policy in policies
+        ),
     )
 }

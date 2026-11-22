@@ -37,6 +37,7 @@ class PhysicalProcess(GuestAgent):
             plane=PLANE,
             name="physical_process",
             artifacts=[Artifact(node, f"/{frame_log}", f"{node}.{frame_log}")],
+            watch="modbus_engine.py",
         )
         self.frame_log = frame_log
 
@@ -53,6 +54,7 @@ class PlcController(GuestAgent):
             "plc.log",
             plane=PLANE,
             name="plc",
+            watch="plc_controller.py",
         )
 
 

@@ -4,7 +4,10 @@
 
 # ── Cyber-physical (OT/Modbus) scenario — doc steps 1–4 ──────────────────────
 # Variables for the OT scenario. The lab needs the kathara/cps and kathara/soc images (cps-image).
-CPS_OUT          ?= $(OUTPUT_ROOT)/cps/run-1
+# The directory of one run, when it must be a given one (default: a new one, see
+# run_dir in common.mk); CPS_RUN is the run the reading targets look at.
+CPS_OUT          ?=
+CPS_RUN          ?= $(or $(CPS_OUT),$(OUTPUT_ROOT)/cps/latest)
 CPS_NORMAL       ?= 60
 CPS_LEARN        ?= 45
 CPS_POST         ?= 30
@@ -56,13 +59,13 @@ cps-engine:                ## run engine + PLC locally over loopback Modbus (Ctr
 	@echo "  PYTHONPATH=cyberrange/planes/traffic/agents:cyberrange/planes/defense $(PYTHON) -m plc_controller --engine-host 127.0.0.1"
 
 cps-lab:                   ## deploy the lab, normal operation only
-	$(PYTHON) -m $(M_CPS_RUN) --out-dir $(CPS_OUT) \
+	$(PYTHON) -m $(M_CPS_RUN) $(call run_dir,$(CPS_OUT)) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --step-interval $(CPS_STEP) \
 		$(CPS_SEED_FLAG) $(DASHBOARD_FLAG) $(CPS_RESPOND_FLAGS) $(CPS_IT_FLAG) $(PLAYGROUND_FLAG)
 
 cps-attack:                ## deploy the lab and drive the active attack chain (CPS_ATTACK_MODE)
-	$(PYTHON) -m $(M_CPS_RUN) --out-dir $(CPS_OUT) \
+	$(PYTHON) -m $(M_CPS_RUN) $(call run_dir,$(CPS_OUT)) \
 		--normal-duration $(CPS_NORMAL) --learn-seconds $(CPS_LEARN) \
 		--detectors $(CPS_DETECTORS) --post-attack-duration $(CPS_POST) \
 		--step-interval $(CPS_STEP) --attack --attack-mode $(CPS_ATTACK_MODE) \
@@ -80,9 +83,9 @@ cps-dashboard:             ## progress dashboard restricted to the CPS runs/camp
 	$(PYTHON) -m $(M_DASHBOARD) --root $(OUTPUT_ROOT) --scenario cps --port $(CPS_DASH_PORT)
 
 cps-metrics:               ## score a finished run (detection, impact, response)
-	$(PYTHON) -m $(M_CPS_METRICS) --out-dir $(CPS_OUT) --report $(CPS_OUT)/metrics.md
+	$(PYTHON) -m $(M_CPS_METRICS) --out-dir $(CPS_RUN) --report $(CPS_RUN)/metrics.md
 
 cps-replay:                ## what a response policy WOULD have done on a finished run (CPS_RESPOND)
-	$(PYTHON) -m $(M_CPS_RESPONDER) --replay $(CPS_OUT) \
+	$(PYTHON) -m $(M_CPS_RESPONDER) --replay $(CPS_RUN) \
 		--policy $(if $(filter off,$(CPS_RESPOND)),rules,$(CPS_RESPOND)) --approval $(CPS_APPROVAL)
 

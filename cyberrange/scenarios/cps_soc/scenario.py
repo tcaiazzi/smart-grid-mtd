@@ -30,7 +30,6 @@ class CpsSocScenario(CpsAdvisorScenario):
     # The tools first: their files come first on the SOC, and they start before
     # the people's services.
     features = (SocTools(), People(console=False))
-    DEFAULT_OUT_DIR = "output/cps-soc/run-1"
 
     def panel_js(self):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "panel.js")
