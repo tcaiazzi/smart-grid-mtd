@@ -211,6 +211,12 @@ async function briefing() {
     if (doc.briefing) { $("briefing").textContent = doc.briefing; $("briefing-wrap").style.display = ""; }
   } catch (e) {}
 }
+// The terminal's link comes without its secret, which is this console's own
+// token: put back here, where it is already held, and nowhere on the wire.
+function withToken(url, user) {
+  try { const u = new URL(url); if (user) { u.username = user; u.password = token; } return u.href; }
+  catch (e) { return url; }
+}
 async function order(method, path, body) {
   $("err").textContent = "";
   try { await call(method, path, body); } catch (e) { $("err").textContent = `Not done: ${e.message}`; }
@@ -278,7 +284,7 @@ function render() {
     sig = s;
     $("policy").textContent = `policy: ${S.policy}`;
     document.querySelectorAll("#modes button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode)));
-    if (S.terminal) { $("term").href = S.terminal; $("term").style.display = ""; }
+    if (S.terminal) { $("term").href = withToken(S.terminal, S.terminal_user); $("term").style.display = ""; }
     $("sug-sub").textContent = S.mode === "advise"
       ? `The SOC is advising: nothing it proposes runs until you approve it, and a suggestion left unanswered for ${dur(S.advise_s)} expires unapplied.`
       : "The SOC is acting on its own: it runs what its policy decides and reports it under Responses.";

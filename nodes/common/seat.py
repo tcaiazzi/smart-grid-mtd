@@ -22,6 +22,7 @@ Copied flat onto the nodes a team has a console on. Stdlib only.
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -34,6 +35,17 @@ SHELL_TIMEOUT_S = 30.0
 OUTPUT_MAX = 8000  # characters of each stream sent back; the rest is cut
 NOTE_MAX = 500
 AGENT = "agent:"  # how a player that is not a person names itself as operator
+REDACTED = "<token>"  # what a team's secret is replaced with in a record
+
+
+def without_credentials(url):
+    """(url with no user:password in it, the user) — for a link a console
+    hands out as data. The page that shows it puts its own token back; a player
+    that reads the console's state as JSON is not handed the secret in it."""
+    if not url:
+        return url, None
+    m = re.match(r"^(\w+://)([^/@:]*)(?::[^/@]*)?@(.*)$", url)
+    return (m.group(1) + m.group(3), m.group(2)) if m else (url, None)
 
 
 def note_of(doc):
@@ -80,8 +92,13 @@ class Seat:
         audit_log=AUDIT_LOG,
         run=run_bash,
         clock=time.time,
+        secrets=(),
     ):
         self.team, self.actions, self.knowledge = team, list(actions), knowledge
+        # What must not be written down as typed: the team's token. A player
+        # can find it on its own node and put it in a command, and the record
+        # of that command is kept with the run.
+        self.secrets = [s for s in secrets if s]
         self.briefing = briefing or ""
         self.audit_log, self.run, self.clock = audit_log, run, clock
         self._lock = threading.Lock()  # the audit file, written from the API's threads
@@ -96,8 +113,14 @@ class Seat:
             "knowledge": self.knowledge,
         }
 
+    def redact(self, text):
+        for secret in self.secrets:
+            text = text.replace(secret, REDACTED)
+        return text
+
     def _audit(self, kind, n, cmd, operator, note, **extra):
         """One line of the node's command record, in command_audit.sh's shape."""
+        cmd, note = self.redact(cmd), self.redact(note) if note else note
         row = {
             "t": round(self.clock(), 3),
             "kind": kind,

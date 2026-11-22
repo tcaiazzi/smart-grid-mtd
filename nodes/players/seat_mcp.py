@@ -214,6 +214,9 @@ class Player:
 
     def __init__(self, seat, described, deadline=None, max_calls=None, transcript=None, clock=None):
         self.seat, self.team = seat, described.get("team")
+        # The team's token must not be written down as the harness typed it:
+        # the transcript is kept with the run.
+        self._secret = getattr(seat, "token", None)
         self.deadline, self.max_calls = deadline, max_calls
         self.clock = clock or time.time
         self.calls = 0
@@ -261,6 +264,10 @@ class Player:
         # What was asked for, not what came back: a step's output or a shell's
         # may hold anything, and the seat keeps its own record of both.
         row.update({k: args[k] for k in ("id", "verdict", "mode", "cmd", "note") if k in args})
+        if self._secret:
+            for k in ("cmd", "note"):
+                if isinstance(row.get(k), str):
+                    row[k] = row[k].replace(self._secret, "<token>")
         self._transcript.write(json.dumps(row) + "\n")
 
     # ── the tools ────────────────────────────────────────────────────────────

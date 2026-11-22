@@ -869,7 +869,9 @@ def seat_of(args):
     import seat
 
     briefing = base64.b64decode(args.briefing_b64).decode() if args.briefing_b64 else ""
-    return seat.Seat(args.seat_team, soc_operator.ACTIONS, briefing=briefing)
+    return seat.Seat(
+        args.seat_team, soc_operator.ACTIONS, briefing=briefing, secrets=[args.operator_token]
+    )
 
 
 def main():

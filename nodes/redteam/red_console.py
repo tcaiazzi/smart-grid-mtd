@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import red_steps
 import seat
+from seat import without_credentials
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "red_console.html")
 STEP_TIMEOUT_S = 60.0
@@ -170,7 +171,10 @@ class RedConsole:
     def __init__(self, bench, token, port=0, host="0.0.0.0", page=PAGE, terminal=None, seat=None):
         if not token:
             raise ValueError("the red console needs a token: it will not serve unauthenticated")
-        self.bench, self.token, self.page, self.terminal = bench, str(token), page, terminal
+        self.bench, self.token, self.page = bench, str(token), page
+        # The team's terminal is behind the same secret as this console. Its
+        # link is served without it: the page adds the token it already holds.
+        self.terminal, self.terminal_user = without_credentials(terminal)
         self.seat = seat  # a seat.Seat: what a player that is not a browser is served
         self.httpd = ThreadingHTTPServer((host, port), self._handler())
         self.httpd.daemon_threads = True
@@ -218,7 +222,8 @@ class RedConsole:
                 elif not self._authorized():
                     self._reply(401, {"error": "a bearer token is required"})
                 elif path == "/state":
-                    self._reply(200, {**console.bench.state(), "terminal": console.terminal})
+                    link = {"terminal": console.terminal, "terminal_user": console.terminal_user}
+                    self._reply(200, {**console.bench.state(), **link})
                 elif path == "/seat" and console.seat:
                     self._reply(200, console.seat.describe())
                 elif path == "/briefing" and console.seat:
@@ -301,7 +306,7 @@ def main():
     )
     briefing = base64.b64decode(args.briefing_b64).decode() if args.briefing_b64 else ""
     # The console is given the attack tree itself: that is what this team knows.
-    place = seat.Seat(args.team, ACTIONS, knowledge="tree", briefing=briefing)
+    place = seat.Seat(args.team, ACTIONS, knowledge="tree", briefing=briefing, secrets=[args.token])
     console = RedConsole(
         Bench(steps, args.record), args.token, args.port, terminal=args.terminal, seat=place
     )

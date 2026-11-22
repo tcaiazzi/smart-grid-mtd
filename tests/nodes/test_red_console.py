@@ -176,6 +176,27 @@ class TheConsole(unittest.TestCase):
         self.assertEqual(self.call("POST", "/steps/nope")[0], 404)
         self.assertEqual(self.call("POST", "/elsewhere/it_access")[0], 404)
 
+    def test_the_state_does_not_carry_the_terminals_secret(self):
+        console = R.RedConsole(
+            R.Bench(STEPS, run=self.shell),
+            TOKEN,
+            host="127.0.0.1",
+            terminal=f"http://red:{TOKEN}@127.0.0.1:8769/",
+        ).start()
+        self.addCleanup(console.shutdown)
+        self.console = console
+        _status, body = self.call("GET", "/state")
+        self.assertNotIn(
+            TOKEN.encode(),
+            body,
+            "whoever reads the console's state is handed the team's token in a link: a harness "
+            "gets it in a tool result, and its log is kept with the run",
+        )
+        state = json.loads(body)
+        self.assertEqual(
+            (state["terminal"], state["terminal_user"]), ("http://127.0.0.1:8769/", "red")
+        )
+
     def test_a_console_without_a_token_is_refused(self):
         with self.assertRaises(ValueError):
             R.RedConsole(R.Bench(STEPS), "", host="127.0.0.1")

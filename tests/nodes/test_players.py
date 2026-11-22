@@ -310,6 +310,32 @@ class TheClaudeLauncher(unittest.TestCase):
             },
         )
 
+    def test_a_harness_cut_off_at_the_deadline_still_says_what_it_spent(self):
+        def turn(mid, read, cached, written):
+            usage = {
+                "input_tokens": read,
+                "cache_read_input_tokens": cached,
+                "output_tokens": written,
+            }
+            return {"type": "assistant", "message": {"id": mid, "usage": usage}}
+
+        running = claude_player.Running()
+        self.assertTrue(running.add(turn("m1", 10, 100, 5)))
+        self.assertTrue(running.add(turn("m1", 10, 100, 40)), "the message went on writing")
+        self.assertFalse(running.add(turn("m1", 10, 100, 40)), "the same event counted twice")
+        self.assertTrue(running.add(turn("m2", 3, 200, 7)))
+        self.assertEqual(
+            running.usage(),
+            {
+                "turns": 2,
+                "input_tokens": 313,
+                "output_tokens": 47,
+                "cost_usd": None,
+                "stop_reason": "cut_off",
+            },
+            "a player that plays to the deadline, as both are told to, leaves no figure at all",
+        )
+
     def test_a_run_that_never_closed_reports_nothing_rather_than_zeros(self):
         self.assertEqual(set(claude_player.usage_of(None).values()), {None})
 

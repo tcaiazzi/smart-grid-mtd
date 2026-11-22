@@ -131,6 +131,13 @@ class TheRedSeat(Seated):
             "a harness repeating a failed step cannot be told from one that is getting on",
         )
 
+    def test_the_teams_token_is_not_kept_in_the_transcript(self):
+        self.player.call("shell", {"cmd": f"curl http://red:{TOKEN}@x/", "note": f"with {TOKEN}"})
+        with open(self.transcript) as f:
+            kept = f.read()
+        self.assertNotIn(TOKEN, kept, "a token the harness typed is in a file kept with the run")
+        self.assertIn("<token>", kept)
+
     def test_a_wrong_call_is_told_to_the_harness_so_it_can_correct_itself(self):
         said, failed = self.player.call("run_step", {"step": "pivot"})
         self.assertTrue(failed)

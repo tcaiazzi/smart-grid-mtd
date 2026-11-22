@@ -112,6 +112,19 @@ class Api(unittest.TestCase):
         self.assertEqual([s["request"] for s in doc["approvals"]["pending"]], ["abc"])
         self.assertEqual(doc["terminal"], "http://127.0.0.1:1/")
 
+    def test_the_state_does_not_carry_the_terminals_secret(self):
+        api = O.OperatorApi(
+            self.desk, TOKEN, host="127.0.0.1", terminal=f"http://blue:{TOKEN}@127.0.0.1:8767/"
+        ).start()
+        self.addCleanup(api.shutdown)
+        self.api = api
+        _status, body, _h = self.call("GET", "/state", raw=True)
+        self.assertNotIn(TOKEN.encode(), body, "the console's state hands out the team's token")
+        state = json.loads(body)
+        self.assertEqual(
+            (state["terminal"], state["terminal_user"]), ("http://127.0.0.1:8767/", "blue")
+        )
+
     def test_a_countermeasure_is_ordered_by_hand(self):
         body = {"op": "revert", "operator": "ada"}
         self.assertEqual(self.call("POST", "/countermeasures/block_flow", body)[0], 200)

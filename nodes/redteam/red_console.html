@@ -191,6 +191,12 @@ async function briefing() {
   } catch (e) {}
 }
 
+// The terminal's link comes without its secret, which is this console's own
+// token: put back here, where it is already held, and nowhere on the wire.
+function withToken(url, user) {
+  try { const u = new URL(url); if (user) { u.username = user; u.password = token; } return u.href; }
+  catch (e) { return url; }
+}
 async function launch(id) {
   running = id; sig = ""; render(); $("err").textContent = "";
   try { await call("POST", `/steps/${encodeURIComponent(id)}`, { operator: $("who").value.trim() || "operator", ...why() }); }
@@ -235,7 +241,7 @@ function render() {
   const s = JSON.stringify([S.steps.map(x => [x.id, x.outcome, x.last]), S.history.length, running]);
   if (s === sig) return;
   sig = s;
-  if (S.terminal) { $("term").href = S.terminal; $("term").style.display = ""; }
+  if (S.terminal) { $("term").href = withToken(S.terminal, S.terminal_user); $("term").style.display = ""; }
   const depth = depths(S.steps);
   $("steps").replaceChildren(
     h("thead", {}, h("tr", {}, ["step", "state", "technique", "how loud", ""].map(x => h("th", {}, x)))),

@@ -181,7 +181,7 @@ For either team:
 |---|---|---|
 | — | `harness`, `harness_version`, `model` | who played; the version and the model are the ones the harness reports of itself |
 | — | `calls`, `actions`, `failed_calls`, `failed_call_rate` | tool calls made, those that act on the lab, and those the seat did not carry out, by why (`bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool`) |
-| — | `turns`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped; `null` for a harness still playing when the engagement ended |
+| — | `turns`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped. A harness still playing when the engagement ended has `stop_reason: cut_off`: its tokens are then a running count from the events it printed, and its cost is unknown |
 | `decision` | `think_median_s`, `first_action_s` | how long it takes between one call and the next, and before its first action |
 | | `look_ratio`, `noted_action_rate` | the share of calls that only look; the share of actions it gave a reason for |
 | | `actions_that_worked_rate`, `repeats_after_failure` | actions that did what they were for; the same action again right after it failed |

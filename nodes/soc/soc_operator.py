@@ -33,6 +33,7 @@ Copied flat onto the SOC node, imported by soc_analytics.py. Stdlib only.
 import hmac
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +46,12 @@ MAX_BODY = 4096  # a verdict is a few dozen bytes; anything longer is not one
 CLOSED_KEPT = 200  # closed suggestions kept for a console that connects late
 NOTE_MAX = 500  # a reason, not a report
 ACTIONS = ("answer_suggestion", "apply_countermeasure", "revert_countermeasure", "set_mode")
+
+
+def without_credentials(url):
+    """(url with no user:password in it, the user), for a link served as data."""
+    m = re.match(r"^(\w+://)([^/@:]*)(?::[^/@]*)?@(.*)$", url or "")
+    return (m.group(1) + m.group(3), m.group(2)) if m else (url, None)
 
 
 def note_of(doc):
@@ -150,7 +157,11 @@ class OperatorApi:
             raise ValueError(
                 "the operator console needs a token: it will not serve unauthenticated"
             )
-        self.desk, self.token, self.page, self.terminal = desk, str(token), page, terminal
+        self.desk, self.token, self.page = desk, str(token), page
+        # The operator's terminal is behind the same secret as this console.
+        # Its link is served without it: the page adds the token it already
+        # holds, and a player reading the state as JSON is not handed it.
+        self.terminal, self.terminal_user = without_credentials(terminal)
         self.seat = seat  # a seat.Seat, where a team sits at this console
         self.httpd = ThreadingHTTPServer((host, port), self._handler())
         self.httpd.daemon_threads = True
@@ -219,7 +230,8 @@ class OperatorApi:
                 elif not self._authorized():
                     self._reply(401, {"error": "a bearer token is required"})
                 elif path == "/state":
-                    self._reply(200, {**api.desk.state(), "terminal": api.terminal})
+                    link = {"terminal": api.terminal, "terminal_user": api.terminal_user}
+                    self._reply(200, {**api.desk.state(), **link})
                 elif path == "/approvals":
                     self._reply(200, api.desk.listing())
                 elif path == "/seat" and api.seat:

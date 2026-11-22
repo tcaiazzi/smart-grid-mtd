@@ -78,6 +78,26 @@ class TheSeat(unittest.TestCase):
         seat = S.Seat("red", [], audit_log="/nonexistent/dir/commands.jsonl")
         self.assertEqual(seat.shell("echo hi")["stdout"], "hi\n")
 
+    def test_the_teams_secret_is_not_written_down_as_typed(self):
+        seat = S.Seat(
+            "red", [], audit_log=self.log, secrets=["t0p-s3cret", ""], run=lambda c: (0, "", "")
+        )
+        seat.shell("curl http://red:t0p-s3cret@127.0.0.1:8769/", note="using t0p-s3cret")
+        with open(self.log) as f:
+            kept = f.read()
+        self.assertNotIn(
+            "t0p-s3cret", kept, "a token a player typed in a command is kept with the run's record"
+        )
+        self.assertIn("curl http://red:<token>@127.0.0.1:8769/", kept)
+
+    def test_a_link_is_served_without_the_secret_in_it(self):
+        self.assertEqual(
+            S.without_credentials("http://red:t0ken@127.0.0.1:8769/"),
+            ("http://127.0.0.1:8769/", "red"),
+        )
+        self.assertEqual(S.without_credentials("http://t/"), ("http://t/", None))
+        self.assertEqual(S.without_credentials(None), (None, None))
+
     def test_a_note_is_cut_short(self):
         self.assertEqual(len(S.note_of({"note": "x" * 9999})), S.NOTE_MAX)
         self.assertIsNone(S.note_of({"note": ""}))

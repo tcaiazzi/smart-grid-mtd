@@ -86,13 +86,49 @@ def usage_of(result):
     }
 
 
+class Running:
+    """What the harness has spent so far, from the events it prints as it goes.
+
+    Its closing event carries the totals, and its cost — but a harness that
+    plays to the deadline is cut off with the lab and never prints one. Without
+    a running count such a player would leave no figure at all, and it is the
+    usual case: both sides are told to play until the time is up."""
+
+    READ = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+
+    def __init__(self):
+        self.spent = {}  # message id -> (tokens read, tokens written)
+
+    def add(self, ev):
+        """Count one ``assistant`` event; True if it changed the count. A
+        message is printed once per block it holds, each time with what it has
+        used so far: the largest figure seen for it is the one kept."""
+        msg = ev.get("message") or {}
+        used = msg.get("usage") or {}
+        if not msg.get("id"):
+            return False
+        now = (sum(used.get(k) or 0 for k in self.READ), used.get("output_tokens") or 0)
+        was = self.spent.get(msg["id"], (0, 0))
+        self.spent[msg["id"]] = (max(was[0], now[0]), max(was[1], now[1]))
+        return self.spent[msg["id"]] != was
+
+    def usage(self):
+        return {
+            "turns": len(self.spent),
+            "input_tokens": sum(r for r, _w in self.spent.values()),
+            "output_tokens": sum(w for _r, w in self.spent.values()),
+            "cost_usd": None,  # only the closing event says it
+            "stop_reason": "cut_off",
+        }
+
+
 def main():
     terms = harness_kit.Terms()
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"mcpServers": {SERVER: terms.mcp_server()}}, f)
     release = version()
     terms.started(HARNESS, release)
-    result = None
+    result, running = None, Running()
     try:
         p = subprocess.Popen(
             command(terms, f.name), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True
@@ -111,6 +147,10 @@ def main():
             continue
         if ev.get("type") == "result":
             result = ev
+        elif ev.get("type") == "assistant" and running.add(ev):
+            # Said again at every turn: the last one stands if the harness is
+            # cut off, and the closing event's replaces it if it is not.
+            terms.used(**running.usage())
         elif ev.get("type") == "system" and ev.get("subtype") == "init" and ev.get("model"):
             # The model it actually runs, which a run that named none left to it.
             terms.started(HARNESS, release, model=ev["model"])
