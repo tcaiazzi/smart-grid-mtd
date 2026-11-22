@@ -77,6 +77,7 @@ COLUMNS = {
         ("stages reached", "players.red.progress.stages_reached"),
         ("steps that worked", "players.red.progress.step_success_rate"),
         ("repeats after failure", "players.red.progress.repeats_after_failure"),
+        ("failed again", "players.red.progress.failed_again"),
         ("turned after (s)", "players.red.adaptation.turned_after_median_s"),
         ("noise", "players.red.stealth.noise_mean"),
         ("detected after (s)", "players.red.stealth.detection_latency_s"),

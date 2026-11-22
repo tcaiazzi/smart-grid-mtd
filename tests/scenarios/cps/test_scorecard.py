@@ -250,6 +250,66 @@ class ACard(unittest.TestCase):
             "what the harness tried to reach beyond its seat is not on its card",
         )
 
+    def test_a_wait_is_neither_a_call_nor_time_spent_deciding(self):
+        plain = self.cards()["red"]
+        path = os.path.join(self.d, "player-red.jsonl")
+        with open(path) as f:
+            rows = [json.loads(line) for line in f]
+        # Between the second failed pivot (over at 27 s) and the hijack at 30 s.
+        rows.insert(6, call(27.5, "wait", 2.0, seconds=2))
+        write(path, rows)
+        red = self.cards()["red"]
+        self.assertEqual((red["waits"], red["waited_s"]), (1, 2.0))
+        self.assertEqual((red["waits_cut_short"], red["decision"]["woken_to_action_s"]), (0, None))
+        for field in ("calls", "actions", "failed_call_rate"):
+            self.assertEqual(red[field], plain[field], f"a wait changed {field}")
+        self.assertEqual(red["decision"]["look_ratio"], plain["decision"]["look_ratio"])
+        self.assertLess(
+            red["decision"]["think_median_s"],
+            plain["decision"]["think_median_s"],
+            "the seconds a harness waited were counted as seconds it took to decide",
+        )
+
+    def test_the_shell_is_neither_a_look_nor_an_action(self):
+        plain = self.cards()["red"]
+        path = os.path.join(self.d, "player-red.jsonl")
+        with open(path) as f:
+            rows = [json.loads(line) for line in f]
+        rows.insert(3, call(6, "shell", cmd="ps aux", result_ok=True))
+        rows.insert(4, call(8, "shell", cmd="ss -tn", note="who talks to the PLC", result_ok=True))
+        write(path, rows)
+        red = self.cards()["red"]
+        self.assertEqual((red["calls"], red["actions"], red["shell_commands"]), (9, 5, 2))
+        d = red["decision"]
+        self.assertEqual(d["noted_shell_rate"], 0.5)
+        for field in ("noted_action_rate", "actions_that_worked_rate", "first_action_s"):
+            self.assertEqual(d[field], plain["decision"][field], f"a shell command changed {field}")
+        self.assertEqual(d["look_ratio"], round(2 / 9, 3), "a shell command was counted as a look")
+        self.assertEqual(red["efficiency"], plain["efficiency"])
+
+    def test_a_dead_end_tried_again_is_counted_however_far_apart(self):
+        self.gt += [
+            step(32, "meas_fdi", "impact", False),
+            step(34, "pivot", "pivot", False),
+            step(36, "meas_fdi", "impact", False),
+        ]
+        p = self.cards()["red"]["progress"]
+        self.assertEqual(p["failed_by_step"], {"meas_fdi": 2, "pivot": 3})
+        self.assertEqual(p["failed_again"], 3)
+        self.assertEqual(p["repeats_after_failure"], 1, "alternating dead ends were counted")
+
+    def test_how_soon_it_acted_on_what_woke_it(self):
+        path = os.path.join(self.d, "player-red.jsonl")
+        with open(path) as f:
+            rows = [json.loads(line) for line in f]
+        # Woken at 29.5 s; a look, then the hijack at 30 s.
+        rows.insert(6, call(27.5, "wait", 2.0, seconds=60, woken_by=["suggestion_opened"]))
+        rows.insert(7, call(29.6, "get_state"))
+        write(path, rows)
+        red = self.cards()["red"]
+        self.assertEqual(red["waits_cut_short"], 1)
+        self.assertEqual(red["decision"]["woken_to_action_s"], 0.5)
+
     def test_a_figure_that_is_not_there_is_none(self):
         write(
             os.path.join(self.d, "player-red.jsonl"),

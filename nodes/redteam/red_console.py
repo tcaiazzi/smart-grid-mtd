@@ -13,6 +13,7 @@ decides nothing and knows only what the tree tells it.
     GET  /seat         the seat: team, actions, the node's clock (seat.py)
     GET  /briefing     {"briefing": the team's briefing, Markdown}
     POST /shell        {"cmd": "...", "operator": "name"}; runs it on this node
+    GET  /news         {"last": 0, "news": []}: nothing comes up here unasked
 
 A POST may carry the operator's name and a "note", the reason for the action in
 the operator's words; both are kept with it on record. Everything but the page
@@ -228,6 +229,11 @@ class RedConsole:
                     self._reply(200, console.seat.describe())
                 elif path == "/briefing" and console.seat:
                     self._reply(200, {"briefing": console.seat.briefing})
+                elif path == "/news" and console.seat:
+                    # This console changes only when its team runs a step. What
+                    # the defence did is not shown here: the team finds out as
+                    # a person would, by a step that fails.
+                    self._reply(200, {"last": 0, "news": []})
                 else:
                     self._reply(404, {"error": "not found"})
 

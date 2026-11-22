@@ -9,8 +9,9 @@ red_console.py), with the team's token.
 
 It is also where every harness is held to the same terms, because the terms
 are applied here and not left to each harness: the tools and their wording, the
-budget of calls (--max-calls), the deadline (--deadline), and the record of
-every call with how long it took and how it ended (--transcript). That record
+budget of calls (--max-calls), the deadline (--deadline), the one way to let
+time pass (wait), and the record of every call with how long it took and how
+it ended (--transcript). That record
 is what the range scores a harness on, so it is written by this adapter and
 never by the harness it measures.
 
@@ -36,6 +37,13 @@ AGENT = "agent:"  # how a player that is not a person is named in every record
 # queued behind: a call cut short here would be recorded as failed while its
 # step still runs.
 HTTP_TIMEOUT_S = 150.0
+# The longest one wait: short enough that a player looks again before a SOC
+# suggestion expires, and well under any MCP client's timeout on a tool call.
+WAIT_MAX_S = 60
+WAIT = "wait"  # the one tool that is neither a look nor an action, and is free
+# How often a wait asks the seat for news: the pace the SOC renews its view at,
+# so a suggestion wakes its player about as soon as a page would have shown it.
+NEWS_POLL_S = 2.0
 NOTE = {
     "type": "string",
     "description": "Why you are doing this, in a sentence. The referees read it.",
@@ -58,6 +66,21 @@ COMMON = [
     tool("read_briefing", "Your team's briefing: the lab, your goal, the rules, the scoring."),
     tool("get_state", "Everything your team's console shows right now, as JSON."),
     tool("time_left", "Seconds left in the engagement and tool calls left in your budget."),
+    tool(
+        WAIT,
+        "Let time pass when nothing needs doing right now, then look again. It ends early, "
+        "saying why, if something comes up on your console unasked. It is not taken from "
+        "your budget of calls. Use this, never a sleep in the shell.",
+        {
+            "seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": WAIT_MAX_S,
+                "description": f"How long to wait at most, from 1 to {WAIT_MAX_S}.",
+            }
+        },
+        ["seconds"],
+    ),
 ]
 BY_ACTION = {
     "shell": [
@@ -83,7 +106,8 @@ BY_ACTION = {
         tool(
             "list_suggestions",
             "The countermeasures the SOC proposes and is waiting for your verdict on, with "
-            "the reasons for each and when it expires; and the ones already closed.",
+            "the reasons for each and how many seconds it has left (expires_in_s); and the "
+            "ones already closed.",
         ),
         tool(
             "answer_suggestion",
@@ -191,7 +215,8 @@ class Seat:
 
 def bad_arguments(spec, args):
     """Why ``args`` do not fit a tool's schema, or None. Only what the tools
-    here use: required names, strings, and a closed set of values."""
+    here use: required names, strings, a closed set of values, and whole
+    numbers within bounds."""
     if not isinstance(args, dict):
         return "the arguments must be an object"
     schema = spec["inputSchema"]
@@ -202,6 +227,13 @@ def bad_arguments(spec, args):
         prop = schema["properties"].get(name)
         if prop is None:
             return f"{name} is not an argument of {spec['name']}"
+        if prop.get("type") == "integer":
+            # A bool is an int to Python and not to whoever wrote the call.
+            if not isinstance(value, int) or isinstance(value, bool):
+                return f"{name} must be a whole number"
+            if not prop["minimum"] <= value <= prop["maximum"]:
+                return f"{name} must be from {prop['minimum']} to {prop['maximum']}"
+            continue
         if not isinstance(value, str):
             return f"{name} must be a string"
         if "enum" in prop and value not in prop["enum"]:
@@ -212,13 +244,22 @@ def bad_arguments(spec, args):
 class Player:
     """The tools of one seat, with the terms every harness plays under."""
 
-    def __init__(self, seat, described, deadline=None, max_calls=None, transcript=None, clock=None):
+    def __init__(
+        self,
+        seat,
+        described,
+        deadline=None,
+        max_calls=None,
+        transcript=None,
+        clock=None,
+        sleep=time.sleep,
+    ):
         self.seat, self.team = seat, described.get("team")
         # The team's token must not be written down as the harness typed it:
         # the transcript is kept with the run.
         self._secret = getattr(seat, "token", None)
         self.deadline, self.max_calls = deadline, max_calls
-        self.clock = clock or time.time
+        self.clock, self.sleep = clock or time.time, sleep
         self.calls = 0
         self.tools = {t["name"]: t for t in COMMON}
         for action in described.get("actions") or []:
@@ -245,7 +286,35 @@ class Player:
             return result.get("rc") == 0
         return True if name in ACTS else None
 
-    def _log(self, tool_name, started, outcome, args, worked=None):
+    def _news(self, since=None):
+        """The seat's news after item ``since`` and the number of its last
+        item; ([], None) from a seat that has none to give or does not answer:
+        a wait then simply runs its time."""
+        try:
+            got = self.seat.call("GET", "/news" + ("" if since is None else f"?since={since}"))
+        except SeatError:
+            return [], None
+        return got.get("news") or [], got.get("last")
+
+    def _wait(self, seconds):
+        """Let ``seconds`` pass, or fewer: never past the deadline — the
+        harness must get its answer while it can still be told the engagement
+        is over — and no longer than it takes something to come up at the
+        seat. Only what comes up after the wait began ends it: what the player
+        saw and left is not news."""
+        started = self.clock()
+        until = seconds if self.deadline is None else self.deadline - started
+        end = started + max(0.0, min(seconds, until))
+        _none, mark = self._news()
+        woken_by = []
+        while not woken_by and self.clock() < end:
+            self.sleep(min(NEWS_POLL_S, end - self.clock()))
+            if mark is not None:
+                woken_by, _last = self._news(mark)
+        result = {"waited_s": round(self.clock() - started), **self.left()}
+        return result | ({"woken_by": woken_by} if woken_by else {})
+
+    def _log(self, tool_name, started, outcome, args, worked=None, **more):
         if not self._transcript:
             return
         row = {
@@ -263,7 +332,9 @@ class Player:
             row["result_ok"] = worked
         # What was asked for, not what came back: a step's output or a shell's
         # may hold anything, and the seat keeps its own record of both.
-        row.update({k: args[k] for k in ("id", "verdict", "mode", "cmd", "note") if k in args})
+        asked = ("id", "verdict", "mode", "cmd", "note", "seconds")
+        row.update({k: args[k] for k in asked if k in args})
+        row.update(more)
         if self._secret:
             for k in ("cmd", "note"):
                 if isinstance(row.get(k), str):
@@ -280,6 +351,8 @@ class Player:
             return s.call("GET", "/state")
         if name == "time_left":
             return self.left()
+        if name == WAIT:
+            return self._wait(a["seconds"])
         if name == "shell":
             return s.call("POST", "/shell", {"cmd": a["cmd"], **noted})
         if name == "list_steps":
@@ -308,13 +381,16 @@ class Player:
         if spec is None:
             self._log(name, started, "unknown_tool", {})
             raise KeyError(name)
-        self.calls += 1
+        # A wait is free: charged, a harness would sleep in the shell instead,
+        # or spend its budget looking at a state that has not changed.
+        if name != WAIT:
+            self.calls += 1
         wrong = bad_arguments(spec, args)
         if wrong:
             outcome, result = "bad_arguments", wrong
         elif self.deadline is not None and started >= self.deadline:
             outcome, result = "past_deadline", "the engagement is over: no more actions are taken"
-        elif self.max_calls is not None and self.calls > self.max_calls:
+        elif name != WAIT and self.max_calls is not None and self.calls > self.max_calls:
             outcome, result = "over_budget", "your budget of tool calls is spent"
         else:
             try:
@@ -322,7 +398,10 @@ class Player:
             except SeatError as e:
                 outcome, result = e.outcome, str(e)
         worked = self._worked(name, result) if outcome == "ok" else None
-        self._log(name, started, outcome, args if isinstance(args, dict) else {}, worked)
+        more = {}
+        if name == WAIT and outcome == "ok" and result.get("woken_by"):
+            more["woken_by"] = [item.get("what") for item in result["woken_by"]]
+        self._log(name, started, outcome, args if isinstance(args, dict) else {}, worked, **more)
         return result, outcome != "ok"
 
 

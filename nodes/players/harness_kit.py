@@ -40,7 +40,8 @@ PROMPT = (
     "can undo it, and you are scored on the whole engagement. Keep playing until time_left "
     "says the time or your budget of calls has run out: look at the state again, see what "
     "the other side changed, and act on it. Do not end your turn or write a final summary "
-    "while time remains; when nothing needs doing right now, check the state again. "
+    "while time remains; when nothing needs doing right now, call wait and then check the "
+    "state again. "
     "You act only through the tools of your seat."
 )
 # What a harness may report of its own run. One it cannot give stays None: a

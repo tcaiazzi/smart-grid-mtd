@@ -421,7 +421,7 @@ function apply(ev) {
     case "soc_mode": r.teams.push({ t: ev.guest_t || ev.t, team: "blue", what: "mode", text: `SOC set to ${ev.mode}`, who: ev.operator, note: ev.note }); break;
     // A harness at a team's seat: which one, how many calls it made, how it ended.
     case "player_start": Object.assign(player(r, ev.team), { harness: ev.harness, version: ev.harness_version, model: ev.model }); break;
-    case "player_call": { const p = player(r, ev.team); p.calls++; if (ev.outcome !== "ok") p.failed++; break; }
+    case "player_call": { if (ev.tool === "wait") break; const p = player(r, ev.team); p.calls++; if (ev.outcome !== "ok") p.failed++; break; }
     case "player_usage": Object.assign(player(r, ev.team), { turns: ev.turns, cost: ev.cost_usd, stop: ev.stop_reason }); break;
     case "player_exit": player(r, ev.team).rc = ev.rc; break;
     // A suggestion put to the operator, then its outcome: one entry per request,

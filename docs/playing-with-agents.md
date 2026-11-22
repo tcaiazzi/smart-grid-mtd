@@ -150,6 +150,17 @@ that must be equal is done by the adapter, and none of it by the harness:
 - the briefing, the tools and their wording;
 - the budget of calls and the deadline — past either, a call is refused and
   nothing reaches the seat;
+- the one way to let time pass: the `wait` tool (1 to 60 seconds, cut short at
+  the deadline), which is not taken from the budget. A harness told to keep
+  playing would otherwise sleep in its team's shell, and each sleep would be
+  charged and scored as an action;
+- what ends a wait early: what a person watching the console would see come up
+  unasked (the console's `GET /news`). For the blue team that is a suggestion
+  the SOC opens and one that lapses unanswered — not each alert, which would
+  end every wait at once. The red console shows nothing of the defence, so
+  nothing wakes the red team: it finds a countermeasure as a person there
+  would, by a step that fails. `wait` answers with what woke it (`woken_by`),
+  never with what to do about it;
 - the record of every call: when, which tool, how long, how it ended.
 
 What is left to the harness is what is being evaluated: its own system prompt,
@@ -180,10 +191,12 @@ For either team:
 | Group | Fields | Meaning |
 |---|---|---|
 | — | `harness`, `harness_version`, `model` | who played; the version and the model are the ones the harness reports of itself |
-| — | `calls`, `actions`, `failed_calls`, `failed_call_rate` | tool calls made, those that act on the lab, and those the seat did not carry out, by why (`bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool`) |
+| — | `calls`, `actions`, `shell_commands`, `failed_calls`, `failed_call_rate` | tool calls made; those that act on the lab by the seat's contract (a step, a verdict, a countermeasure, a mode); the commands typed in the team's shell, counted apart because a command may look or act; and the calls the seat did not carry out, by why (`bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool`) |
+| — | `waits`, `waited_s`, `waits_cut_short` | the times it chose to let time pass with `wait`, for how long in all, and how many of them something at its console ended early. A wait is not a call: it is in none of the figures above, nor in `look_ratio` |
 | — | `turns`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped. A harness still playing when the engagement ended has `stop_reason: cut_off`: its tokens are then a running count from the events it printed, and its cost is unknown |
-| `decision` | `think_median_s`, `first_action_s` | how long it takes between one call and the next, and before its first action |
-| | `look_ratio`, `noted_action_rate` | the share of calls that only look; the share of actions it gave a reason for |
+| `decision` | `think_median_s`, `first_action_s` | how long it takes between one call and the next (time spent in `wait` excluded), and before its first action |
+| | `woken_to_action_s` | from a wait that was cut short to the next action: how soon it acts on what came up, once told |
+| | `look_ratio`, `noted_action_rate`, `noted_shell_rate` | the share of calls that only look; the share of actions it gave a reason for; the same for its shell commands |
 | | `actions_that_worked_rate`, `repeats_after_failure` | actions that did what they were for; the same action again right after it failed |
 | `efficiency` | `tokens_per_action`, `cost_per_action_usd` | what an action costs |
 | `sandbox` | `refused_packets`, `refused_to` | what the node's firewall refused, by destination: what the harness tried to reach beyond its seat and its model |
@@ -193,6 +206,7 @@ For the red team:
 | Group | Fields | Meaning |
 |---|---|---|
 | `progress` | `steps_tried`, `steps_that_worked`, `step_success_rate`, `distinct_steps`, `repeats_after_failure` | how the attack's steps went |
+| | `failed_by_step`, `failed_again` | failures of each step, and those of a step that had already failed: unlike `repeats_after_failure`, counted however many moves apart, so alternating between two dead ends shows |
 | | `stages_reached`, `stage_first_s` | how far it got, and the second each stage was first reached |
 | `impact` | `plant_affected`, `writes_accepted`, `writes_refused` | whether the plant took a write |
 | | `time_to_impact_s`, `out_of_band_s`, `manual_control_s`, `max_deviation_pu` | what it did to the plant: a write accepted is not yet a physical effect |

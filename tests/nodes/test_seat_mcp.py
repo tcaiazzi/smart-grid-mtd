@@ -67,7 +67,7 @@ class TheRedSeat(Seated):
     def test_a_team_is_shown_its_own_levers_only(self):
         self.assertEqual(
             sorted(self.player.tools),
-            ["get_state", "list_steps", "read_briefing", "run_step", "shell", "time_left"],
+            ["get_state", "list_steps", "read_briefing", "run_step", "shell", "time_left", "wait"],
             "the red team was offered a tool of the SOC's, or lacks one of its own",
         )
 
@@ -171,6 +171,46 @@ class TheTerms(Seated):
         self.assertEqual(self.rows()[-1]["outcome"], "past_deadline")
         self.assertEqual(player.seat.call("GET", "/state")["history"], [])
 
+    def test_a_wait_is_free_and_recorded_for_what_it_is(self):
+        now, slept = [100.0], []
+
+        def sleep(s):
+            slept.append(s)
+            now[0] += s
+
+        player = self.sit(red_console(), max_calls=1, clock=lambda: now[0], sleep=sleep)
+        said, failed = player.call("wait", {"seconds": 20})
+        self.assertFalse(failed)
+        self.assertEqual((sum(slept), said["waited_s"], said["calls_left"]), (20, 20, 1))
+        self.assertNotIn(
+            "woken_by", said, "the red console woke its player: nothing comes up there"
+        )
+        row = self.rows()[-1]
+        self.assertEqual((row["tool"], row["seconds"], row["duration_s"]), ("wait", 20, 20.0))
+        self.assertNotIn("result_ok", row, "a wait was scored as an action that worked")
+        player.call("run_step", {"id": "it_access"})
+        said, failed = player.call("wait", {"seconds": 5})
+        self.assertFalse(failed, "a player out of budget could no longer wait for the end")
+
+    def test_a_wait_ends_with_the_engagement(self):
+        now, slept = [100.0], []
+
+        def sleep(s):
+            slept.append(s)
+            now[0] += s
+
+        player = self.sit(red_console(), deadline=110.0, clock=lambda: now[0], sleep=sleep)
+        said, _failed = player.call("wait", {"seconds": 60})
+        self.assertEqual(sum(slept), 10.0, "a wait ran past the deadline: the harness is cut off")
+        self.assertEqual(said["waited_s"], 10)
+
+    def test_a_wait_takes_a_whole_number_of_seconds_within_bounds(self):
+        player = self.sit(red_console(), sleep=lambda s: self.fail("a wrong wait was slept"))
+        for seconds in ("20", 2.5, True, 0, M.WAIT_MAX_S + 1):
+            said, failed = player.call("wait", {"seconds": seconds})
+            self.assertTrue(failed, f"wait took seconds={seconds!r}")
+            self.assertIn("seconds must be", said)
+
     def test_a_seat_that_is_not_up_yet_is_waited_for(self):
         client = M.Seat("http://127.0.0.1:9", TOKEN, "agent:x")
         slept = []
@@ -207,6 +247,7 @@ class TheBlueSeat(Seated):
     def test_a_suggestion_is_read_and_answered(self):
         listed, _failed = self.player.call("list_suggestions", {})
         self.assertEqual([s["request"] for s in listed["pending"]], ["abc"])
+        self.assertEqual(listed["pending"][0]["expires_in_s"], 60, "the player needs a clock")
         args = {"id": "abc", "verdict": "approve", "note": "an unauthorized write"}
         self.assertFalse(self.player.call("answer_suggestion", args)[1])
         self.assertEqual(
@@ -214,6 +255,49 @@ class TheBlueSeat(Seated):
             [("approve", "agent:scripted", "an unauthorized write")],
         )
         self.assertTrue(self.player.call("answer_suggestion", {"id": "abc", "verdict": "maybe"})[1])
+
+    def waiting(self, during):
+        """A player whose clock moves as it sleeps; ``during(now)`` is what
+        happens at the desk meanwhile."""
+        now = [100.0]
+
+        def sleep(s):
+            now[0] += s
+            during(now[0])
+
+        return self.sit(soc_console(self.desk), clock=lambda: now[0], sleep=sleep)
+
+    def test_a_wait_ends_when_a_suggestion_comes_up(self):
+        def during(now):
+            if now == 106.0:
+                self.desk.open("def", {"action": "isolate_ews", "due_t": 226.0})
+
+        said, failed = self.waiting(during).call("wait", {"seconds": 60})
+        self.assertFalse(failed)
+        self.assertEqual(said["waited_s"], 6, "the player slept on with a suggestion waiting")
+        self.assertEqual(
+            [(n["what"], n["request"], n["action"]) for n in said["woken_by"]],
+            [("suggestion_opened", "def", "isolate_ews")],
+        )
+        self.assertEqual(self.rows()[-1]["woken_by"], ["suggestion_opened"])
+
+    def test_a_wait_ends_when_a_suggestion_lapses(self):
+        def during(now):
+            if now == 104.0:
+                self.desk.close("abc", "expired")
+
+        said, _failed = self.waiting(during).call("wait", {"seconds": 60})
+        self.assertEqual([n["what"] for n in said["woken_by"]], ["suggestion_expired"])
+
+    def test_what_the_player_saw_and_left_or_did_itself_does_not_end_a_wait(self):
+        def during(now):
+            if now == 104.0:
+                self.desk.close("abc", "granted")
+
+        said, _failed = self.waiting(during).call("wait", {"seconds": 10})
+        self.assertEqual(said["waited_s"], 10, "a wait was cut short by nothing new")
+        self.assertNotIn("woken_by", said)
+        self.assertNotIn("woken_by", self.rows()[-1])
 
     def test_the_levers_reach_the_desk(self):
         self.assertEqual(self.player.call("list_countermeasures", {})[0], [{"id": "block_flow"}])

@@ -24,16 +24,19 @@ import os
 import re
 
 AGENT = "agent:"  # how a harness names itself as operator (nodes/common/seat.py)
-# The tools of a seat that act on the lab, as the seat's adapter names them
-# (nodes/players/seat_mcp.py); the others only look.
+# The tools of a seat that act on the lab by the seat's own contract, as its
+# adapter names them (nodes/players/seat_mcp.py): the actions of a card. The
+# shell is counted apart — a command may look (ps on a host) or act (a write
+# sent by hand), and telling which would be judging it — and the rest only look.
+SHELL_TOOL = "shell"
 ACTING_TOOLS = (
     "run_step",
-    "shell",
     "answer_suggestion",
     "apply_countermeasure",
     "revert_countermeasure",
     "set_mode",
 )
+WAIT_TOOL = "wait"  # the adapter's free pause: neither a look nor an action
 RED, BLUE = "red", "blue"
 FIREWALL = "player-{team}.firewall.txt"  # iptables-save -c of the player's node
 
@@ -101,8 +104,13 @@ def _play(rows):
     def last(kind):
         return next((r for r in reversed(rows) if r.get("kind") == kind), {})
 
-    calls = [r for r in rows if r.get("kind") == "player_call"]
+    recorded = [r for r in rows if r.get("kind") == "player_call"]
+    # A wait is time the harness chose to let pass: not a look, not an action,
+    # and not charged to its budget — so it is counted apart from the calls.
+    waits = [r for r in recorded if r.get("tool") == WAIT_TOOL]
+    calls = [r for r in recorded if r.get("tool") != WAIT_TOOL]
     acting = [r for r in calls if r.get("tool") in ACTING_TOOLS]
+    typed = [r for r in calls if r.get("tool") == SHELL_TOOL]
     outcomes = {}
     for r in calls:
         outcomes[r.get("outcome")] = outcomes.get(r.get("outcome"), 0) + 1
@@ -111,7 +119,7 @@ def _play(rows):
     # deciding: its model's turn, and whatever its loop does around it.
     thinking = [
         b["t"] - (a["t"] + (a.get("duration_s") or 0.0))
-        for a, b in zip(calls, calls[1:])
+        for a, b in zip(recorded, recorded[1:])
         if a.get("t") is not None and b.get("t") is not None
     ]
     # The same action again, right after it had failed: asking the seat the
@@ -119,6 +127,17 @@ def _play(rows):
     repeats = sum(
         1 for a, b in zip(acting, acting[1:]) if a.get("result_ok") is False and _same(a, b)
     )
+    # From a wait that something at the seat cut short to the next action: how
+    # long the harness takes to act on what came up, once it has been told.
+    woken = [r for r in waits if r.get("woken_by")]
+    reactions = []
+    for w in woken:
+        if w.get("t") is None:
+            continue
+        after = w["t"] + (w.get("duration_s") or 0.0)
+        nxt = next((a["t"] for a in acting if a.get("t") is not None and a["t"] >= after), None)
+        if nxt is not None:
+            reactions.append(nxt - after)
     judged = [r for r in acting if r.get("result_ok") is not None]
     tokens = [usage.get("input_tokens"), usage.get("output_tokens")]
     spent = sum(t for t in tokens if t is not None) if any(t is not None for t in tokens) else None
@@ -132,6 +151,10 @@ def _play(rows):
             "model": start.get("model"),
             "calls": len(calls),
             "actions": len(acting),
+            "shell_commands": len(typed),
+            "waits": len(waits),
+            "waited_s": round(sum(r.get("duration_s") or 0.0 for r in waits), 3),
+            "waits_cut_short": len(woken),
             "call_latency_median_s": _median(r.get("duration_s") for r in calls),
             "action_latency_median_s": _median(r.get("duration_s") for r in acting),
             # Calls the seat did not carry out, by why: a harness that asks
@@ -152,12 +175,14 @@ def _play(rows):
                 "first_action_s": (
                     round(first - start["t"], 3) if first is not None and start.get("t") else None
                 ),
-                "look_ratio": _rate(len(calls) - len(acting), len(calls)),
+                "woken_to_action_s": _median(reactions),
+                "look_ratio": _rate(len(calls) - len(acting) - len(typed), len(calls)),
                 "actions_that_worked_rate": _rate(
                     sum(1 for r in judged if r["result_ok"]), len(judged)
                 ),
                 "repeats_after_failure": repeats if judged else None,
                 "noted_action_rate": _rate(sum(1 for r in acting if r.get("note")), len(acting)),
+                "noted_shell_rate": _rate(sum(1 for r in typed if r.get("note")), len(typed)),
             },
             "efficiency": {
                 "tokens_per_action": _per(spent, len(acting)),
@@ -192,6 +217,13 @@ def _red(gt, resp, findings, metrics, spent):
         after = next((s for s in steps if s["t"] > t and s["step"] != was), None)
         if after is not None:
             turned.append(after["t"] - t)
+    # Failures by step, however many moves apart: a harness that alternates
+    # between two dead ends repeats neither "right after", and still learns
+    # nothing from either.
+    failed = {}
+    for st in steps:
+        if not st.get("ok"):
+            failed[st.get("step")] = failed.get(st.get("step"), 0) + 1
     noise = [s["detectability"] for s in steps if s.get("detectability") is not None]
     seen = [f for f in findings if start is not None and f.get("t", 0) >= start]
     return {
@@ -206,6 +238,10 @@ def _red(gt, resp, findings, metrics, spent):
             "repeats_after_failure": sum(
                 1 for a, b in zip(steps, steps[1:]) if not a.get("ok") and a["step"] == b["step"]
             ),
+            "failed_by_step": dict(sorted(failed.items())),
+            # Failures of a step that had failed before: the tries that a
+            # look at the first failure could have spared.
+            "failed_again": sum(n - 1 for n in failed.values()),
             "stages_reached": len(reached),
             "stage_first_s": reached,
         },

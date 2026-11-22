@@ -23,6 +23,8 @@ player that is not a browser as well:
     GET  /seat                   the seat: team, actions, the node's clock
     GET  /briefing               {"briefing": the team's briefing, Markdown}
     POST /shell                  {"cmd": "...", "operator": "name"}; runs it on this node
+    GET  /news?since=<n>         {"last": n, "news": [...]}: what came up at the desk
+                                 unasked after item n; without since, only "last"
 
 Everything but the page carries ``Authorization: Bearer <token>``; the page is
 static and holds no data of its own.
@@ -36,6 +38,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 VERDICTS = ("approve", "reject")
@@ -44,6 +47,7 @@ MODES = ("advise", "auto")
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "soc_console.html")
 MAX_BODY = 4096  # a verdict is a few dozen bytes; anything longer is not one
 CLOSED_KEPT = 200  # closed suggestions kept for a console that connects late
+NEWS_KEPT = 200  # items of news kept for a player that asks late
 NOTE_MAX = 500  # a reason, not a report
 ACTIONS = ("answer_suggestion", "apply_countermeasure", "revert_countermeasure", "set_mode")
 
@@ -75,10 +79,38 @@ class ApprovalDesk:
         self._decided = set()
         self._orders = []  # asked for at the console, not yet taken by the analytics
         self._state = {}  # the SOC's view, as last published by the analytics
+        # What a person watching the console would see come up without having
+        # asked: a suggestion opened, one that lapsed. Numbered, so a player
+        # that waits can ask for what is new since it last looked.
+        self._news = []
+        self._news_n = 0
+
+    def _tell(self, what, suggestion):
+        """One item of news. Called with the lock held."""
+        self._news_n += 1
+        item = {"n": self._news_n, "t": round(self.clock(), 3), "what": what}
+        item.update({k: suggestion[k] for k in ("request", "action", "due_t") if k in suggestion})
+        item.update(self._expiry(suggestion))
+        self._news.append(item)
+        del self._news[:-NEWS_KEPT]
+
+    def _expiry(self, suggestion):
+        """{"expires_in_s"} of a suggestion that says when it lapses: what a
+        reader would otherwise work out from ``due_t`` and a clock of its own."""
+        due = suggestion.get("due_t")
+        return {} if due is None else {"expires_in_s": max(0, round(due - self.clock()))}
+
+    def news(self, since=None):
+        """{"last", "news"}: the items after number ``since``; none without it,
+        which is how a player learns where "from now on" starts."""
+        with self._lock:
+            items = [] if since is None else [i for i in self._news if i["n"] > since]
+            return {"last": self._news_n, "news": items}
 
     def open(self, request, suggestion):
         with self._lock:
             self._pending[request] = {"request": request, **suggestion}
+            self._tell("suggestion_opened", self._pending[request])
 
     def close(self, request, state, **fields):
         """The analytics' last word on a suggestion: granted, rejected, expired."""
@@ -87,13 +119,16 @@ class ApprovalDesk:
             self._decided.discard(request)
             if s is None:
                 return
+            if state == "expired":
+                # A verdict is the player's own doing, and no news to it.
+                self._tell("suggestion_expired", s)
             self._closed.append({**s, "state": state, "closed_t": round(self.clock(), 3), **fields})
             del self._closed[:-CLOSED_KEPT]
 
     def listing(self):
         with self._lock:
             pending = [
-                {**s, "state": "decided" if r in self._decided else "requested"}
+                {**s, **self._expiry(s), "state": "decided" if r in self._decided else "requested"}
                 for r, s in self._pending.items()
             ]
             return {"now": round(self.clock(), 3), "pending": pending, "closed": list(self._closed)}
@@ -219,6 +254,7 @@ class OperatorApi:
 
             def do_GET(self):
                 path = self.path.split("?")[0].rstrip("/")
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 if path in ("", "/index.html"):
                     # The page is static: it shows nothing until its script
                     # presents the token to the routes below.
@@ -238,6 +274,13 @@ class OperatorApi:
                     self._reply(200, api.seat.describe())
                 elif path == "/briefing" and api.seat:
                     self._reply(200, {"briefing": api.seat.briefing})
+                elif path == "/news" and api.seat and hasattr(api.desk, "news"):
+                    try:
+                        since = int(query["since"][0]) if "since" in query else None
+                    except ValueError:
+                        self._reply(400, {"error": "since must be a whole number"})
+                        return
+                    self._reply(200, api.desk.news(since))
                 else:
                     self._reply(404, {"error": "not found"})
 
