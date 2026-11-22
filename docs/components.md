@@ -5,8 +5,8 @@ exposes its components in `cyberrange/planes/<plane>/components.py`. A scenario'
 configures them and starts them; the platform core then stops them, downloads
 their files and mirrors their telemetry onto the progress ledger.
 
-This page lists every component available today. For how the core runs a
-scenario, see [platform.md](platform.md).
+This page lists every component. For how the core runs a
+scenario, see [Architecture](platform.md).
 
 - [1. How a component works](#1-how-a-component-works)
 - [2. Catalogue](#2-catalogue)
@@ -42,12 +42,30 @@ scoring) expose their own blocking method, such as `attack(ctx)` or
 | Name | Purpose |
 |---|---|
 | `Component` | Base class: every hook is a no-op. `plane` and `name` label it. |
-| `GuestAgent(node, command, console_log, plane=, name=, artifacts=(), wait=False)` | One process in one container. `start` runs `command` on `node` with stdout and stderr captured to the guest file `/<console_log>`. That file is always an artifact, saved as `<node>.<console_log>`; extra artifacts can be added. |
+| `GuestAgent(node, command, console_log, plane=, name=, artifacts=(), wait=False, watch=None)` | One process in one container. `start` runs `command` on `node` with stdout and stderr captured to the guest file `/<console_log>`. That file is always an artifact, saved as `<node>.<console_log>`; extra artifacts can be added. `watch` names the process for an agent the run cannot do without (below). |
 | `Artifact(node, guest_path, local_name, required=False)` | A file to download after the episode. |
 | `TelemetrySource(node, path, name)` | A guest telemetry file. `name` is a label (`"ot"`, `"it"`, `"mtd"`) that consumers filter on. |
-| `SeatPlayer(node, team, harness, seat, token, terms=, secrets=, plane=)` | A harness (`cyberrange.core.harness.Harness`) at a team's seat, on a node of its own. `start` writes the team's token, the terms and the harness's secrets into the node as files, then runs `player-run.sh`, which closes the node's firewall around `seat` and starts the harness as an unprivileged user. Its transcript is mirrored as `player_start`, `player_call`, `player_usage` and `player_exit`; `exited` turns true at the last. See [playing-with-agents.md](playing-with-agents.md). |
+| `SeatPlayer(node, team, harness, seat, token, terms=None, secrets=None, resolvers=(), plane=)` | A harness (`cyberrange.core.harness.Harness`) at a team's seat, on a node of its own. `start` writes the team's token, the terms and the harness's secrets into the node as files, then runs `player-run.sh`, which closes the node's firewall around `seat` (address, port, interface of the team's console) and starts the harness as an unprivileged user. `resolvers` are the name servers the node is given: a lab node has none of its own. Its transcript is mirrored as `player_start`, `player_call`, `player_usage` and `player_exit`; `exited` turns true at the last. Artifacts: `player-<team>.jsonl` (the transcript), `player-<team>.firewall.txt` (the firewall's counters, saved when the player stops), `<node>.player.log`. See [Harnesses as players](playing-with-agents.md). |
 | `TelemetryCursor(read)` | Reads a growing JSONL file incrementally. It consumes complete lines only, so a partial last line is read again on the next pull, and an unparseable line is skipped. |
 | `tail_reader(exec_text, node, path)` | A `read` function for `TelemetryCursor`, built on `tail -n +N` inside the guest. |
+
+### An agent the run cannot do without
+
+A `GuestAgent` given `watch=` — a fragment of its process's command line, in
+practice its script's name — is essential. `alive(ctx)` looks for that process
+in the node (`pgrep -f`); an agent without `watch` always counts as alive, and
+so does one whose node does not answer. `ctx.down()` asks every started
+component and puts each dead one on the ledger once, as
+`component_down{component, node}`; `ctx.require_alive()` then raises
+`ComponentDown`, and the run ends as `failed` instead of as a valid run that
+measured a lab with a piece missing. Its artifacts are downloaded all the same,
+the dead agent's console log among them.
+
+The watched agents are `PhysicalProcess` (`modbus_engine.py`), `PlcController`
+(`plc_controller.py`), `OtSensor` (`ot_sensor.py`), `SocAnalytics`
+(`soc_analytics.py`) and `RedConsole` (`red_console.py`). Watch an agent when
+a run without it would still finish and score, wrongly; not one that ends by
+itself, such as an attack driver.
 
 ### Using components in an episode
 
@@ -86,26 +104,37 @@ the run's `--seed` (unseeded when the run is).
 | `VulnApp` | attack | guest | hmi · `kathara/cps` | cps |
 | `EwsMaintenance` | attack | guest | ews · `kathara/cps` | cps |
 | `ScriptedChain` | attack | host → guest | attacker · `kathara/cps` | cps |
-| `PlannedAttacker` | attack | guest + host | attacker · `kathara/cps` | cps |
-| `RedConsole` | attack | guest + host | attacker · `kathara/cps` | cps-advisor (`--teams`) |
+| `PlannedAttacker` | attack | guest + host | attacker · `kathara/cps` | cps (`--attack-driver planner`) |
+| `ReconAttacker` | attack | guest + host | attacker · `kathara/redteam` | cps-recon |
+| `RedConsole` | attack | guest + host | attacker · `kathara/cps` | cps-advisor, cps-soc (`--teams`) |
 | `PassiveFingerprinter` | attack | guest + host | attacker · any image with tcpdump | mqtt-mtd |
 | `DeliveryAttack` | attack | host → guest | router, scmc · `kathara/mqtt` | mqtt-mtd |
 | `OtSensor` | defense | guest | sensor · `kathara/cps` | cps |
 | `ItSensor` | defense | guest | hmi · `kathara/cps` | cps (`--it-telemetry`) |
 | `SocAnalytics` | defense | guest | soc · `kathara/soc` | cps (always; acts with `--respond`) |
 | `WazuhManager` | defense | guest | soc · `kathara/soc` | cps (always) |
-| `WazuhAgent` | defense | guest | sensor, hmi, firewall · `kathara/cps` | cps (always) |
-| `JumpHost` | defense | host → guest | soc → firewall, sensor, hmi | cps-advisor |
+| `WazuhAgent` | defense | guest | sensor, hmi, ews, firewall · `kathara/cps` | cps (always) |
+| `JumpHost` | defense | host → guest | soc → the hosts it manages | cps-advisor, cps-soc |
+| `WazuhIndexer` | defense | guest | indexer · `kathara/wazuh-indexer` | cps-soc |
+| `WazuhDashboard` | defense | guest | wazuhui · `kathara/wazuh-dashboard` | cps-soc |
+| `AlertShipper` | defense | guest | soc | cps-soc |
+| `IrisAlertForwarder` | defense | guest | soc | cps-soc |
+| `IrisService` | defense | guest | irisdb, irismq, irisapp, irisworker, irisweb · IRIS's own images | cps-soc |
 | `QkdCertBootstrap` | defense | guest | semp, scmc · `kathara/mqtt` | mqtt-mtd |
 | `MtdCoordinator` | defense | guest | semp · `kathara/mqtt` | mqtt-mtd |
 | `Capture` | monitor | guest | any image with tcpdump | mqtt-mtd |
 | `TelemetryMirror` | monitor | host | any | all |
 | `PlantMirror` | monitor | host | engine | cps |
-| `WebTerminal` | monitor | guest | soc, attacker · any image with `ttyd` | cps-advisor |
-| `RecordedShell` | monitor | guest + host | soc, firewall, sensor, hmi, attacker | cps-advisor |
+| `WebTerminal` | monitor | guest | soc, attacker · any image with `ttyd` | cps-advisor, cps-soc |
+| `RecordedShell` | monitor | guest + host | soc, the hosts it manages, attacker | cps-advisor, cps-soc |
+| `SeatPlayer` | core | guest + host | a player's node of its own · the harness's image | cps-advisor (a harness at a seat) |
 
-`cps-advisor` runs the `cps` episode, so every component marked *cps* runs there
-too; the table names it only where it adds one.
+`cps-advisor`, `cps-recon` and `cps-soc` run the `cps` episode, so every
+component marked *cps* runs there too; the table names them only where they add
+one. `cps-soc` is `cps-advisor` with the SOC's tools, so it also runs what
+`cps-advisor` adds. `SeatPlayer` belongs to no plane: it is defined in
+`cyberrange/core/component.py`, and the scenario gives it the plane of the team
+it plays for.
 
 **Runs** says where the component's work happens:
 
@@ -116,9 +145,10 @@ too; the table names it only where it adds one.
 
 Some guest code is the platform's (`cyberrange/planes/<plane>/agents/`); some is
 node software under `nodes/`, which the component only stages and launches:
-`WazuhManager`, `WazuhAgent`, `SocAnalytics`, `JumpHost`, `WebTerminal`,
-`RecordedShell` and `RedConsole` hold no logic of the node's own (see
-[structure.md](structure.md)).
+`WazuhManager`, `WazuhAgent`, the SOC's tools, `SocAnalytics`,
+`PlannedAttacker`, `ReconAttacker`, `RedConsole`, `JumpHost`, `WebTerminal`,
+`RecordedShell` and `SeatPlayer` hold no logic of the node's own (see
+[Where files go](structure.md#beside-the-layers-nodes)).
 
 Shared helpers:
 
@@ -133,7 +163,7 @@ Shared helpers:
 
 ## 3. Traffic plane (`cyberrange/planes/traffic/components.py`)
 
-The legitimate activity of the system, which attacks and defenses play
+The legitimate activity of the system, which attacks and defences play
 against.
 
 ### `PhysicalProcess(node, port, step_interval, seed=None, frame_log="engine_frames.jsonl", plant_b64=None)`
@@ -201,7 +231,7 @@ The nanogrid's SCMC, publishing microgrid snapshots over MQTT with mutual TLS.
 |---|---|
 | **Starts** | the publisher command, console to `console_log` |
 | **`log_file`** | `mtd_executor.log` or `simple_client.log`, the guest log the scenario downloads as `[<capture>.]client.log` |
-| **`command_for(state)`** | The command that restarts the executor where the MTD left it (broker endpoint, current source IP first, interval, padding). `state` comes from `detection_scenario.executor_state`; `DeliveryAttack` uses this on executor restarts. |
+| **`command_for(state)`** | The command that restarts the executor where the MTD left it (broker endpoint, current source IP first, interval, padding). `state` comes from `executor_state` in `cyberrange/scenarios/mqtt_mtd/attacks.py`; `DeliveryAttack` uses this on executor restarts. |
 | **Artifacts** | none of its own. The scenario names the logs per capture. |
 | **Needs** | the client certificate from `QkdCertBootstrap` |
 
@@ -393,7 +423,7 @@ the plant is touched. What is "normal" is learned during `learn_seconds`.
 | **Artifacts** | `<node>.it_sensor.log`, `<node>.it_telemetry.jsonl` |
 | **Needs** | `VulnApp(access_log=…)` on the same node. Give `HmiClient` a `diag_url` too, so normal use is learned. |
 
-### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False, operator_port=None, operator_token=None, operator_terminal=None, iris=None, belief_feed=None)`
+### `SocAnalytics(node, inventory, policy="off", approval="auto", interval=0.5, it=False, operator_port=None, operator_token=None, operator_terminal=None, iris=None, belief_feed=None, seat_team=None, briefing=None)`
 
 The SOC's decision, as a guest agent on the manager's node
 (`nodes/soc/soc_analytics.py`). It reads the manager's alerts, folds each
@@ -408,10 +438,11 @@ every episode; `policy="off"` watches and requests nothing.
 | **`policy`** | `off` (watch only), `rules` (a playbook per impact) or `solver` (the minimal-cost set that covers the active tree, with causal pairing) |
 | **`approval`** | `auto`, `deny`, or `delay:<s>` (operator approval for high-impact countermeasures, simulated); `operator:<s>` makes the SOC an advisor: every countermeasure waits up to `<s>` for a person's verdict, then expires unapplied |
 | **`operator_*`** | The SOC's operator console (`nodes/soc/soc_operator.py` + `soc_console.html`): its port and bearer token, and the URL of the operator's web terminal it links. Given a token it is served in any approval mode; from it the operator answers suggestions, applies or reverts a countermeasure by hand and switches the SOC between advising and acting. The scenario publishes the port and closes it on MGMT. |
+| **`seat_team`, `briefing`** | With the operator console: the team that sits at it, and the text it is first told. The console then serves its seat to a player that is not a browser as well — a harness started by `SeatPlayer`. |
 | **`iris`** | Where the suggestions wait when the blue team works in DFIR-IRIS instead of the console (`cps-soc`): `{url, key, ca, case, analyst, analyst_password}`. Each suggestion is a task of the run's case (`nodes/soc/iris_desk.py`). The case also holds what the SOC knows and believes as IRIS's own objects: its summary is the attack tree with the belief, as a nested list; the hosts of the knowledge graph are its assets, marked compromised once when the SOC holds them implicated; each step taken to have happened is a timeline event linking the hosts it involves, from which IRIS draws the case's graph. |
 | **`belief_feed`** | A guest path. Given one, the analytics also hands the manager, as events, its belief on the attack tree (one per tree node) and its knowledge graph with what the attack touches and the response cut (one per node and edge), each when it changes (`nodes/soc/belief_feed.py`). The manager's rules 100130–100132 (`nodes/wazuh/manager/soc_belief_rules.xml`) make alerts of them, and the Wazuh dashboard's *Attack tree and knowledge graph* dashboard draws both from those alerts. The file keeps what was delivered. Set by `cps-soc`. |
 | **`it`** | Also allow the IT countermeasures. Set it when `ItSensor` runs. |
-| **Countermeasures** | `notify`, `block_flow` (firewall drops HMI→plant Modbus), `isolate_hmi`, `force_auto` (the firewall writes AUTO + nominal setpoint to the plant), `restore_breaker`; with `it`: `kill_proc_tree`, `block_web_src` |
+| **Countermeasures** | Generated from the lab's knowledge graph, not listed here: [KG & attack trees §3.5](kg-and-attack-trees.md#35-countermeasures-the-defence-annotation) has the table for the CPS lab, with what each prevents or restores and the two more that `it` allows. |
 | **Telemetry** | `soc:/response.jsonl`, name `soar`: `response_up`, `tree_state`, `decision`, `approval`, `action` (with per-leg times `alert_t`/`issued_t`/`node_started_t`/`node_done_t`), `mode` |
 | **Artifacts** | `response.jsonl`; `<node>.kg.json` and `<node>.tree.json`, the structure the node built for itself; `<node>.soc_analytics.log`; with `belief_feed`, `<node>.belief.jsonl` |
 | **Ledger** | `tree_state`, `decision` (with justification), `action` (with `op` and who asked, `by`), `approval` (a suggestion with its explanation, then `granted` / `rejected` / `expired`), `soc_mode` |
@@ -422,7 +453,7 @@ and the run's structure (`kg.json`/`tree.json`) is written this way at deploy.
 
 ### People in the lab: `WebTerminal`, `RecordedShell`, `JumpHost`, `RedConsole`
 
-For a lab with people in it: `cps-advisor` gives the blue team a terminal on
+For a lab with people in it: `cps-advisor` (and `cps-soc`, built on it) gives the blue team a terminal on
 the SOC, SSH to the hosts it manages and a record of what is typed there; with
 `--teams` a red team gets the same on the attacker node, and its console. The
 four belong to three planes (the table says which) and are described together
@@ -435,7 +466,7 @@ scenario (`nodes/common/team-access.sh`, `command_audit.sh`,
 | `WebTerminal(node, port, user, password)` | monitor | A shell of `node` served to a browser (`ttyd`) behind `user:password`. Artifacts: `<node>.terminal.typescript`, every session whole; `<node>.terminal.log`. |
 | `RecordedShell(node, team, intruder=None, witnessed=False, jump=None, entry=None)` | monitor | Loads the command record into the node's interactive shells and polls it: ledger `team_command{team, node, cmd, via}`. The team is read from how the shell got there: `team` over SSH (from `jump` only, when given) or through the node's `WebTerminal`; `intruder` for a shell that descends from `entry` (the service it gets in through), one a service left behind as an orphan, or SSH from elsewhere; `control` for anything else (the referee). The intruder's commands, and a `witnessed` team's, also go to the ground truth (`command`); `control`'s never do. Artifact: `<node>.commands.jsonl`. |
 | `JumpHost(node, hosts)` | defense | SSH from `node` to `hosts` (`{name: listen address}`): the node makes its key pair, the platform installs the public key, each host accepts it only, on that address only. Artifact: `<host>.sshd.log`. |
-| `RedConsole(node, port, token, tree, target_url, engine_ip, engine_port, interval=0.5, terminal=None, ways=None, plant_b64=None)` | attack | The red team's console (`red_console.py`), given the attack `tree` as data; it builds its executable steps in the lab (`red_steps.build_steps`), the same registry the autonomous planner reads. It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
+| `RedConsole(node, port, token, tree, target_url, engine_ip, engine_port, interval=0.5, terminal=None, ways=None, plant_b64=None, briefing=None)` | attack | The red team's console (`red_console.py`), given the attack `tree` as data, and with `briefing` the text the team is first told — what a harness at that seat reads; it builds its executable steps in the lab (`red_steps.build_steps`), the same registry the autonomous planner reads. It follows the console's record and writes the ground truth a driven attack would: `attack_start` at the first step (mode `manual`), `red_step`, `modbus_write`, `rce`; ledger `red_step`, `attack_write`. It reads nothing until the ground truth is open, so start it after `ctx.open_ground_truth`. Artifacts: `<node>.red_actions.jsonl`, `<node>.red_console.log`. |
 
 ### `WazuhManager(node, agents)` · `WazuhAgent(node, manager_ip, agent_id, key, responses=None, logs=())`
 
@@ -490,7 +521,7 @@ certificate, and raises if it never does.
 
 ### `MtdCoordinator(node, shared_key, ip_pool, port_pool, pad_buckets, scmc_ip_pool, freq_pool, hop_timeout=10.0, hop_interval=2, pad_interval=3, src_hop_interval=2, freq_interval=30, rl_policy=None, rl_tick=1.0, seed=None, dashboard_port=None, detector_model=None, observe_data=True)`
 
-The moving-target defense on the SEMP. It drives five knobs over the encrypted
+The moving-target defence on the SEMP. It drives five knobs over the encrypted
 control channel, with ACK/DONE, watchdog and rollback:
 
 - broker port hop (NAT);
@@ -587,17 +618,54 @@ through its hooks:
 
 ```
 services     … the CPS services, then (People.services):
-             WebTerminal(soc) → RecordedShell(soc, blue) → JumpHost(soc, {firewall, sensor, hmi})
+             WebTerminal(soc) → RecordedShell(soc, blue) → JumpHost(soc, managed hosts)
              → RecordedShell(host, blue, intruder=red, jump=SOC, entry=…) on each managed host
 normal       as CPS
-engage       --teams only, once the ground truth is open:
+(engage)     --teams only, once the ground truth is open (People.engage):
              WebTerminal(attacker) → RecordedShell(attacker, red, witnessed=True)
-             → RedConsole(attacker, tree=…)  # builds its steps in the lab
+             → RedConsole(attacker, tree=…, briefing=…)  # builds its steps in the lab
+             → SeatPlayer(player node, team, harness, seat, token, …) for each seat a harness plays
+engagement   two harnesses only: until --engagement-s is up or both have stopped playing
 open         --playground: the lab stays up until Ctrl-C
 ```
 
 With `--teams` no attack driver runs: the `attack` and `post_attack` phases are
-absent and the red team's steps are the attack.
+absent and the red team's steps are the attack. `engage` is the feature's hook,
+not a phase on the ledger. `engagement` is one: it is there when a harness sits
+at each seat, and is the time the two are given to play each other. With a
+harness at one seat only, the game is as long as the lab is left open.
+
+### CPS SOC run (`cyberrange/scenarios/cps_soc/scenario.py`)
+
+The CPS advisor run without the SOC's own console (`People(console=False)`),
+and with what the `SocTools` feature adds: seven nodes of its own next to the
+lab, and `SocAnalytics(iris={…}, belief_feed=…)` so that the suggestions wait
+in a DFIR-IRIS case and the belief reaches the SIEM.
+
+```
+services     … the CPS services, then (SocTools.services):
+             WazuhIndexer(indexer) → AlertShipper(soc) → IrisAlertForwarder(soc)
+             → WazuhDashboard(wazuhui)
+             → IrisService × 5: irisdb (db), irismq (mq), irisapp (app),
+               irisworker (worker), irisweb (web)
+             then People.services, as in the CPS advisor run
+```
+
+The services wait for each other, so their start order does not matter. The
+rest of the episode is the CPS advisor's.
+
+### CPS recon run (`cyberrange/scenarios/cps_recon/scenario.py`)
+
+The CPS run with one change, made by the `Recon` feature: the attacker node
+runs the `kathara/redteam` image with the recon files, and the attack driver is
+the feature's own.
+
+```
+attack       ReconAttacker(profile, it_cidr, scan_ports=…) → attack(ctx)
+```
+
+It replaces `ScriptedChain` and `PlannedAttacker`; every other phase is the CPS
+run's.
 
 ### MQTT run (`cyberrange/scenarios/mqtt_mtd/scenario.py`)
 
@@ -616,7 +684,7 @@ publisher.
 
 ## 8. Writing a new component
 
-1. **Choose the plane.** Ask what it *is*: legitimate activity (traffic), an adversary (attack), detection or response (defense), or observation (monitor). Add it to that plane's `components.py`.
+1. **Choose the plane.** Ask what it *is*: legitimate activity (traffic), an adversary (attack), detection or response (defence), or observation (monitor). Add it to that plane's `components.py`.
 2. **Guest process?** Subclass `GuestAgent` and build the command in `__init__`. If what the node runs is an existing tool, install it in the node image, keep its configuration and glue under `nodes/<tool>/`, and let the component only launch it. Otherwise put the guest code in `cyberrange/planes/<plane>/agents/` as a flat module with bare imports, and add it to the node's manifest in the scenario's own `guest_files.py`. `tests/core/test_guest_imports.py` then checks it imports on the guest, and `tests/core/test_deploy_contract.py` freezes what the node receives.
 3. **Host work?** Subclass `Component`: start a thread in `start`, join it in `stop`.
 4. **Declare its outputs.** Files go in `artifacts()`. Telemetry goes in `telemetry()`, with a `mirror(ev)` that maps the interesting events onto ledger kinds. Anything it *does* to the lab belongs in the ground truth (`ctx.gt.record(...)`), never in telemetry.

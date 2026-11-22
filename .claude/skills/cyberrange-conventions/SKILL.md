@@ -21,7 +21,7 @@ Run this pass over a diff before committing, or over a module you just wrote.
 | Line length | 100 columns, enforced. Median 33, p95 84, p99 96 |
 | Module docstrings | first line `name.py — what it is`, then *why it exists* |
 | Guest agents | **19 of 19** open with `#!/usr/bin/env python3`, then that docstring, then the deploy fact |
-| Type annotations | 279 of 1278 functions (~22%) — at boundaries, not everywhere |
+| Type annotations | 360 of 1424 functions (~25%) — at boundaries, not everywhere |
 | Section separators | `# ── Title ─────` inside 40 files |
 | Standalone comments | a sentence: capitalised, ending with a period |
 | Trailing comments | **516 of 553** are lowercase fragments with no period |
@@ -103,7 +103,7 @@ Where a module has distinct parts, separate them with
 
 ## Type annotations
 
-About a third of the functions have them, and not at random: annotate where a
+About a quarter of the functions have them, and not at random: annotate where a
 value crosses a boundary and its shape is the contract — `compute_metrics(run_dir: str) -> dict`,
 parsers, things that go into a snapshot. Inside a module, where the types are
 obvious from two lines of context, leave them off rather than decorate

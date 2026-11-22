@@ -9,11 +9,11 @@ user-invocable: true
 
 Most of what can break in this repo breaks **silently**: a lab that deploys
 without a file, a module path nothing resolves any more, a code-size table that
-quietly understates a scenario. These five tests exist to turn those into
+quietly understates a scenario. These six guardrails exist to turn those into
 failures. A red guardrail is information, not an obstacle — the fix is almost
 never "make it green".
 
-## The five, and what each one freezes
+## The six, and what each one freezes
 
 | Guardrail | Freezes | Red means |
 |---|---|---|
@@ -156,7 +156,7 @@ guide cites, is the hand-written one.
 
 ```sh
 make check            # lint, the whole suite, a dry run of every make target
-make lab-conf SCENARIO=cps && make lab-conf SCENARIO=cps-advisor && make lab-conf SCENARIO=mqtt-mtd
+for s in mqtt-mtd cps cps-advisor cps-recon cps-soc; do make lab-conf SCENARIO=$s || break; done
 ```
 
 The suite never deploys a real lab. If your change touched deploy paths, startup

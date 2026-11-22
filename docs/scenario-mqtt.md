@@ -30,6 +30,21 @@ scmc 10.0.0.2 ──── A ──── router ──── B ──── sem
 The mutual-TLS certificates are distributed at startup over a channel that
 simulates QKD delivery (`QkdCertBootstrap`).
 
+The Kathará lab is named `test`. Its nodes run the `kathara/mqtt` image
+(`docker build -t kathara/mqtt docker/mqtt/`), except the attacker, which runs
+Kathará's default image: it only captures, and its capture is scored on the
+host. A deploy replaces a lab of the
+same name, so two MQTT runs cannot be up at once.
+
+**The background trace.** The router replays a capture with `tcpreplay`, at
+`BG_REPLAY_MBPS`. The trace used for the paper is not distributed with the
+repository; any pcap of ordinary network traffic works. Place it at
+`assets/pcap/traccia.pcap`, or name another with `BG_TRACE=…`, and run
+`make split`: it writes the part the attacker's training captures replay and
+the part its test captures replay, under `assets/pcap/datasets/`. Results on
+another trace compare with each other, not with the published numbers
+([Set-up and first run](getting-started.md#mqtt-mtd)).
+
 ## 3. What the defence moves
 
 The coordinator on `semp` changes the observable properties of the traffic over
@@ -84,6 +99,22 @@ make attack        # run the model-driven attack in the lab
 make plots         # figures for this configuration
 ```
 
+The same steps exist as shortcuts:
+
+| Target | What it runs |
+|---|---|
+| `make experiment` | `datasets → train → attack` for the MTD variant |
+| `make experiment-baseline` | the same with `NO_MTD=1` |
+| `make baseline` | the attack alone, with MTD disabled |
+| `make all-datasets`, `all-train`, `all-evaluate`, `all-attack` | that step for both variants, and for the cross-model combination where it applies |
+| `make all` | both datasets, every evaluation, every attack, then the figures |
+| `make demo` | deploys the lab and runs it live, with no capture and no attack (`PLAYGROUND=1` keeps it up) |
+| `make plots-baseline`, `make plots-all` | the baseline's figures alone; every experiment directory under `output/` replotted |
+| `make entropy`, `entropy-compare`, `entropy-all` | flow and field entropy of the nanogrid traffic, its baseline-vs-MTD figure, and both recomputed with every figure refreshed |
+
+`NO_DETECTION=1` on `plots-all` and `entropy-all` skips the slow re-scoring of
+the captures and refreshes the availability figures only.
+
 `NO_MTD=1` runs the undefended reference variant. `MODEL_SRC=baseline` uses the
 model trained on undefended traffic against defended traffic — the interesting
 comparison, because it measures how much the MTD degrades a classifier that was
@@ -121,8 +152,31 @@ a seed per run; `--resume` skips attacks that already have metrics;
 | `SEED` | — | Seeds the run; each role derives its own seed from it |
 | `DASHBOARD_PORT` | `8080` | Host port of the live MTD dashboard (`0` disables it) |
 
-`make help` prints the complete catalogue with what each target writes where.
-Any variable can be overridden on the command line:
+The address and frequency pools are single-valued by default, which switches
+their hop off: `MTD_IP_POOL` (`10.1.0.2`), `MTD_SCMC_IP_POOL` (`10.0.0.2`) and
+`MTD_FREQ_POOL` (`1.0`). Give one several comma-separated values to enable its
+manoeuvre. Run by hand, `python -m cyberrange.scenarios.mqtt_mtd.cli` has its
+own default for `--mtd-ip-pool`, three broker addresses; the make targets
+always pass theirs.
+
+**The RL coordinator.** `RL=1` drives the manoeuvres with a trained policy
+instead of the fixed timers; it is ignored with `NO_MTD=1`.
+
+| Target or variable | |
+|---|---|
+| `make train-rl` | trains the policy offline → `output/rl/policy.{zip,npz}` |
+| `make train-rl-entropy` | trains the entropy-only policy → `output/rl-entropy/` |
+| `RL_POLICY` | the `.npz` the run loads; default `$(RL_DIR)/policy.npz`, `RL_DIR` being `output/rl` |
+| `RL_TAG` | a label that keeps competing policies' results apart (the `mtdrl-<tag>-` slug) |
+| `make compare-rl` | the RL-vs-fixed-timer comparison figures → `output/compare-<slug>/`; `compare-rl-all` for every MTD configuration under `output/` |
+| `make plot-tradeoff` | the security-vs-hop-cost frontier, in simulation → `output/rl/tradeoff.pdf` |
+
+`BLOCK_POLICY` (`top1`, the paper's: always block the top-ranked address) can
+be set to `threshold`, with `BLOCK_THRESHOLD`.
+
+The [reference](reference.md) lists every target and variable with its
+default, and `make help` prints each target with what it writes where. Any
+variable can be overridden on the command line:
 
 ```bash
 make experiment DATASET_DURATION=60 MTD_HOP_INTERVAL=1
@@ -198,6 +252,11 @@ Per run (`cyberrange/scenarios/mqtt_mtd/metrics.py`):
 | `availability_cost` | Cumulative cost of the MTD manoeuvres (induced reconnections) |
 | `data_gaps`, `max_data_gap_s` | Interruptions in the telemetry stream |
 | `mtd_actions`, `mtd_outcomes` | What the coordinator did, and how each attempt ended |
+| `n_costed_actions` | How many of those manoeuvres carried a cost |
+| `blocked_ip`, `blocks` | The address the attacker blocked, and how many blackholes the run had |
+| `blocked_is_scmc` | Whether the blocked address was one of the nanogrid's own pool |
+| `n_nanogrid_ips` | How many of the nanogrid's addresses appear in the attacker's ranking |
+| `variant`, `rl_policy`, `seed` | What the run was |
 
 Campaigns aggregate these across seeds with mean and 95% confidence interval.
 
@@ -233,6 +292,14 @@ every MTD run, with or without the dashboard.
 This is a different thing from `make dashboard`, which follows the host-side
 progress ledger of every scenario's runs and campaigns.
 
+### On the platform's dashboard
+
+`make dashboard` draws this scenario's runs and campaigns with a panel of its
+own (`cyberrange/scenarios/mqtt_mtd/panel.js`): the defence's changes on a
+timeline, one lane per thing it moves, coloured by outcome; the delivery gaps;
+the table of its actions; and a run's results grouped by what they are about
+([The dashboard](dashboard.md#6-what-each-scenario-adds)).
+
 ## 9. The delivery-attack detector
 
 The attacker's active phase blackholes an address on the router, so nanogrid data
@@ -266,7 +333,22 @@ by run and reported for the MLP and for a plain threshold rule. Load
 `telemetry.jsonl` and `ground_truth.jsonl` together in the dashboard to compare
 alerts with the truth.
 
-## 10. Quick reference
+## 10. Limits
+
+- **The published numbers need the paper's trace**, which is not distributed.
+  On another trace the comparisons between configurations hold; the absolute
+  figures do not carry over.
+- **One lab at a time.** The lab's name is fixed, so a second MQTT run replaces
+  the first.
+- **One nanogrid and one broker.** The topology has a single `scmc` and a
+  single `semp`; the attacker's task is to pick the nanogrid's address among
+  the background traffic's, not to tell several nanogrids apart.
+- **The attacker is passive until it blocks.** It listens on link B and never
+  breaks into a host; a stronger attacker is outside this scenario.
+- **The RL policies are trained offline in simulation** and replayed in the
+  lab; `plot-tradeoff` is a simulation result, not a lab measurement.
+
+## 11. Quick reference
 
 | What | Where |
 |---|---|
@@ -275,6 +357,9 @@ alerts with the truth.
 | Evaluation campaign | `cyberrange/scenarios/mqtt_mtd/campaign.py`, `main.py` |
 | Parameter ablation | `cyberrange/scenarios/mqtt_mtd/ablation.py` (`make sweep`) |
 | Deploy manifest | `cyberrange/scenarios/mqtt_mtd/guest_files.py` |
+| Dashboard panel | `cyberrange/scenarios/mqtt_mtd/panel.js` |
+| Make targets | `make/mqtt.mk` |
+| Image | `docker/mqtt/Dockerfile` |
 | Metrics | `cyberrange/scenarios/mqtt_mtd/metrics.py` |
 | Figures and analysis | `cyberrange/scenarios/mqtt_mtd/analysis/` |
 | Offline training (RL, detector) | `cyberrange/scenarios/mqtt_mtd/training/` |

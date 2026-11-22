@@ -14,7 +14,7 @@ Two kinds of code meet here, and the whole difficulty is keeping them apart:
 | Where | `cyberrange/planes/<plane>/components.py` and the plane's own modules | `cyberrange/planes/<plane>/agents/*.py` |
 | Runs | in this repo, with the venv | inside a container, where this repo does not exist |
 | Imports | normal packages (`from cyberrange.core...`) | **flat and bare** (`from ot_registers import ...`) |
-| May use | anything in `requirements.txt` | **the stdlib + what its node image installs** (`docker/<scenario>/Dockerfile`) |
+| May use | anything in `requirements.txt` | **the stdlib + what its node image installs** (`docker/<image>/Dockerfile`) |
 | Named by | its path, freely | its **guest path**, which is a contract |
 
 Guest-side code has a second home: `nodes/<tool>/` holds **node software** —

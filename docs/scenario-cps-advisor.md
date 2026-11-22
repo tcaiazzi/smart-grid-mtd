@@ -16,8 +16,8 @@ people playing it is in [playground-red-vs-blue.md](playground-red-vs-blue.md);
 this document is how it is built.
 
 Everything else — plant, sensors, knowledge graph, attack tree, policies,
-metrics — is the `cps` scenario's (`docs/scenario-cps.md`,
-`docs/kg-and-attack-trees.md`).
+metrics — is the `cps` scenario's ([CPS](scenario-cps.md),
+[KG & attack trees](kg-and-attack-trees.md)).
 
 ## 2. Three consoles, served from three places
 
@@ -152,9 +152,10 @@ After a verdict:
 
 What the scenario refuses before deploying anything: `--respond off` (an
 advisor with no policy has nothing to suggest), an `--approval` other than
-`operator:<seconds>`, `--teams` without `--playground` (the lab has to stay up
-for the people in it), `--teams` with `--attack` (the attack is the red team's),
-and host ports that are not distinct.
+`operator:<seconds>`, `--teams` without `--playground` unless a harness sits at
+each seat (the lab has to stay up for the people in it), `--teams` with
+`--attack` (the attack is the red team's), a harness without `--teams` or
+without what it needs from the host, and host ports that are not distinct.
 
 ## 5. Running it
 
@@ -184,6 +185,14 @@ Without a red team, `make cps-advisor PLAYGROUND=1` runs the scripted attack
 `make cps-advisor-lab` is the same lab with no attack at all, and
 `make cps-advisor-dashboard` the dashboard restricted to this scenario's runs.
 
+A harness can sit at a team's console instead of a person. `make cps-teams
+RED_HARNESS=…` (or `BLUE_HARNESS=…`) fills one seat and leaves the other to a
+person; `make cps-agents` fills both, plays for `ENGAGEMENT_S` seconds at most
+and scores itself; `make cps-bench` repeats those games as a campaign, to
+compare harnesses. They need the players' images (`make cps-players-image`).
+The harnesses, their variables and what is measured of them are in
+[Harnesses as players](playing-with-agents.md).
+
 | Variable | Default | |
 |---|---|---|
 | `CPS_ADVISOR_RESPOND` | `solver` | the advising policy (`rules` or `solver`) |
@@ -196,7 +205,8 @@ Without a red team, `make cps-advisor PLAYGROUND=1` runs the scripted attack
 The `CPS_*` variables of the `cps` scenario for durations, detectors, the
 scripted attack and IT telemetry apply unchanged. On the command line
 (`python -m cyberrange.scenarios.cps_advisor.cli --help`) `--blue-token` and
-`--red-token` fix a team's secret instead of drawing a fresh one per run.
+`--red-token` fix a team's secret instead of drawing a fresh one per run. Every
+variable is in the [reference](reference.md).
 
 The consoles' APIs can be driven without a browser:
 
@@ -207,7 +217,31 @@ curl -H "Authorization: Bearer $BLUE" -H 'Content-Type: application/json' \
 curl -H "Authorization: Bearer $RED" -X POST http://127.0.0.1:8768/steps/it_access
 ```
 
-## 6. What is recorded and scored
+## 6. Phases
+
+The episode is the `cps` one
+([CPS, §7](scenario-cps.md#7-running-an-experiment)); what the people change is
+its middle:
+
+| Run | Phases |
+|---|---|
+| `cps-advisor` | deploy → services → normal → attack → post_attack (`CPS_ADVISOR_POST` s, for the operator to answer) → download → undeploy |
+| `cps-advisor-lab` | the same without attack and post_attack |
+| `cps-teams` | deploy → services → normal → **open** → download → undeploy. No attack driver runs: the red team's steps are the attack |
+| `cps-agents` | deploy → services → normal → **engagement** → download → undeploy |
+
+- **services** also starts the blue team's access: its web terminal and
+  recorded shell on the SOC, the jump host from it to the managed hosts.
+- The red team is let in **after normal**, once the sensor's model has
+  calibrated and the ground truth is open: its web terminal, recorded shell and
+  console start then.
+- **open** is the phase of a run held up with `PLAYGROUND=1` (always, with
+  `cps-teams`): the lab stays until Ctrl-C.
+- **engagement** exists when a harness sits at each seat. Both start at once,
+  and the phase ends after `ENGAGEMENT_S` seconds or when both have stopped
+  playing, whichever comes first.
+
+## 7. What is recorded and scored
 
 `response.jsonl` gains, per suggestion, an `approval` record with
 `state=requested` (with `request`, `due_t`, `explanation`) and one with its
@@ -231,5 +265,52 @@ answer, what the run needed. A Modbus write the red team issues by hand from
 its shell, instead of through a step, is in the command record but not a
 `modbus_write` of the ground truth: the impact metrics, which come from the
 plant's frames, still hold, the response metrics are then indicative. And a
-playground's length is whatever it was left open. There is no campaign for
-this scenario — a run needs people.
+playground's length is whatever it was left open. There is no campaign of
+human games — a run with people needs people. Harnesses seated as players are
+repeated by `make cps-bench` ([Harnesses as players](playing-with-agents.md)).
+
+## 8. Dashboard
+
+`make dashboard`, or `make cps-advisor-dashboard` for this scenario's runs only,
+is the control view: read-only, and the one place where both teams' moves are
+on one timeline. It draws the `cps` panel, and with an operator or players it
+has a **Players** view: the SOC's suggestions with their outcome and, in time
+order, each team's steps and every command typed, with the host and the team.
+A benchmark of harnesses adds a **Harnesses** tab to the campaign's results,
+one row per harness, side and opponent. [The dashboard](dashboard.md) describes
+the page; do not hand its address to a team during a game, because it shows the
+other side.
+
+## 9. Limits
+
+- **The token is a per-run shared secret.** Whoever has a team's link is that
+  team; a deployment would have the operators' identities and TLS.
+- **The two teams are kept apart by the token on one path.** A node with a
+  published port can reach the host, and through it the other team's published
+  port (§2).
+- **The command record is a record, not a control.** Root on a node can switch
+  it off; the terminal's transcript shows that it did.
+- **A Modbus write issued by hand from the red shell is not a `modbus_write` of
+  the ground truth**, so the response metrics of such a run are indicative (§7).
+- **Games played by people are not repeated by a campaign**, and a playground
+  lasts as long as it is left open: its duration-dependent metrics do not
+  compare with a timed run's.
+- **Harnesses play on this scenario only.** `cps-soc` has no SOC console for a
+  harness to sit at.
+
+## 10. Quick reference
+
+| What | Where |
+|---|---|
+| Scenario and feature | `cyberrange/scenarios/cps_advisor/{scenario,feature}.py` |
+| Command line of one run | `cyberrange/scenarios/cps_advisor/cli.py` |
+| Harnesses, their briefing and the benchmark | `cyberrange/scenarios/cps_advisor/{harnesses,briefing,campaign}.py` |
+| Deploy manifest | `cyberrange/scenarios/cps_advisor/guest_files.py` |
+| Dashboard panel | `cyberrange/scenarios/cps_advisor/panel.js` |
+| The SOC's console | `nodes/soc/soc_operator.py`, `nodes/soc/soc_console.html` |
+| The red team's console | `nodes/redteam/red_console.py`, `nodes/redteam/red_console.html`, `nodes/redteam/red_steps.py` |
+| The command record | `nodes/common/command_audit.sh` |
+| Make targets | `make/cps-advisor.mk` |
+| For the people playing | [Red vs blue playground](playground-red-vs-blue.md) |
+| For harnesses playing | [Harnesses as players](playing-with-agents.md) |
+| The lab, episode and metrics it builds on | [CPS](scenario-cps.md) |

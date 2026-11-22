@@ -8,7 +8,7 @@ each team holds and what it can do. The technical details of how it is built are
 
 A small low-voltage electricity-distribution plant, emulated: a line with a
 distributed generator (DG) and a breaker, regulated by a PLC. The plant is a digital
-twin — voltages and loads are computed, not acted — so a wrong command really does
+twin — voltages and loads are computed, not scripted — so a wrong command really does
 produce an over-voltage or a trip.
 
 - The **red team** starts from a machine on the office (IT) network and wants to
@@ -45,7 +45,7 @@ and is not applied.
       ews 10.30.0.50
 ```
 
-Three facts to keep in mind:
+Four facts to keep in mind:
 
 1. **The attacker cannot reach the plant directly.** The firewall lets a single flow
    through to the OT network: from the HMI to the engine, over Modbus.
@@ -198,7 +198,9 @@ from).
 
 `block_flow` cuts the attacker's path while leaving the HMI standing; `isolate_hmi` is
 more drastic (the operator loses the workstation) and so is the one the SOC flags as
-most delicate.
+most delicate. What each countermeasure prevents or restores on the attack tree,
+and what it costs, is in
+[KG and attack trees §3.5](kg-and-attack-trees.md#35-countermeasures-the-defence-annotation).
 
 ### The terminal
 
@@ -248,7 +250,7 @@ consoles keep apart, on a single timeline:
   replays it;
 - the SOC's **suggestions** with their outcome (approved, rejected, expired), as a
   history;
-- a **Teams** card with, in time order, the red team's steps, the blue team's actions
+- the **Teams** card (in the *Players* view) with, in time order, the red team's steps, the blue team's actions
   and **every command typed by either**, with the host and the team.
 
 On a defence host, a command's team is read from how the shell arrived there:

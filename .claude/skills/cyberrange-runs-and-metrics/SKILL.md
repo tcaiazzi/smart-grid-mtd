@@ -18,7 +18,8 @@ user-invocable: true
 Never invent a command. Every stage has a `make` target, and the campaign runner
 shells out to those same targets — so a target renamed or bypassed breaks a
 campaign hours in. `make help` prints the full catalogue with what each writes
-where; `docs/scenario-mqtt.md` and `docs/scenario-cps.md` have the variables.
+where; `docs/reference.md` has every variable with its default, and the files a
+run leaves; `docs/troubleshooting.md` has what to do when a run goes wrong.
 
 ## Which of the three do I want?
 
@@ -45,8 +46,12 @@ to.
 - `make cps-teams` is red team against blue team on that lab: nobody drives the
   attack, each team works from the console and shell on its own node, and
   `make dashboard` is the referee's read-only view. Links and tokens are in
-  `<out_dir>/teams.json`. Both need people, so neither has a campaign. See
+  `<out_dir>/teams.json`. Played by people, neither has a campaign. See
   `docs/scenario-cps-advisor.md`.
+- `make cps-agents` seats a harness (`RED_HARNESS`, `BLUE_HARNESS`) at a team's
+  console instead of a person, and `make cps-bench` is the campaign that repeats
+  those games per harness (`output/campaigns/<BENCH>/`, with `harness.csv`). See
+  `docs/playing-with-agents.md`.
 
 ## Before the first run
 

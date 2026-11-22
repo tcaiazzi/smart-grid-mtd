@@ -59,6 +59,8 @@ nav:
       - Overview: platform-overview.md
       - Set-up and first run: getting-started.md
       - Running and measuring: running-and-metrics.md
+      - The dashboard: dashboard.md
+      - Troubleshooting: troubleshooting.md
   - Scenarios:
       - MQTT MTD: scenario-mqtt.md
       - CPS (OT/Modbus): scenario-cps.md
@@ -76,4 +78,6 @@ nav:
   - Extending the platform:
       - Overview: extending.md
       - Creating a scenario: new-scenario.md
+      - Contributing: contributing.md
+  - Reference: reference.md
   - Glossary: glossary.md

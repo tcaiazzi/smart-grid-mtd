@@ -49,7 +49,12 @@ make cps-teams RED_HARNESS=claude-code
 | `PLAYER_DNS` | name servers of the players' nodes, comma-separated | `1.1.1.1,8.8.8.8` |
 | `CPS_ADVISOR_TIMEOUT` | how long a SOC suggestion waits for the blue team's verdict | `120` |
 
-The harnesses available today:
+A game is a run of the `cps-advisor` scenario: it writes
+`output/cps-advisor/runs/<date-time>/`, with `output/cps-advisor/latest`
+pointing at it, unless `CPS_AGENTS_OUT` names another directory
+([Running and measuring](running-and-metrics.md#seeds-and-output-directories)).
+
+The harnesses available:
 
 | Name | What it is | Needs from the host |
 |---|---|---|
@@ -71,7 +76,7 @@ seat's harness changes: two runs are comparable only if what they played
 against was the same.
 
 The engagement ends when its time is up or when both players have stopped,
-whichever comes first. Follow it on `make dashboard`: the **Teams** card says
+whichever comes first. Follow it on `make dashboard`: the **Teams** card, in the *Players* view, says
 who plays each seat, lists every step, countermeasure and command with the
 reason the player gave for it, and counts each harness's calls.
 
@@ -170,7 +175,7 @@ not touch those.
 ## 5. What is measured
 
 The outcome of the game is in the run's usual metrics (`metrics.json`), which
-now hold for an attack played at the console as well as for a driven one:
+hold for an attack played at the console as well as for a driven one:
 
 | Metric | Meaning |
 |---|---|

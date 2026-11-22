@@ -1,7 +1,7 @@
 # Attacks and defences
 
-A reading guide to what the platform can attack with and defend with. This is the
-narrative view; [Components](components.md) is the full reference, with every hook and
+An index of what the platform can attack with and defend with, one line per
+component. [Components](components.md) is the reference, with every hook and
 constructor argument, and the source is each plane's `components.py`.
 
 Every attack records what it really did in the run's **ground truth** (host-side, so
@@ -20,16 +20,9 @@ telemetry-shaped events that the ledger mirrors onto the dashboard.
 | **ReconAttacker** | Like `PlannedAttacker`, but **not** handed the tree: it derives one by reconnaissance (nmap on the IT side, then living off the land on the compromised HMI), with the SOC's own tree generator on what it found, and plans on that belief tree. The `cps-recon` scenario. |
 | **RedConsole** | The same steps as the planner, but run **by a person** one at a time from a console on the attacker node — the red team's seat in the playground. |
 
-The physical effects an attack aims for differ in how noisy and how durable
-they are: pushing the DG setpoint out of range (loud, the PLC recovers), opening the
-line breaker (loud, stays open until reclosed), and taking manual control then
-writing a high-but-legal setpoint (quiet, the PLC does not correct it). Three more
-vary their writes over time: ramping the setpoint up in small steps (the quietest),
-swinging it between two legal levels, and opening and re-closing the breaker over
-and over. One writes nothing at all: from the engineering workstation, which
-stands on the plant's own link, the attacker gets between the PLC and the engine
-and falsifies the voltages the PLC reads, so that the PLC overvolts the feeder
-itself. The
+The physical effects these attacks aim for — the seven attack modes, how loud
+and how lasting each is — are in
+[CPS §5](scenario-cps.md#5-the-attack-modes); the
 [playground guide](playground-red-vs-blue.md) lays them out for players.
 
 ### MQTT smart grid
@@ -57,5 +50,7 @@ Detection and response, proactive and reactive:
 
 The response loop — how `SocAnalytics` turns alerts into countermeasures through the
 knowledge graph and attack tree — is covered in
-[SOAR — KG & attack trees](kg-and-attack-trees.md). The countermeasures themselves,
-and which are revocable, are in the [playground guide](playground-red-vs-blue.md).
+[SOAR — KG & attack trees](kg-and-attack-trees.md), with the
+[countermeasures](kg-and-attack-trees.md#35-countermeasures-the-defence-annotation);
+which of them a player can revoke is in the
+[playground guide](playground-red-vs-blue.md).

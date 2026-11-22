@@ -161,7 +161,13 @@ and the SOC through its inventory.
 | **HMI / SCADA** (`planes/traffic/agents/hmi_client.py`) | The legitimate IT client: one persistent session polling the plant, and every ~12 s a safe operator dispatch (MANUAL, 15–35 kW for 5 s, back to AUTO). This is the normal behaviour the sensor must tell the attack apart from. | IT |
 | **Vulnerable diagnostics app** (`planes/attack/agents/vuln_app.py`) | A small web app on the HMI host with a real OS command injection, giving the attacker remote code execution. Deliberately insecure, confined to the lab. | IT |
 | **Attacker** (`planes/attack/agents/exploit_client.py`, `ot_write.py`; driver `planes/attack/active_attack.py`) | Exploits the app, gains RCE on the HMI, and from there writes Modbus to the engine. | IT |
+| **Engineering workstation's maintenance service** (`planes/attack/agents/ews_maint.py`) | The workstation's maintenance service, whose credential sits on the HMI: the way onto the plant's own network that the `meas-fdi` attack takes. | IT + OT |
 | **Modbus DPI sensor** (`planes/defense/agents/ot_sensor.py`, `ot_model.py`) | Passively parses Modbus requests and responses, reconstructs the plant state, and emits findings and alerts. | Defence |
+| **IT sensor** (`planes/defense/agents/it_sensor.py`) | With `CPS_IT=1`, watches the HMI itself — the web app's requests and the processes it spawns — so that the attack is seen before it reaches the plant ([§10](#it-side-telemetry-responding-before-the-plant-is-touched)). | Defence |
+| **Wazuh** (manager on `soc`; an agent on sensor, HMI, workstation and firewall; `nodes/wazuh/`) | Carries the findings to the SOC as alerts, and the countermeasures back to the hosts as active responses ([§2](#2-architecture)). | Management |
+| **SOC analytics** (`nodes/soc/soc_analytics.py`) | Builds the knowledge graph and the attack tree, maps the alerts onto the tree and decides the response ([§10](#10-response-the-soar-prototype)). | Management |
+
+Their constructors and artifacts are in [Components](components.md).
 
 Every node shares one **plant contract**
 (`cyberrange/planes/defense/ot_registers.py`): the register map, the scales, the
@@ -181,7 +187,6 @@ the action on the plant (`CPS_ATTACK_MODE`):
 | `slow-ramp` | Takes MANUAL authority, then walks the DG setpoint from nominal to 60 kW in 1 kW steps | The same persistent overvoltage, reached gradually | **High**: as above, and no single write is a jump |
 | `setpoint-oscillation` | Takes MANUAL authority, then swings the DG setpoint between 55 and 5 kW | The feeder voltage swings with it for as long as the attacker writes | Medium: legal values from the HMI, but large repeated swings |
 | `breaker-chatter` | Opens and re-closes the feeder breaker over and over, ending open | The downstream section loses and regains supply repeatedly | Low: every write is a role-policy violation |
-
 | `meas-fdi` | From the HMI, reads the workstation's maintenance credential and takes the workstation; from there stands between the PLC and the engine (ARP poisoning, `ot_mitm.py`) and reports every voltage the PLC reads as 0.96 pu | The PLC, believing the voltage low, raises the DG setpoint cycle after cycle and overvolts the feeder **itself**. The effect ends when the falsification does | **No write of the attacker's**: the source, range and policy rules have nothing to judge. Seen only by the two rules below on addresses and readings |
 
 `slow-ramp`, `setpoint-oscillation` and `breaker-chatter` change their writes
@@ -302,7 +307,7 @@ the lab and marks the campaign interrupted.
 Everything goes onto a progress ledger, `progress.jsonl` (a standalone
 `make cps-lab`/`cps-attack` writes one into its `CPS_OUT` too): phases, the live
 plant state and the sensor's findings pulled from the containers every ~2 s, the
-the attacker's steps, plans and observations as its agent records them, each
+attacker's steps, plans and observations as its agent records them, each
 run's metrics (a standalone run's too, when it ends) and the aggregate. `make dashboard` reads
 every ledger under `output/`; `make cps-dashboard` is the same dashboard with
 `--scenario cps`, which filters on what each run recorded rather than on where
@@ -401,26 +406,85 @@ them the structure is rebuilt from today's lab model and the card says so.
 
 With the responder on, the response state is overlaid on all three: implicated
 hosts, blocked flow and attacker-write count, restored or isolated hosts, active
-impacts, applied countermeasures. The run's time bar, under the tiles, replays
+impacts, applied countermeasures. The run's time bar, in the band at the top, replays
 both cards fact by fact, either side's.
 `?view=topology|kg|tree&run=<run_id>` opens a view directly.
 
 ## 9. What is measured
 
-**On detection**, per detector (rules, model, combined):
+`make cps-metrics` scores a finished run from its artifacts and writes
+`metrics.json` (the data) and `metrics.md` (the same, to read). The keys below
+are those of `metrics.json`, computed in `cyberrange/scenarios/cps/metrics.py`.
+A key that does not apply to a run — the latency of an attack that was not
+detected, the response block of a run without a responder — is `null`.
 
-- detection rate;
-- latency from the attack start and from the first malicious write;
-- whether it fired before the physical impact;
-- false alarms, and how many fell inside legitimate operator windows.
+**The run.** `attack` (was there one), `attack_mode`, `attack_unit` (the feeder
+attacked, in a lab with several), `n_frames` (plant frames recorded), and under
+`run` the run's id and the fingerprints of its card (`run.card`: commit, lab,
+options), so that a row of a table still says what it was measured on.
 
-**On the plant:**
+**Detection**, once per detector under `detectors.rules`, `detectors.model`
+and `detectors.combined`:
 
-- time to impact and impact duration;
-- maximum voltage deviation;
-- whether the impact persists after the attack or the plant recovers;
-- time spent in MANUAL;
-- energy.
+| Key | Meaning |
+|---|---|
+| `detected` | A finding fell in the attack's window |
+| `detection_latency_s` | From the attack's start to the first such finding |
+| `latency_from_write_s` | The same, from the first malicious write |
+| `before_impact` | The detector fired before the plant left its band |
+| `on_attacked_feeder` | The finding named the feeder that was attacked |
+| `findings`, `classes` | How many findings, and of which classes |
+| `false_alarms` | Findings outside any attack |
+| `false_alarms_in_operator_windows` | Those of them raised during a legitimate operator dispatch |
+
+The combined detector's `detected`, `detection_latency_s`, `false_alarms` and
+`findings` are repeated at the top level, with `first_finding_t` and
+`model_thresholds` (the behavioural model's calibrated threshold per feeder).
+
+**Impact on the plant:**
+
+| Key | Meaning |
+|---|---|
+| `time_to_impact_s` | From the first malicious write to the first abnormal frame |
+| `abnormal_frames`, `abnormal_duration_s` | Frames with the plant out of band, and from the first to the last of them |
+| `impact_duration_s` | The same span, counting the last frame's own period |
+| `impact_ongoing_at_end` | The plant was still out of band when the run ended |
+| `impact_persists_after_attack` | It stayed out of band after the attacker stopped |
+| `recovered`, `recovery_s` | It came back in band, and how long after the impact began |
+| `mitigated_s` | From the first malicious write to the plant back in band for good |
+| `manual_mode_s` | Time the control authority spent in MANUAL after the attack |
+| `max_abs_deviation_pu`, `v_min`, `v_max` | The worst voltage deviation, and the range seen |
+| `energy_kwh_total`, `energy_kwh_during_attack` | Energy over the run, and over the attack |
+
+**Response**, under `response`, when a responder ran
+([§10](#10-response-the-soar-prototype)):
+
+| Key | Meaning |
+|---|---|
+| `policy`, `approval` | The policy that decided and the approval mode |
+| `decisions`, `explained_decisions`, `explained_coverage` | Decisions taken, and how many carry a justification that covers every action |
+| `decision_latency_s` | From the first finding of the attack to the first countermeasure done |
+| `actions`, `failed_actions` | Countermeasures applied, and those a host failed to apply |
+| `expected_actions` | What the attack that really happened called for |
+| `accurate` | The expected ones were all applied; with the attack stopped before the plant, that a countermeasure was; in a normal run, that none was |
+| `prevented_before_impact` | No malicious write reached the plant |
+| `over_response` | Countermeasures applied that nothing in the run called for |
+| `false_responses` | Countermeasures applied before the attack, or in a normal run |
+| `attacker_writes_after_block` | Malicious writes that still landed after the block took effect |
+| `hmi_unavailable_s` | How long the response kept the operator's HMI cut off |
+| `countermeasure_times` | Per countermeasure: `dispatch_s`, from the request to its outcome on the host, and `settle_s`, from the last restoring one to the plant back in band |
+| `operator` | When the SOC advised: suggestions made, approved, rejected and expired, and how long the answers took |
+| `by_hand` | Countermeasures applied or reverted at a console on someone's initiative, by `human` and by `agent` |
+
+**The attacker**, when it is not a fixed chain: `planner`, `attacker_profile`,
+`stage_reached`, `attack_succeeded`, `prevented` and `plan_steps` for the
+tree-guided attacker ([§10](#tree-guided-attacker)); `tree_fidelity` for the
+one that derives its tree ([CPS recon](scenario-cps-recon.md)); `players` for a
+game ([Harnesses as players](playing-with-agents.md#5-what-is-measured)).
+
+A campaign aggregates these per configuration into `summary.md` and
+`summary.csv` (detection), `impact.csv` and `response.csv`, each as a mean with
+its 95% confidence interval, and `ci.csv` (the aggregate as data).
 
 Single seeded verification runs give indicative results: the loud attacks are
 detected within hundredths of a second of the first write; in `manual-hijack`
@@ -461,11 +525,11 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
   A lab with several HMIs or feeders gets a way in per HMI and the actions per
   feeder, under qualified ids. The ATT&CK mapping still has open review notes.
 - **Countermeasures**, the defence tree; each one *prevents* or *restores* tree
-  nodes:
-  - `block_flow` — an iptables DROP at the top of FORWARD on the firewall;
-  - `isolate_hmi` — link down on the HMI; needs operator approval;
-  - `force_auto` — back to AUTO plus the nominal setpoint;
-  - `restore_breaker` — re-close the breaker.
+  nodes: blocking the HMI's flow at the firewall, isolating the HMI or the
+  workstation, putting the PLC back in AUTO, re-closing the breaker, repairing
+  the addresses a host in the middle poisoned. The table of them all — where
+  each runs, what it covers, what it costs, which needs approval — is in
+  [KG and attack trees §3.5](kg-and-attack-trees.md#35-countermeasures-the-defence-annotation).
 
   `force_auto` and `restore_breaker` are Modbus writes from the firewall to the
   engine over the OT link. The plant contract gives that writer its own role,
@@ -483,8 +547,8 @@ and used by both sides is in [kg-and-attack-trees.md](kg-and-attack-trees.md).
 - **Policies** (`nodes/soc/soar_policy.py`): `rules` is the static playbook and the
   baseline — confirmed leaf → fixed countermeasures, each fired once. `solver`
   picks the countermeasure subset minimising expected loss plus weighted
-  operational, time and energy cost, by exhaustive enumeration over at most 32
-  subsets (128 with the IT countermeasures), and returns the Pareto front too. Every decision carries its
+  operational, time and energy cost, by exhaustive enumeration over every subset
+  ([how many](kg-and-attack-trees.md#62-solver)), and returns the Pareto front too. Every decision carries its
   justification: the tree nodes covered and the cost terms.
 
 ```bash
@@ -508,8 +572,8 @@ the same attack tree and picks its next step from the current state, composing t
 *same* lab primitives the scripted chain uses — no new offensive capability,
 lab-only. It learns by outcome: if a step fails because a countermeasure closed
 its path, it tries another feasible impact or gives up, so it exercises the
-response like a real adversary. It is also the baseline adversary of the WP3
-stochastic game.
+response like a real adversary. It is also the baseline adversary for the
+stochastic game model listed in [§11](#11-scope-and-what-is-next).
 
 ```bash
 make cps-attack CPS_OUT=output/cps/plan CPS_ATTACK_DRIVER=planner \
@@ -572,8 +636,7 @@ off.
 
 The scenario covers phases 1–4 of the prototype: foundations, OT emulation, the
 IT/OT boundary, and detection. The response loop above sits on top of them as a
-deliberately small prototype, meant to fix the interfaces of WP2 and WP3 (see the
-internal plan `docs/internal/piano-wp2-wp3.md`). Still to do:
+deliberately small prototype, meant to fix the interfaces between detection and response. Still to do:
 
 - the attack tree's generator chains the steps of a fixed template (the ways
   in, the actions per feeder): chaining arbitrary techniques by their pre- and

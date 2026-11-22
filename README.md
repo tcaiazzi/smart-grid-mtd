@@ -17,13 +17,24 @@ cyber-physical systems safely, reproducibly and observably, with five
 | `cps-recon` | The `cps` lab with an attacker that is not handed the attack tree: it derives it by reconnaissance (nmap, then living off the land on the HMI), and the run scores how close the derived tree is to the true one | [docs/scenario-cps-recon.md](docs/scenario-cps-recon.md) |
 | `cps-soc` | The `cps-advisor` lab with the tools of a real SOC for the blue team: Wazuh as SIEM, DFIR-IRIS as case management, each service on its own node | [docs/scenario-cps-soc.md](docs/scenario-cps-soc.md) |
 
-New to the project? [docs/platform-overview.md](docs/platform-overview.md) introduces the
-platform and the CPS scenario in one read.
+## Start here
 
-How the platform is built and how to add a scenario:
-**[docs/platform.md](docs/platform.md)**. Every reusable component of the four
-planes: **[docs/components.md](docs/components.md)**. Where a file goes and why:
-**[docs/structure.md](docs/structure.md)**.
+The documentation is under [docs/](docs/index.md), and is a site you can serve
+locally with `make docs-serve`.
+
+- **Run something**: [set-up and first run](docs/getting-started.md), then
+  [running and measuring](docs/running-and-metrics.md) and
+  [the dashboard](docs/dashboard.md).
+- **Get the idea first**: [the overview](docs/platform-overview.md).
+- **Play it**: [red vs blue](docs/playground-red-vs-blue.md) for people,
+  [harnesses as players](docs/playing-with-agents.md) for agents.
+- **Understand the response loop**:
+  [knowledge graph and attack trees](docs/kg-and-attack-trees.md).
+- **Build on it**: [the architecture](docs/platform.md),
+  [the components](docs/components.md), [where files go](docs/structure.md),
+  [extending](docs/extending.md) and [creating a scenario](docs/new-scenario.md).
+- **Look something up**: [targets, variables and artifacts](docs/reference.md),
+  [troubleshooting](docs/troubleshooting.md), [the glossary](docs/glossary.md).
 
 ## Layout
 
@@ -40,11 +51,11 @@ nodes/                                 imports none of them, and none imports it
 |---|---|
 | `cyberrange/core/` | The platform: declarative topology, run lifecycle, the three event streams, campaigns (95% CI aggregate), scenario registry, progress ledger and dashboard |
 | `cyberrange/planes/traffic/` | Background trace replay, the nanogrid MQTT publishers, the plant and PLC |
-| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain, the launchers of the in-lab tree-guided attacker and of the red team's console |
-| `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, the launchers of Wazuh and of the SOC's analytics, the QKD-simulated cert bootstrap |
+| `cyberrange/planes/attack/` | The 1D-CNN fingerprinting classifier, the attack chain, the launchers of the in-lab tree-guided and recon-driven attackers and of the red team's console |
+| `cyberrange/planes/defense/` | MTD coordinators (fixed-timer + RL), OT/IT sensors, the launchers of Wazuh, of the SOC's analytics and of the SOC's tools (Wazuh indexer and dashboard, DFIR-IRIS), the QKD-simulated cert bootstrap |
 | `cyberrange/planes/monitor/` | Capture, the telemetry/plant mirrors, the web terminals and the record of what people type in them |
 | `cyberrange/scenarios/<name>/` | One scenario, whole: topology, episode, CLI, campaign, deploy manifest, metrics, `analysis/`, `training/` |
-| `nodes/` | Node software: the Wazuh configuration and active response (`wazuh/`), the SOC's analytics, SOAR reasoning and operator console (`soc/`), the autonomous tree-guided attacker with its planner and the red team's console (`redteam/`), shell access and command recording (`common/`) |
+| `nodes/` | Node software: the Wazuh configuration and active response (`wazuh/`), the SOC's analytics, SOAR reasoning and operator console (`soc/`), DFIR-IRIS's set-up (`soar/`), the autonomous tree-guided attacker with its planner and the red team's console (`redteam/`), the nodes a harness plays a seat from (`players/`), and what they share — the knowledge graph and attack-tree generator, the seat, shell access and command recording (`common/`) |
 | `tests/`, `make/`, `scripts/`, `tools/`, `docs/` | Tests by area, the makefiles, the manual single-run script, cross-scenario tooling, documentation |
 
 Each plane exposes its reusable building blocks in `components.py`; a scenario
@@ -61,29 +72,18 @@ invoked with `-m` rather than by path.
 
 ## Installation
 
+You need Linux (or WSL2), Python 3.12, Docker and
+[Kathará](https://www.kathara.org/). Then:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+make cps-image            # the node images of the cps scenarios
 ```
 
-Node images:
-
-```bash
-docker build -t kathara/mqtt docker/mqtt/   # MQTT scenario
-make cps-image                              # cps and cps-advisor: kathara/cps (plant nodes, Wazuh agent,
-                                            # ttyd) and kathara/soc (Wazuh manager, ttyd)
-make cps-recon-image                        # cps-recon: kathara/redteam (the attacker's box: nmap, networkx)
-make cps-soc-image                          # cps-soc: the lab CA, the SOC with Filebeat, Wazuh indexer and
-                                            # dashboard, DFIR-IRIS (after cps-image)
-```
-
-The MQTT scenario needs a background traffic trace. Place a `traccia.pcap` in
-`assets/pcap/`, then split it into train/test sets:
-
-```bash
-make split
-```
+[Set-up and first run](docs/getting-started.md) has the prerequisites in full,
+the images of the other scenarios, the first run and what it should show.
 
 ## The five commands
 
@@ -104,11 +104,15 @@ For anything beyond these five — the experiment pipeline step by step, the
 variables that shape a run, the output layout, the parameter ablation, the SOAR
 response loop — the scenario documents are the reference.
 
-Two more are for people rather than experiments. `PLAYGROUND=1` on a single-run
-target keeps its lab up after the episode, until Ctrl-C. `make cps-teams` is a
-red team against a blue team on the CPS lab: each team gets a console and a web
-terminal on its own node, and `make dashboard` is the referee's read-only view
+Three more are for players rather than experiments. `PLAYGROUND=1` on a
+single-run target keeps its lab up after the episode, until Ctrl-C.
+`make cps-teams` is a red team against a blue team on the CPS lab: each team gets
+a console and a web terminal on its own node, and `make dashboard` is the
+referee's read-only view
 ([docs/playground-red-vs-blue.md](docs/playground-red-vs-blue.md)).
+`make cps-agents` seats a harness at a team's console instead of a person, and
+`make cps-bench` repeats those games to compare harnesses
+([docs/playing-with-agents.md](docs/playing-with-agents.md)).
 
 ## Reproducing the paper
 
@@ -124,8 +128,12 @@ The `mqtt-mtd` scenario is the experimental set-up of:
 > with [ACSOS 2026](https://2026.acsos.org/)
 
 
-**1. Prerequisites** — the virtualenv and Docker/Kathará from
-[Installation](#installation), then the scenario's image and traffic trace:
+**1. Prerequisites** — the virtualenv, Docker and Kathará from
+[Installation](#installation), then the scenario's image and a background
+traffic trace. The trace used for the paper is not distributed; any pcap of
+ordinary network traffic works, and results on another trace are comparable
+with each other rather than with the published numbers
+([details](docs/getting-started.md#mqtt-mtd)):
 
 ```bash
 docker build -t kathara/mqtt docker/mqtt/
@@ -163,8 +171,9 @@ parameter ablation (`make sweep`) are documented in
 
 ## Working in this repository
 
-`make help` is the authoritative catalogue of targets: it prints every one with
-its defaults and where it writes. Beyond that:
+`make help` prints every target with where it writes;
+[docs/reference.md](docs/reference.md) adds the variables and their defaults.
+Beyond that:
 
 ```bash
 make fmt                  # ruff format: layout only, never logic
@@ -176,5 +185,5 @@ make docs-serve           # the documentation site, live, on http://127.0.0.1:80
 ```
 
 Conventions, the rules that are not negotiable, and the gate to pass before
-calling a change done are in [CLAUDE.md](CLAUDE.md) and
-[docs/structure.md](docs/structure.md).
+calling a change done are in [docs/contributing.md](docs/contributing.md)
+([CLAUDE.md](CLAUDE.md) is the same, for agents).

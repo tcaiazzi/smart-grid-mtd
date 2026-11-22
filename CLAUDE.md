@@ -30,7 +30,7 @@ make/ scripts/ tools/ tests/ docs/
    must keep that name forever — while the file it comes from may live anywhere.
    Manifests: `cyberrange/scenarios/<name>/guest_files.py`.
 3. **Guest agents import only the stdlib and what their node image installs**
-   (`docker/<scenario>/Dockerfile`), and never `cyberrange.*`. They run where
+   (`docker/<image>/Dockerfile`), and never `cyberrange.*`. They run where
    this repo and its virtualenv do not exist. Enforced by
    `tests/core/test_guest_imports.py`, which also keeps the images pinned to
    `requirements.txt`.
@@ -95,9 +95,11 @@ repo drifts. Run `make fmt` before committing. What the formatter cannot decide:
 ## Where the rest is
 
 `docs/structure.md` (where a file goes and why) · `docs/platform.md` (the scenario
-contract) · `docs/components.md` (every component) · `docs/playground-red-vs-blue.md`
-(the red-vs-blue playground, for the people playing it) · the `cyberrange-*` skills
-for step-by-step work.
+contract) · `docs/components.md` (every component) · `docs/reference.md` (every
+target, variable and artifact) · `docs/contributing.md` (these rules and the
+guardrails, as published) · `docs/playground-red-vs-blue.md` (the red-vs-blue
+playground, for the people playing it) · the `cyberrange-*` skills for
+step-by-step work.
 
 Everything under `docs/` is published as the documentation site (`mkdocs.yml`,
 `make docs-serve`) and is written in English; add a new page to the `nav` there.

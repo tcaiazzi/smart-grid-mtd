@@ -39,9 +39,9 @@ to describe a run's structure and to replay one.
    │      ▲
    │      └── AttackPlanner: feasible goals, prerequisite steps   (attacker side)
    ▼
- CampaignState: findings → evidence → belief per node           (mapping.py)
+ CampaignState: findings → evidence → belief per node           (soar_mapping.py)
    ▼
- Policy: belief → Decision (actions + justification)            (policy.py)
+ Policy: belief → Decision (actions + justification)            (soar_policy.py)
    ▼
  SOC analytics: asks the Wazuh manager for each action; the     (soc_analytics.py,
  agent on the target host runs its allowlisted commands          cps_response.py)
@@ -110,14 +110,14 @@ two nodes can be linked by more than one relation:
 | `src` | rule → host | the rule matches traffic from that host |
 | `dst` | rule → service | the rule matches traffic to that service |
 
-The CPS lab as built gives 32 nodes and 48 edges:
+The CPS lab as built gives 37 nodes and 58 edges:
 
 | Type | Count | |
 |---|---|---|
-| host | 7 | attacker (`it-host`), hmi (`hmi`), firewall (`boundary`), engine (`plant`), plc (`plc`), sensor (`sensor`), soc (`soc`) |
+| host | 8 | attacker (`it-host`), hmi (`hmi`), ews (`engineering`), firewall (`boundary`), engine (`plant`), plc (`plc`), sensor (`sensor`), soc (`soc`) |
 | zone | 3 | IT, OT, MGMT |
-| ip | 10 | the firewall has one in each zone, the hmi one in IT and one in MGMT |
-| service | 2 | `svc:hmi/diag-http` (tcp/8080), `svc:engine/modbus` (tcp/5020) |
+| ip | 13 | the firewall and the ews have one in each zone, the hmi one in IT and one in MGMT |
+| service | 3 | `svc:hmi/diag-http` (tcp/8080), `svc:ews/maint-http` (tcp/8081), `svc:engine/modbus` (tcp/5020) |
 | register | 9 | 3 holding (setpoint, breaker, control mode), all sensitive; 6 input |
 | flow_rule | 1 | `rule:firewall:0`: ACCEPT 10.10.0.20 → 10.20.0.20 tcp/5020 |
 
@@ -263,7 +263,6 @@ impact  OR  Physical impact on the feeder
         └── via_aitm  AND  Between the PLC and the plant
             ├── ot_aitm    T0830 Adversary-in-the-Middle             → svc:engine/modbus
             └── meas_fdi   T0856  impact 0.9   → reg:1:ir:0, reg:1:ir:1   measurements falsified on their way to the PLC
-    └── ot_write_unknown   T0855  impact 0.6   → svc:engine/modbus
 ```
 
 The tree has two branches:
@@ -520,7 +519,7 @@ Two details of the model mapping prevent known misreadings:
 ### 5.3 The snapshot
 
 `snapshot(t)` is what the policy receives, and the interface between detection
-(WP2) and response (WP3):
+and response:
 
 ```python
 {
@@ -609,7 +608,8 @@ the operator once and does nothing else.
 ### 6.2 Solver
 
 The solver tries every subset of the allowed, not-yet-applied countermeasures
-(`notify` excluded; at most 2⁶ = 64 subsets with the IT actions) and keeps the
+(`notify` excluded; in the CPS lab that is 6 countermeasures and at most
+2⁶ = 64 subsets, or 8 and 2⁸ = 256 with the IT actions) and keeps the
 one with the lowest cost:
 
 ```
@@ -786,7 +786,7 @@ The solver considers it at once. The rules policy uses it only once it is in
 the playbook. Adding one multiplies the solver's search by two.
 
 **Tuning the belief.** The thresholds and weights are module constants in
-`mapping.py`. `test_soar_mapping.py` pins the behaviours they produce: the
+`nodes/soc/soar_mapping.py`. `test_soar_mapping.py` pins the behaviours they produce: the
 model alone never confirms, PLC reactions are not evidence, an open breaker
 explains away the operator's dispatch. Check those still hold before and after
 changing a constant. To see the effect on real data, replay recorded runs with
@@ -800,7 +800,7 @@ changing a constant. To see the effect on real data, replay recorded runs with
   postconditions. A kind of way in the template does not know (a credential
   reused across hosts, say) is a new entry in the generator, not only in the
   data.
-- **Probability and time of a step** (WP2 T2.2's annotations) are not there yet.
+- **Probability and time of a step** are not annotated on the tree.
 - **The branch by the workstation is not per feeder.** `meas_fdi` falsifies the
   readings of the first PLC the tool in the middle hears (`ot_mitm.py`), and the
   tree has that branch once. The attacker of `cps-recon` likewise believes in

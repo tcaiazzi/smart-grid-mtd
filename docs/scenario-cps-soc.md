@@ -43,7 +43,11 @@ manager (+0.26 GB). Filebeat ships the alerts to the indexer, as on a Wazuh
 server.
 
 `SOAR` (10.40.0.0/24) is IRIS's own back-end network, like the back-end network
-in IRIS's compose file. Only IRIS's web front also sits on MGMT.
+in IRIS's compose file. Only IRIS's web front also sits on MGMT. The name is the
+network's only: elsewhere in these pages "SOAR" is the SOC's reasoning — the
+knowledge graph, the attack tree, the policy
+([KG & attack trees](kg-and-attack-trees.md)) — which runs on the SOC node here
+as in every CPS scenario.
 
 The HMI, which is where the attacker gets in, is on MGMT too. Each tool node
 therefore accepts traffic on MGMT only from the hosts that need it:
@@ -137,7 +141,7 @@ acts on them.
 
 ## 4. How it is built on cps-advisor
 
-`cps-soc` is the `cps` scenario with two features (`docs/platform.md`):
+`cps-soc` is the `cps` scenario with two features ([Architecture](platform.md)):
 `(SocTools(), People(console=False))`. `People` is `cps-advisor`'s, without the
 SOC's console. `SocTools` (`cyberrange/scenarios/cps_soc/feature.py`) does four
 things:
@@ -164,7 +168,13 @@ make cps-soc            # terminal 2: scripted attack; suggestions wait as IRIS 
 The other targets:
 
 - `make cps-soc-lab`: the same lab with no attack (`PLAYGROUND=1` keeps it up).
-- `make cps-soc-teams`: red team against blue team, up until Ctrl-C.
+- `make cps-soc-teams`: red team against blue team, up until Ctrl-C. The red
+  team plays exactly as in `cps-advisor`: its console (`CPS_RED_PORT`, 8768) and
+  its terminal (`CPS_RED_SHELL_PORT`, 8769) on the attacker node, let in after
+  the calibration, with its links in the same `teams.json`
+  ([Red vs blue playground](playground-red-vs-blue.md)). Both teams are people:
+  the target takes no `RED_HARNESS` or `BLUE_HARNESS`, because a harness sits
+  at the SOC's console and this lab does not serve one.
 - `make cps-soc-dashboard`: the control dashboard restricted to this scenario's
   runs.
 
@@ -188,9 +198,16 @@ exception once.
 | `CPS_SOC_OUT` | a new one per run, under `output/cps-soc/runs/` | run directory |
 
 The `CPS_ADVISOR_*` variables (policy, timeout of a suggestion, post-attack
-observation) and the `CPS_*` variables of `cps` apply unchanged.
+observation), `CPS_BLUE_SHELL_PORT` and the `CPS_*` variables of `cps` apply
+unchanged; `CPS_BLUE_PORT` does not, there being no SOC console. Every variable
+is in the [reference](reference.md).
+
+The phases are `cps-advisor`'s ([CPS advisor, §6](scenario-cps-advisor.md#6-phases));
+the tools start in **services**, before the people's own.
 
 The host needs about 3 GB of free memory beyond what a `cps-advisor` run uses.
+If the lab is slow to come up or the host swaps, see
+[Troubleshooting](troubleshooting.md).
 
 ## 6. What is recorded and scored
 
@@ -204,7 +221,16 @@ The run's artifacts also include:
 - the indexer's and IRIS's console logs;
 - `soc.belief.jsonl`, the belief delivered to the SIEM.
 
-## 7. Known limits
+## 7. Dashboard
+
+`make dashboard`, or `make cps-soc-dashboard` for this scenario's runs only, is
+the control view, as in `cps-advisor`: it draws the `cps` panel unchanged, with
+the **Players** view for the suggestions and the teams' moves
+([The dashboard](dashboard.md)). It is not where the blue team works. The
+analyst's pages are the Wazuh dashboard (`CPS_SIEM_PORT`) and IRIS
+(`CPS_CASES_PORT`), each on its own port and behind the run's login.
+
+## 8. Known limits
 
 - The published ports (8770, 8771) are protected only by the run's credentials,
   as the consoles of `cps-advisor` are by their tokens.
@@ -214,3 +240,21 @@ The run's artifacts also include:
   request.
 - The tools take host numbers .21, .22 and .40 on the SOC's network. A lab
   whose own hosts use one of them is refused when the tools are added.
+- A harness cannot play here: the seat a harness plays from is the SOC's
+  console, which this lab replaces with IRIS.
+
+## 9. Quick reference
+
+| What | Where |
+|---|---|
+| Scenario and feature | `cyberrange/scenarios/cps_soc/{scenario,feature}.py` |
+| Command line of one run | `cyberrange/scenarios/cps_soc/cli.py` |
+| Deploy manifest | `cyberrange/scenarios/cps_soc/guest_files.py` |
+| The tools' components | `WazuhIndexer`, `WazuhDashboard`, `AlertShipper`, `IrisService`, `IrisAlertForwarder` in `cyberrange/planes/defense/components.py` ([Components](components.md)) |
+| The SOC's desk on IRIS and its belief feed | `nodes/soc/iris_desk.py`, `nodes/soc/belief_feed.py` |
+| IRIS's module and set-up | `nodes/soar/` |
+| Wazuh's configuration, rules and dashboards | `nodes/wazuh/` |
+| Images | `docker/wazuh-*`, `docker/iris-*`, `docker/soc-siem` (`make cps-soc-image`) |
+| Make targets | `make/cps-soc.mk` |
+| The scenario it builds on | [CPS advisor](scenario-cps-advisor.md), and under it [CPS](scenario-cps.md) |
+| For the people playing | [Red vs blue playground](playground-red-vs-blue.md#on-the-socs-tools-make-cps-soc-teams) |

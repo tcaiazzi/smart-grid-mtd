@@ -8,7 +8,7 @@ Every attack records what it really did in the run's ground truth (host-only):
     PlannedAttacker      reactive, tree-guided attacker, run in the lab (red_agent.py)
     RedConsole           the same steps, run by a person from a console on the attacker
     PassiveFingerprinter sniff -> CNN fingerprint of the nanogrid -> pick the IP to block
-    DeliveryAttack       blackhole episodes + benign faults (cyberrange/detection_scenario)
+    DeliveryAttack       blackhole episodes + benign faults, all in the ground truth
 
 Attack components that act during a phase expose ``attack(ctx)`` (blocking);
 the scenario calls it inside its attack phase.
@@ -677,7 +677,7 @@ class PassiveFingerprinter(Component):
 
 class DeliveryAttack(Component):
     """Blackhole episodes on the router (the CNN's pick or an oracle's) and
-    benign faults, all in the ground truth (cyberrange/detection_scenario)."""
+    benign faults, all in the ground truth."""
 
     plane, name = PLANE, "delivery_attack"
 

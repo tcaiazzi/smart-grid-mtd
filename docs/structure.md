@@ -3,21 +3,26 @@
 One rule decides where a file goes:
 
 ```
-core  <-  planes  <-  scenarios  <-  analysis
+core  <-  planes  <-  scenarios
 ```
 
 Arrows point at what a layer may import. **Nothing points back.**
 `tests/core/test_layering.py` enforces it by walking the imports, so this
 document describes something that is checked rather than hoped for.
 
-## The four layers
+## The three layers
 
 | Layer | Where | What belongs there |
 |---|---|---|
-| **core** | `cyberrange/core/` | Everything identical for every experiment: how a lab is declared, deployed, observed and torn down; how runs are repeated, scored and aggregated; the progress ledger and the dashboard that reads it (the two libraries its page loads are vendored in `cyberrange/core/vendor/`, the only third-party code in the tree). The core never names a scenario — the registry maps names to module paths as *strings*, which is its whole job. |
+| **core** | `cyberrange/core/` | Everything identical for every experiment: how a lab is declared, deployed, observed and torn down; how runs are repeated, scored and aggregated; the progress ledger and the dashboard that reads it (the four libraries its page loads — D3, Observable Plot, Split.js and Tabulator — are vendored in `cyberrange/core/vendor/`, the only third-party code in the tree). The core never names a scenario — the registry maps names to module paths as *strings*, which is its whole job. |
 | **planes** | `cyberrange/planes/{traffic,attack,defense,monitor}/` | Reusable building blocks: `components.py` is the plane's contract, `agents/` is the code that runs inside containers, and the host-side domain logic sits beside them. A plane may import the core. It may **not** import a scenario. |
 | **scenarios** | `cyberrange/scenarios/<name>/` | One directory per experiment, holding all of it: topology, episode, CLI, campaign, deploy manifest, metrics, figures, offline training. A scenario composes planes. |
-| **analysis** | `cyberrange/scenarios/<name>/analysis/`, `training/`, `tools/` | What runs *after* a run, offline, on its artifacts. It may import anything below it, and nothing imports it. |
+
+Inside a scenario, what runs *after* a run, offline, on its artifacts —
+`analysis/` (figures) and `training/` (offline training) — sits at the end of
+the same chain: it may import the scenario and everything below it, and nothing
+imports it. The same holds for the top-level `tools/`, which holds tooling that
+belongs to no single scenario.
 
 ## Beside the layers: `nodes/`
 
@@ -35,10 +40,13 @@ not a package).
 | Third-party software | — | installed by the node image (`docker/<image>/Dockerfile`), pinned |
 
 The preference is to **use an existing open-source tool** and keep in `nodes/`
-only what configures it. Today that is Wazuh on the CPS management network:
+only what configures it. Wazuh on the CPS management network is the model:
 `nodes/wazuh/manager/` (set-up, rules) and `nodes/wazuh/agent/` (set-up,
-profile, the active response that applies a countermeasure). The components
-that launch them (`WazuhManager`, `WazuhAgent`) contain no node logic.
+profile, the active response that applies a countermeasure), and for `cps-soc`
+`nodes/wazuh/indexer/` and `nodes/wazuh/dashboard/`. The components that launch
+them (`WazuhManager`, `WazuhAgent`, `WazuhIndexer`, `WazuhDashboard`) contain
+no node logic. DFIR-IRIS, nmap, Filebeat, `ttyd` and OpenSSH are used the same
+way: installed by an image, configured from here.
 
 Next to it: `nodes/soc/` (the SOC's analytics and its operator console),
 `nodes/redteam/` (the attacker node's brains: the autonomous tree-guided
@@ -56,8 +64,9 @@ node runs:
   (`soar_kg.py`, `soar_trees.py`, `techniques.py`, `attack_graph.py`), which the
   SOC runs on its inventory and the recon attacker on what it found.
 
-The agents under `cyberrange/planes/*/agents/` predate this boundary: they are
-node software too, and are meant to move here.
+The agents under `cyberrange/planes/*/agents/` are node software too, by this
+definition: code of the platform's own that runs in a container, kept beside
+the component that launches it. New node software goes under `nodes/`.
 
 ## Deciding where a new file goes
 
@@ -70,7 +79,7 @@ Ask what its lifecycle is:
   it where another one does too counts it as shared in `make platform-loc`).
 - **Does it run inside a container?** → `planes/<plane>/agents/`, and add it to
   the scenario's `guest_files.py`. It must be a flat module that imports only the
-  stdlib and what its node image installs (`docker/<scenario>/Dockerfile`),
+  stdlib and what its node image installs (`docker/<image>/Dockerfile`),
   because on the guest side there are no packages — see the deployment
   contract in `cyberrange/core/topology.py`.
 - **Does it orchestrate a lab, for any scenario?** → `core/`.
@@ -81,13 +90,13 @@ Ask what its lifecycle is:
 - **Does it run after the fact, on the results?** → that scenario's
   `analysis/` or `training/`.
 
-## The two rules that are easy to break quietly
+## The rules that are easy to break quietly
 
 **A plane that imports a scenario is no longer reusable.** It is also hard to
-see: the import is usually lazy, inside a method, and everything passes. Two
-components used to do this — `PlannedAttacker` reached for the CPS knowledge
-graph, `DeliveryAttack` for the MQTT fault injector. Both now take what they need
-as a constructor argument, supplied by the scenario that builds them. The same
+see: the import is usually lazy, inside a method, and everything passes. A
+component that needs something of a scenario's takes it as a constructor
+argument, supplied by the scenario that builds it: `PlannedAttacker` is given
+its attack tree, `DeliveryAttack` the MQTT fault injector. The same
 applies to the dashboard: a scenario declares its own panel and structure
 (`Scenario.panel_js`, `Scenario.structure`) and the core asks the registry,
 rather than importing one scenario's knowledge graph.
@@ -111,6 +120,10 @@ disjoint; `tests/core/test_loc_coverage.py` checks both, plus that every
 tracked source file is counted by somebody.
 
 ## Where things are verified
+
+[Contributing](contributing.md) has the rules in full, the gate to pass before a
+change is done, and what to do when one of these turns red
+([the guardrails](contributing.md#the-guardrails-and-what-each-one-freezes)).
 
 | Question | Answer |
 |---|---|

@@ -1,10 +1,10 @@
 # The platform and the CPS scenario: an overview
 
 This page introduces the cyber range to someone who has not worked on it yet.
-The first half covers the platform: what it is for, how it is built and what
-happens during a run. The second half covers the cyber-physical (`cps`)
-scenario in detail: the network, the plant, the attack, the defence and what is
-measured.
+The first part covers the platform: what it is for, how it is built and what
+happens during a run. The second introduces the cyber-physical (`cps`)
+scenario — the lab, the attack, the defence and what is measured — and points
+to the pages that describe each in detail.
 
 Each section ends with links to the reference pages that go deeper.
 
@@ -135,8 +135,8 @@ Every scenario gets the common parts of the page: the runs to choose from in a
 column on the left, the views as tabs in the middle (the run, and the campaign
 with its progress, ETA and results with confidence intervals), and a time bar,
 always in sight, to replay a run at ×1/×5/×20. Each scenario adds its own panel
-on top. The
-CPS panel is described in [§2.9](#29-following-a-run).
+on top;
+[The dashboard](dashboard.md) describes them all.
 
 The page is written for a reader who has not seen the code: attack steps,
 countermeasures and metrics go by their names (the recorded identifier is on
@@ -146,7 +146,7 @@ whether the page is still hearing from its server. Its charts, columns and long
 lists are drawn with libraries (Observable Plot, D3, Split.js, Tabulator) served
 from the repository itself, so it works on a machine with no internet access.
 
-### 1.8 The scenarios today
+### 1.8 The scenarios
 
 | Scenario | Question it answers |
 |---|---|
@@ -183,6 +183,9 @@ Further reading: [Architecture](platform.md) · [Where files go](structure.md) �
 
 ## Part 2 — The CPS scenario
 
+This part is the scenario in brief: enough to follow a run. Each paragraph
+names the page that has the detail.
+
 ### 2.1 The story
 
 A small low-voltage electricity-distribution plant is run by a PLC and supervised
@@ -206,232 +209,32 @@ The scenario's central question is: **can the defence recognise the attack, and
 stop it, before the plant suffers?** When it cannot, the scenario measures how
 much the plant suffers.
 
-### 2.2 The network
+### 2.2 The lab, the plant and the attack
 
-Three networks (Kathará collision domains) and eight nodes:
+**The lab** has three networks — IT, OT and management — and eight nodes. The
+attacker and the operator's HMI are on IT; the PLC and the plant's engine are
+on OT; a firewall between them lets one flow through, from the HMI to the
+engine over Modbus; an engineering workstation stands on both. The sensor and
+the SOC are on the management network. The topology, the addresses and the two
+channels that must not be confused are in
+[CPS §2](scenario-cps.md#2-architecture).
 
-```
-        IT ZONE                  FIREWALL                OT ZONE
-     10.10.0.0/24             10.10.0.1 |            10.20.0.0/24
-  ┌──────────────────┐        10.20.0.1       ┌──────────────────────┐
-  │ attacker  .0.10  │     ┌─────────────┐    │ plc        10.20.0.10│
-  │ hmi       .0.20  │────▶│ FORWARD:    │───▶│ engine     10.20.0.20│
-  │  (+ vulnerable   │     │ DROP except │    │  (digital twin +     │
-  │   diagnostics)   │     │ HMI→engine  │    │   Modbus server)     │
-  │ ews       .0.30 ─┼─────┼─────────────┼────┼─ ews       10.20.0.30│
-  └────────┬─────────┘     │ Modbus/TCP  │    └──────────┬───────────┘
-           │ eth1          └──────┬──────┘               │ passive tap
-           │ 10.30.0.30           │ eth2 10.30.0.1       ▼ sensor eth1 10.30.0.10
-  ─────────┴──────────────────────┴──────────────────────┴──────────────
-        MGMT 10.30.0.0/24          soc 10.30.0.20      ews eth2 10.30.0.50
-```
+**The plant** is a small low-voltage feeder simulated with pandapower: a real
+power-flow computation behind a Modbus/TCP server. A PLC keeps the voltage in
+band; the operator can take manual authority from the HMI
+([CPS §3](scenario-cps.md#3-the-physical-process)).
 
-| Node | Role | IT 10.10.0.0/24 | OT 10.20.0.0/24 | MGMT 10.30.0.0/24 | What it runs |
-|---|---|---|---|---|---|
-| `attacker` | the adversary's box | .10 | — | — | the attack driver (scripted chain, tree-guided planner, or a red team's console) |
-| `hmi` | operator workstation | .20 | — | .30 | the legitimate SCADA client; a **vulnerable diagnostics web app** (tcp/8080); a Wazuh agent; optionally the IT sensor |
-| `ews` | engineering workstation | .30 | .30 | .50 | a remote-maintenance service (tcp/8081) whose credential sits in a config file on the HMI; a Wazuh agent |
-| `firewall` | IT/OT boundary | .1 | .1 | .1 | iptables boundary; a Wazuh agent that enforces countermeasures |
-| `plc` | controller | — | .10 | — | the PLC control loop (Modbus master) |
-| `engine` | the plant | — | .20 | — | pandapower digital twin behind a Modbus/TCP server (tcp/5020) |
-| `sensor` | network IDS | — | passive, no address | .10 | the Modbus DPI sensor (rules + behavioural model); a Wazuh agent |
-| `soc` | security operations | — | — | .20 | Wazuh manager + the SOC analytics (knowledge graph, attack tree, policy) |
+**The attack** has to go through a legitimate host. The attacker exploits a
+vulnerable web application on the HMI and writes to the plant from there, or
+takes the engineering workstation and falsifies what the PLC reads. Seven
+attack modes differ in how loud and how lasting their effect is
+([CPS §5](scenario-cps.md#5-the-attack-modes)). The steps an attacker can
+take are an **attack tree**, generated from a knowledge graph of the lab; an
+attacker can follow a fixed chain, plan on the tree step by step, or — in
+`cps-recon` — derive the tree itself by reconnaissance
+([KG and attack trees](kg-and-attack-trees.md)).
 
-**The zones:**
-
-- **IT** is the office network. The attacker lives here, next to the HMI.
-- **OT** is the plant network: the PLC and the engine. The sensor listens here
-  through an interface with no address, so it sees all the Modbus traffic, never
-  transmits, and cannot be reached from OT.
-- **MGMT** is the network of the security tooling. Agents report to the SOC over
-  it, and countermeasures reach their host over it. The firewall forwards
-  nothing to or from MGMT. The engine and the PLC are deliberately not on it:
-  a host that shared a network with the engine could write to it without
-  crossing the boundary.
-
-**The firewall** drops all forwarded traffic except one sanctioned flow:
-**HMI → engine, Modbus tcp/5020** (plus the replies to it). This rule has two
-consequences:
-
-1. The attacker cannot reach the plant directly. It has to compromise the HMI
-   first and use it as a springboard.
-2. The firewall cannot distinguish a legitimate operator command from a hijacked
-   one, because both are "HMI to engine, tcp/5020". Compensating for that is
-   the job of the DPI sensor and of the SOC.
-
-**The two weak points are deliberate.** The HMI and the engineering workstation
-both stand on IT and on MGMT, so whoever takes either one is on the management
-network too. The workstation also stands on OT, like the machine that programs a
-PLC in a real plant. It forwards nothing and speaks no Modbus of its own, but
-whoever takes it is on the OT link, next to the PLC and the engine.
-
-**The management network and instrumentation are separate channels.** The
-experiment itself (ledger, dashboard, artifact download, ground truth) never
-travels on a lab network. It goes through the container runtime (`docker exec`,
-file copy), so no node in the lab can see it or reach it.
-
-The lab is declared as data in `cyberrange/scenarios/cps/lab.py`: zones, hosts
-with their roles and interfaces, services, and the flows the boundary allows.
-Addresses, routes, the firewall ruleset, the list of hosts that run a Wazuh
-agent and the SOC's inventory are all **derived** from it. A different lab is a
-different specification, not new code. `make lab-conf SCENARIO=cps` exports the
-lab as a classic Kathará `lab.conf` with its `.startup` files.
-
-### 2.3 The physical plant
-
-The plant is a low-voltage (0.4 kV) distribution feeder modelled in
-**pandapower**. Voltages and loadings come from a power-flow computation that
-runs every second; nothing is scripted.
-
-```
-external grid ──feeder line (breaker)── load bus ──line── generator bus
-   (slack)                               (~50 kW)          (DG, 60 kW rated)
-```
-
-- A **load** of about 50 kW, with a seeded random variation.
-- A **distributed generator (DG)** rated 60 kW, delivering about 20 kW in normal
-  operation.
-- **Normal state**: bus voltages within 0.95–1.05 pu, and line loading at or
-  below 100%.
-
-The plant is commanded through three **holding registers** on the engine, and
-reports its state through **input registers**:
-
-| Register | Name | Meaning | Who may write it |
-|---|---|---|---|
-| HR 0 | `dg_setpoint` | DG power setpoint (kW × 10; nominal 200 = 20 kW, maximum 600 = 60 kW) | PLC, HMI |
-| HR 1 | `switch_cmd` | feeder breaker: 0 = closed, 1 = open | nobody remotely (only the SOC's responder) |
-| HR 2 | `ctrl_mode` | control authority: 0 = AUTO (the PLC regulates), 1 = MANUAL (the operator) | HMI |
-| IR 0–5 | measurements | load-bus voltage, DG-bus voltage, line loading, load power, DG power, "abnormal" flag | read-only |
-
-All the nodes share this map, with its scales, the valid ranges and the per-role
-access policy, through a single **plant contract**
-(`cyberrange/planes/defense/ot_registers.py`). The PLC, the engine, the sensor
-and the SOC's knowledge graph all read the same definition.
-
-**The plant is a description too.** `ot_registers.plant()` holds the feeders —
-their lines, load and generator, the generator's rating — and the plant's
-limits; the feeder above is the default one. A plant may have several feeders
-on the same slack bus, each served by the engine as a Modbus unit of its own,
-with the same register map. Every party that needs the plant receives the same
-description: the engine solves all of it in one power flow, each PLC and HMI is
-bound to its feeder, the sensor keeps each feeder's state apart, and the SOC
-gets one set of registers per feeder in its knowledge graph.
-
-**A command can be legal and still dangerous.** The feeder is sized so that the
-DG at 100% of its rating, a perfectly valid value, causes an overvoltage. That is
-what makes the scenario interesting: a range check alone cannot stop an attacker
-who sends in-range values from a legitimate host.
-
-### 2.4 Normal operation
-
-The plant never sits idle. The defence has to tell the attack apart from
-legitimate traffic:
-
-- **The PLC** (`plc_controller.py`) is the only automatic regulator. In AUTO it
-  keeps the worst bus voltage in band, rejects setpoints outside the envelope,
-  and relaxes back to the 20 kW nominal. In MANUAL it steps aside and leaves
-  authority to the operator.
-- **The HMI client** (`hmi_client.py`) keeps one persistent Modbus session that
-  polls the plant. About every 12 s it performs a safe operator dispatch:
-  MANUAL, 15–35 kW for 5 s, then back to AUTO. This is the legitimate behaviour
-  the attack must be distinguished from.
-- With the IT sensor enabled, the HMI also generates legitimate periodic traffic
-  to its own diagnostics app, so that the IT sensor has a baseline too.
-
-### 2.5 The attack
-
-#### The way in
-
-Every attack starts the same way:
-
-1. **Initial access** (ATT&CK T1190). The attacker exploits a real OS command
-   injection in the HMI's diagnostics web app (`vuln_app.py`).
-2. **Execution** (T1059). It now runs commands on the HMI.
-3. From there it takes one of **two paths** to the plant:
-   - **Through the HMI** — the sanctioned flow. The HMI is allowed to talk Modbus
-     to the engine, so the attacker's writes cross the firewall *from a legitimate
-     host*.
-   - **Through the engineering workstation** (T0886). From the HMI, the attacker
-     reads the workstation's maintenance credential, takes the workstation, and is
-     now directly on the OT link without crossing the firewall.
-
-#### The attack tree
-
-The SOC and the tree-guided attacker reason on the same attack tree. Nobody
-writes it: it is **generated** from the knowledge graph of the lab
-(`nodes/common/attack_graph.py`). The steps are data (`techniques.py`), and the
-graph says where they apply: a way in through every host that may command the
-plant and serves an application, a direct way from the hosts without a Modbus
-role on the plant's network, and the actions on every feeder. Every
-precondition is checked against the real network: if the firewall rule is
-removed, the "through the HMI" branch becomes infeasible. A step that recurs —
-two HMIs, two feeders — takes an id qualified by where it is
-(`breaker_open@hmib:u2`); on the lab below every step occurs once.
-
-```mermaid
-flowchart TB
-  impact["Physical impact on the feeder<br/>(OR)"]
-  impact --> via_hmi["Through the HMI<br/>(AND)"]
-  impact --> direct["From a host without a Modbus role<br/>(AND)"]
-
-  via_hmi --> it_access["it_access<br/>exploit the web app · T1190"]
-  via_hmi --> it_exec["it_exec<br/>command execution on the HMI · T1059"]
-  via_hmi --> pivot["pivot<br/>use the HMI→engine Modbus flow"]
-  via_hmi --> ot_action["Manipulate the plant over Modbus<br/>(OR)"]
-  ot_action --> L1["setpoint_oor · T0855"]
-  ot_action --> L2["breaker_open · T0855"]
-  ot_action --> L3["mode_hijack · T0831"]
-  ot_action --> L4["setpoint_ramp · T0831"]
-  ot_action --> L5["setpoint_oscillation · T0831"]
-  ot_action --> L6["breaker_chatter · T0855"]
-
-  direct --> ot_foothold["ot_foothold<br/>foothold on the workstation · T0886"]
-  direct --> ot_direct["Act on the plant from there<br/>(OR)"]
-  ot_direct --> L7["ot_write_unknown · T0855"]
-  ot_direct --> aitm["Between the PLC and the plant<br/>(AND)"]
-  aitm --> L8["ot_aitm · T0830"]
-  aitm --> L9["meas_fdi · T0856"]
-```
-
-The recon-driven attacker builds its own tree with the same generator, on what
-its reconnaissance found: what it never saw is absent or not feasible, and the
-run scores the difference.
-
-The IT steps (`it_access`, `it_exec`, `pivot`) are **not observable** by the OT
-sensor. The SOC *infers* them once it observes a later OT step, unless the IT
-sensor is running, in which case it *observes* them directly.
-
-#### The attack modes
-
-The scripted driver runs a fixed chain chosen with `CPS_ATTACK_MODE`:
-
-| Mode | What the attacker does | Physical effect | How hard to detect |
-|---|---|---|---|
-| `setpoint-overvoltage` | writes a DG setpoint far outside the envelope (200 kW) | overvoltage and line overload; the PLC rejects the value and the plant recovers | low: plainly out of range |
-| `breaker-open` | opens the feeder breaker | the downstream section loses power, and stays without it | low: nobody may write the breaker |
-| `manual-hijack` | takes MANUAL authority, dispatches 60 kW (in range) | persistent overvoltage that outlives the attacker, because the PLC has stood down | **high**: every value is legal and the source is the HMI |
-| `slow-ramp` | MANUAL, then raises the setpoint 1 kW at a time up to 60 kW | the same overvoltage, reached gradually | **high**: no single write is a jump |
-| `setpoint-oscillation` | MANUAL, then swings the setpoint between 55 and 5 kW | the voltage swings for as long as the attacker writes | medium |
-| `breaker-chatter` | opens and re-closes the breaker repeatedly, ending open | repeated loss of supply | low |
-| `meas-fdi` | takes the workstation, ARP-poisons the PLC↔engine link, and reports every voltage to the PLC as 0.96 pu | the PLC believes the voltage is low and **overvolts the feeder by itself** | **no attacker write at all**: only address and reading anomalies give it away |
-
-#### Who drives the attack
-
-The same lab can be attacked by four kinds of driver:
-
-| Driver | Where it runs | What it knows | Enabled by |
-|---|---|---|---|
-| **Scripted chain** | host-driven, through the attacker node | a fixed sequence per mode | default (`CPS_ATTACK_DRIVER=scripted`) |
-| **Tree-guided planner** | in the lab, on the attacker node (`nodes/redteam/red_agent.py`) | it is handed the attack tree; it picks its next step from the current state and, if a countermeasure closes a path, tries another or gives up | `CPS_ATTACK_DRIVER=planner`, with a profile: `opportunistic` (biggest reachable impact), `targeted` (a chosen goal), `stealthy` (quietest impact, longer pauses); `CPS_DWELL` sets the pause between steps |
-| **Recon-driven attacker** | in the lab, on its own image with nmap | only a scan scope; it **derives** its attack tree with nmap on IT and by living off the land on the HMI (reading `/proc/net/tcp`, using the HMI's own pymodbus) | the `cps-recon` scenario |
-| **Human red team** | a web console and a terminal on the attacker node | only what its own steps reported | `cps-advisor` / `cps-soc` with teams |
-
-All drivers compose the **same lab primitives** (the exploit client and the raw
-Modbus writer), so they differ in strategy, not in capability. Every attack step
-and every write is recorded with its timestamp in the ground truth.
-
-### 2.6 The defence
+### 2.3 The defence
 
 The defence is a chain: **sense → collect → reason → act**, with an optional
 person between reasoning and acting. All of it runs **inside the lab**. The host
@@ -462,172 +265,30 @@ flowchart LR
   OP -. approve / reject .-> SA
 ```
 
-#### Sense: the sensors
+The sensors and their rules are in [CPS §6](scenario-cps.md#6-detection). How
+the SOC maps alerts onto the tree, keeps its belief and picks countermeasures —
+and the countermeasures themselves — are in
+[KG and attack trees](kg-and-attack-trees.md). In `cps` the SOC acts by itself;
+in `cps-advisor` every countermeasure is a suggestion an operator approves or
+rejects, and one nobody answers expires: no answer is not consent. In `cps-soc`
+the suggestions arrive as tasks in DFIR-IRIS.
 
-**The OT sensor** (`ot_sensor.py`, `ot_model.py`) sits on the passive tap. It
-decodes Ethernet/IP/TCP/Modbus by hand, using only the standard library and
-numpy, and pairs every request with its response. That way it knows both the
-commands issued and the plant state they produced. Two detectors run in
-parallel:
+### 2.4 A run and its score
 
-- **Rules**: out-of-range command; unknown client; role-policy violation (e.g.
-  any write to the breaker); *unsafe command* (a sensitive write followed by the
-  voltage leaving the band); *manual-mode excursion*; *address spoofing* (an IP
-  seen from a different MAC, which points at a man-in-the-middle); *conflicting
-  reading* (two different answers to the same request, which points at
-  falsified measurements).
-- **Behavioural model**: per-second features (session turnover, setpoint jump
-  size, time in MANUAL, voltages), robustly scaled and scored by their distance
-  from the nearest windows of normal operation (scikit-learn). There is one
-  model per feeder; each calibrates on the first 45 s, and it re-scores the
-  current window on every write. That is what lets it flag an attack **before**
-  the physical effect appears.
+An episode deploys the lab, starts its services, lets the plant run normally
+while the sensor's behavioural model calibrates, runs the attack while the SOC
+decides and acts, watches the plant afterwards, then collects the artifacts and
+tears the lab down: about a minute and a half
+([CPS §7](scenario-cps.md#7-running-an-experiment)).
 
-**The IT sensor** (`it_sensor.py`, enabled with `CPS_IT=1`) runs on the HMI and
-makes the early steps observable:
+The score is computed afterwards, from the artifacts: whether and how fast each
+detector saw the attack, and whether **before the physical impact**; how much
+the plant suffered and whether it recovered; whether the response was the one
+the attack called for, how fast, and at what cost to the operator
+([CPS §9](scenario-cps.md#9-what-is-measured)). [The dashboard](dashboard.md)
+follows the run while it happens and replays it afterwards.
 
-| Evidence | Finding | Attack step |
-|---|---|---|
-| the diagnostics app's access log | `web_injection_pattern` | `it_access` |
-| the process table (a child of the web app) | `web_child_process` | `it_exec` |
-| open connections (a new Modbus client) | `unexpected_modbus_client` | `pivot` |
-
-#### Collect: Wazuh
-
-The SOC node runs the **Wazuh manager**. The sensor, the HMI, the workstation
-and the firewall each run a **Wazuh agent**. These are the hosts on the
-management network; the engine and the PLC run none. Findings travel as Wazuh
-events and become alerts on the manager, with a median latency of about 0.5 s.
-Countermeasures travel back the same way, as Wazuh **active responses**. The
-manager asks an agent for a response by **id**, and the agent runs the commands
-mapped to that id in an allowlist provisioned on its host. A request never
-carries a command.
-
-#### Reason: the SOC analytics
-
-The analytics service on the SOC node (`nodes/soc/`) reads the manager's alerts
-and does four things:
-
-1. **Knowledge graph.** At start-up it builds a graph of the lab from an
-   *inventory* (what a real SOC would be configured with): hosts, roles, zones,
-   addresses, services, the plant's registers, who may write them, and the
-   firewall rules. It can answer questions such as "can host X reach port P on
-   host Y?".
-2. **Attack tree.** It generates the attack tree (§2.5) from the graph, with
-   each branch feasible or not on this network, and the countermeasures that
-   annotate it.
-3. **Belief.** It maps each finding to weighted evidence on tree nodes. Each node
-   becomes *suspected*, *confirmed* or *inferred*. Command evidence (a wrong
-   write) is kept apart from consequence evidence (the voltage left the band),
-   so that a symptom is not mistaken for its cause.
-4. **Policy.** It turns the belief into a decision:
-   - `rules`: a static playbook, used as the baseline. Each confirmed step has
-     its fixed countermeasures, each fired once.
-   - `solver`: it chooses the subset of countermeasures that minimises expected
-     loss plus operational, time and energy cost, and returns the Pareto front
-     of the alternatives it weighed. The operational cost is derived from the
-     graph, from what each countermeasure cuts off (e.g. blocking the flow also
-     cuts the operator's legitimate control).
-
-   Every decision carries its justification: the trigger, the tree nodes
-   covered, the cost terms.
-
-`CPS_RESPOND` selects the policy: `off` (watch only), `rules` or `solver`. The
-whole management plane runs in every episode, even with `off`, so that a
-detection-only run carries the same load and stays comparable.
-
-#### Act: the countermeasures
-
-Each countermeasure **prevents** some tree nodes (it closes the path) or
-**restores** them (it undoes the effect). What it prevents is derived from the
-graph: the steps whose path through the network its effect takes away.
-
-| Countermeasure | Runs on | What it does | Prevents / restores |
-|---|---|---|---|
-| `block_flow` | firewall | iptables DROP of the HMI→engine flow, at the top of FORWARD, and kills the open session | prevents `pivot` and every Modbus leaf; costly, because it also cuts the operator |
-| `isolate_hmi` | hmi | takes the HMI's IT interface down; **needs operator approval** | prevents the whole HMI branch |
-| `force_auto` | firewall | Modbus write: back to AUTO, plus the nominal setpoint | restores hijack, ramp, oscillation, out-of-range setpoint |
-| `restore_breaker` | firewall | Modbus write: re-close the breaker | restores breaker open / chatter |
-| `isolate_ews` | ews | takes the workstation off the OT link | prevents the workstation branch |
-| `repair_arp` | firewall | re-announces the true PLC and engine MAC addresses | restores man-in-the-middle and falsified measurements |
-| `kill_proc_tree` | hmi | kills the processes the web app spawned (the RCE); needs the IT sensor | prevents `it_exec` onwards |
-| `block_web_src` | hmi | drops the attacker's source at the web app; needs the IT sensor | prevents `it_access` onwards |
-| `notify` | — | alerts the operator, no action | — |
-
-The restoring writes come from the **firewall's own OT address**, which the
-plant contract gives a dedicated `responder` role. The sensor recognises these
-writes as the response and raises no finding for them. The plant itself needs
-no agent, and no new path towards it is opened.
-
-#### A person in the loop
-
-In `cps` the approval of `isolate_hmi` is simulated (`CPS_APPROVAL=auto`,
-`deny` or `delay:<s>`). In **`cps-advisor`** the SOC acts on nothing by
-itself. Every countermeasure becomes a **suggestion** with its explanation
-(trigger, tree nodes covered, commands, costs, alternatives), and an operator
-approves or rejects it on the SOC's console. A suggestion nobody answers
-expires and is not applied: no answer is not consent. In **`cps-soc`** the same
-suggestions arrive as tasks in DFIR-IRIS, and the blue team follows alerts, the
-attack tree and the knowledge graph in the Wazuh dashboard.
-
-### 2.7 An episode, phase by phase
-
-| Phase | Default length | What happens |
-|---|---|---|
-| `deploy` | a few seconds | the lab comes up; the firewall applies its ruleset |
-| `services` | ~2 s | Wazuh manager, OT sensor, engine, PLC, HMI, vulnerable app, maintenance service, [IT sensor], Wazuh agents, SOC analytics |
-| `normal` | 60 s | normal operation; the behavioural model calibrates on the first 45 s, which must end at least 5 s before any attack |
-| `attack` | a few seconds (planner: longer with dwell) | the chosen driver runs; the SOC decides and acts while it runs |
-| `post_attack` | 30 s | the plant is watched after the attack: does it recover, or does the impact persist? |
-| `download` / `undeploy` | a few seconds | artifacts collected, lab torn down |
-
-A normal-only run takes about a minute; a run with an attack takes about a
-minute and a half.
-
-### 2.8 What is measured
-
-`make cps-metrics` (or the campaign, automatically) computes:
-
-| Area | Metrics |
-|---|---|
-| **Detection** (per detector: rules, model, IT, combined) | detection rate; latency from the attack start and from the first malicious write; whether it fired **before the physical impact**; false alarms, and how many fell in legitimate operator windows |
-| **Plant** | time to impact; impact duration; maximum voltage deviation; whether the impact persists after the attack; time spent in MANUAL; energy |
-| **Response** | time to mitigate (first malicious write → plant back in band for good); decision latency; accuracy against the countermeasures each mode needs, and over-response; attacker writes that still succeeded after a block; false responses; share of explained decisions; seconds the operator was cut off; latency of each leg (finding → alert → request → effect) |
-| **Attacker** (planner) | furthest stage reached (access / exec / pivot / impact); whether it succeeded; whether it was **prevented** before any write landed |
-| **Recon** (`cps-recon`) | tree fidelity: precision and recall of the attack tree the attacker derived, against the true one |
-| **People** (`cps-advisor`, `cps-soc`) | suggestions approved, rejected and expired; every command typed by each team, on the record |
-
-As an indication from single seeded runs: the loud attacks are detected within
-hundredths of a second of the first write. In `manual-hijack` the behavioural
-model fires before the impact, while the rules notice only once the voltage has
-left the band. With the IT sensor and a dwell, an opportunistic planner attack
-is stopped at initial access, before any write reaches the plant. Campaigns
-exist to turn indications like these into statistics.
-
-### 2.9 Following a run
-
-The CPS panel of the dashboard has six views, as tabs. The run and the time
-shown stay the same across views, so one moment can be compared from both
-sides:
-
-- **Match**, the one the page opens on: the kill chain (when each step happened,
-  when the defence suspected and confirmed it, what covered it, and who was
-  ahead), the attacker · defender card and the plant.
-- **Structure**: the structure views, below.
-- **Attacker**: only what the attacker did and knew.
-- **Defender**: only what the defence saw, believed and decided.
-- **Players**: what the defence asked its operator and what each team ran, when
-  people or harnesses play.
-- **Campaign**: progress, every run with what was measured on it, the results.
-
-The **journal** of every fact is in a column beside whichever view is open.
-
-The structure views draw the **topology**, the **knowledge graph** and the
-**attack tree**. The tree can show the defender's belief, the attacker's
-progress, or both overlaid (truth versus belief). The time bar replays all of it
-fact by fact.
-
-### 2.10 Variants and playgrounds
+### 2.5 Variants and playgrounds
 
 | Want to… | Use |
 |---|---|
@@ -644,50 +305,12 @@ console is protected by a per-run token, and each team also has a web terminal.
 Every command typed in those terminals goes on the record with the team it
 belongs to. The referee watches the read-only dashboard.
 
-### 2.11 Trying it
+### 2.6 Trying it and its limits
 
-```bash
-make cps-selftest       # physics, Modbus, PLC, detectors, attack chain — no Docker needed
-make cps-image          # build the node images (once)
-
-make dashboard          # terminal 1: http://127.0.0.1:8765
-
-# terminal 2: a normal run, then an attack with automatic response
-make cps-lab    CPS_OUT=output/cps/normal SEED=1
-make cps-attack CPS_OUT=output/cps/hijack CPS_ATTACK_MODE=manual-hijack CPS_RESPOND=solver SEED=1
-make cps-metrics CPS_OUT=output/cps/hijack
-
-# the tree-guided attacker against a defence with IT telemetry
-make cps-attack CPS_OUT=output/cps/plan CPS_ATTACK_DRIVER=planner CPS_DWELL=3 \
-    CPS_IT=1 CPS_RESPOND=rules SEED=1
-
-# a campaign: modes × seeds, resumable
-make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5 DRY=1   # show the grid and the planned time
-make cps-campaign CPS_CAMPAIGN=c1 CPS_SEEDS=1-5
-```
-
-`make help` lists every target with what it writes and where.
-
-### 2.12 Limits and what is next
-
-- The response loop is deliberately small. It is a prototype meant to fix the
-  interfaces of WP2 (knowledge graph, attack trees, response) and WP3 (the
-  attacker–defender game).
-- The attack tree is generated, but from a fixed template of ways in and
-  actions: chaining arbitrary techniques by their pre- and postconditions, and
-  the probability and time of each step, are still to come.
-- The lab and the plant can be larger than today's — the attacker takes any
-  way in and acts on any feeder, the sensor keeps a behavioural model per
-  feeder — but no scenario runs such a lab yet, the falsified-measurement
-  branch (`meas-fdi`) acts on one PLC only, and the attacker of `cps-recon`
-  discovers one way in and one feeder.
-- The stochastic game model between attacker and defender is still to come; the
-  tree-guided planner is its baseline adversary.
-- The energy cost of the countermeasures is estimated, not measured.
-- The Wazuh manager's API listens on the management network with default
-  credentials, so an attacker on the HMI could in principle call it. The
-  exposure is modelled in the lab but not yet walked by the attack tree.
-- Some ATT&CK mappings still have open review notes.
+[Set-up and first run](getting-started.md) takes you to a first scored run.
+What the scenario does not do yet is listed in
+[CPS §11](scenario-cps.md#11-scope-and-what-is-next), and for the tree and the
+response in [KG and attack trees §10](kg-and-attack-trees.md).
 
 ---
 

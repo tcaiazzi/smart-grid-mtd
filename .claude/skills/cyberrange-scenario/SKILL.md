@@ -1,6 +1,6 @@
 ---
 name: cyberrange-scenario
-description: "Write or change a scenario of this cyber range: the Scenario contract, the declarative Topology, episode phases, the cli.py entry point, the registry entry and the SOURCES/GUEST_MANIFESTS accounting. Use when: adding a scenario under cyberrange/scenarios/, editing scenario.py or topology.py of mqtt-mtd, cps or cps-advisor, adding a node, link, address, route or zone to a lab, changing an episode's phases, options or validation, registering a scenario name, or deciding whether a new file belongs to core, a plane or a scenario."
+description: "Write or change a scenario of this cyber range: the Scenario contract, the declarative Topology, episode phases, the cli.py entry point, the registry entry, the SOURCES/GUEST_MANIFESTS accounting, and the edits a new scenario needs outside its directory (make targets, guardrail tables, snapshots, docs nav). Use when: adding a scenario under cyberrange/scenarios/, editing scenario.py, feature.py or topology.py of mqtt-mtd, cps, cps-advisor, cps-recon or cps-soc, adding a node, link, address, route or zone to a lab, changing an episode's phases, options or validation, registering a scenario name, or deciding whether a new file belongs to core, a plane or a scenario."
 argument-hint: "What the scenario should do: nodes and zones, what runs on them, the episode's phases, what it must measure"
 user-invocable: true
 ---
@@ -32,11 +32,14 @@ the adapter inside `cyberrange/core/topology.py` — not for scenario work here.
 - `cyberrange/core/scenario.py` — the contract, as a docstring. Every member is
   listed there with one line of purpose.
 - `docs/platform.md` §2 "Writing a scenario: the contract" (member-by-member
-  table) and §6 "Adding a scenario: checklist".
+  table), and `docs/new-scenario.md` for the whole checklist and a worked
+  variant (`cps-recon`).
 - `docs/structure.md` — what belongs to a scenario versus a plane.
-- The closest existing scenario: `cyberrange/scenarios/cps/` is the smaller one,
-  `cyberrange/scenarios/mqtt_mtd/` the one with campaigns, analysis and training,
-  `cyberrange/scenarios/cps_advisor/` the one built on another.
+- The closest existing scenario: `cyberrange/scenarios/mqtt_mtd/` is the one
+  with a lab of its own, analysis and training; `cyberrange/scenarios/cps/` the
+  base of the CPS family (lab as a `LabSpec`, features, campaign, metrics);
+  `cyberrange/scenarios/cps_recon/` the smallest one built on another, and
+  `cps_advisor/` and `cps_soc/` the larger ones.
 
 ## A scenario built on another
 
@@ -169,7 +172,15 @@ lazily so listing one scenario never imports another's dependencies:
 SCENARIOS = {"cps": "cyberrange.scenarios.cps.scenario:CpsScenario"}
 ```
 
-### 8) Test it without Docker
+### 8) Give it make targets
+
+`make/<name>.mk` holds the targets (a variant reuses the `CPS_*` variables, see
+`make/cps-recon.mk`). Name the module once, as an `M_*` variable in
+`make/common.mk`. In the `Makefile`: `include make/<name>.mk`, the targets in
+`.PHONY`, a line each in the `help` text. Target names are internal API: choose
+them once.
+
+### 9) Test it without Docker
 
 `tests/scenarios/<name>/test_<name>_scenario.py`, using `tests/helpers/kathara.py`:
 `FakeManager` records every command and serves canned output, `fake_downloads`
@@ -177,10 +188,31 @@ serves artifacts. The whole lifecycle runs — commands, artifacts, ledger, grou
 truth, exit code — with no containers. See `tests/core/test_progress.py` and
 `tests/scenarios/mqtt_mtd/test_mqtt_scenario.py` for the pattern.
 
+### 10) Teach the guardrails about it
+
+A new scenario turns several guardrails red until they know it. All of these,
+in the same change (**cyberrange-guardrails** explains each):
+
+- the list of registered names in `tests/core/test_core.py`;
+- `MACHINES` and `IMAGE_OF` in `tests/core/test_guest_imports.py`: what each
+  node is staged with, and on which image;
+- the snapshots, regenerated on purpose: a new `tests/snapshots/lab-<name>.json`,
+  and `loc-totals.json` with a new key and `platform` one line larger (the
+  registry entry). If anything else moved, find out why first;
+- `MIN_TESTS` in `tests/conftest.py`, raised by the tests added;
+- the scenario guide's copy of the repository:
+  `UPDATE_GUIDE_CONTRACT=1 .venv/bin/python -m pytest tests/core/test_scenario_guide.py -q`.
+
+### 11) Document it
+
+A page `docs/scenario-<name>.md` and its entry under *Scenarios* in the `nav` of
+`mkdocs.yml`; add the scenario to the lists in `CLAUDE.md`, `README.md` and
+`docs/index.md`.
+
 ## Decision branches
 
 - **Changing an existing scenario?** Steps 1–3 only, plus step 6 if you added a
-  file. Check `make lab-conf SCENARIO=<name>` output before and after: if the
+  file and step 8 if you added a target. Check `make lab-conf SCENARIO=<name>` output before and after: if the
   guest column or a `.startup` changed and you did not mean it,
   `tests/core/test_deploy_contract.py` will stop you.
 - **The change needs a new component or guest agent?** Stop here and use
@@ -211,8 +243,8 @@ truth, exit code — with no containers. See `tests/core/test_progress.py` and
 
 ```sh
 make lab-conf SCENARIO=<name>      # renders the lab offline; read what it staged
-.venv/bin/python -m pytest tests -q
 make platform-loc                  # your scenario appears, totals move as expected
+make check                         # lint, the suite, a dry run of every target
 ```
 
 The scenario is done when: it is listed by `python -m cyberrange.core scenarios`,

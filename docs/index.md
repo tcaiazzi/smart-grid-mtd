@@ -57,8 +57,9 @@ contract, [Components](components.md) for the catalogue, and
 
 ## Where to go next
 
-- **Run something**: [Set-up and first run](getting-started.md), then [Running and measuring](running-and-metrics.md).
+- **Run something**: [Set-up and first run](getting-started.md), then [Running and measuring](running-and-metrics.md) and [The dashboard](dashboard.md).
 - **Understand a scenario**: the scenario pages above.
+- **Play it**: the [red vs blue playground](playground-red-vs-blue.md) for people, [harnesses as players](playing-with-agents.md) for agents.
 - **Understand the response loop**: [SOAR — KG & attack trees](kg-and-attack-trees.md).
-- **Build on it**: [Extending the platform](extending.md).
-- **Unfamiliar term?** The [Glossary](glossary.md).
+- **Build on it**: [Extending the platform](extending.md), [Creating a scenario](new-scenario.md) and [Contributing](contributing.md).
+- **Look something up**: [targets, variables and artifacts](reference.md), [Troubleshooting](troubleshooting.md), the [Glossary](glossary.md).
