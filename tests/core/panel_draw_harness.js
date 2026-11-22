@@ -61,6 +61,43 @@ globalThis.document = { createElementNS: (ns, t) => new El(t, ns), createElement
   getElementById: id => els[id] || (els[id] = new El("div")),
   documentElement: { dataset: {}, namespaceURI: XHTML }, defaultView: globalThis };
 document.documentElement.ownerDocument = document;
+// Tabulator lays its rows out in a real window, so it is not loaded here: this
+// stand-in keeps a list's data the way Tabulator's calls do (rows known by
+// `index`, added on top, updated in place, replaced), writes each row through
+// the column formatters so a check can read the list as text, and records the
+// calls, so a check can tell a list that was added to from one built again.
+globalThis.Tabulator = class {
+  constructor(box, options) {
+    this.box = box; this.options = options; this.rows = [...(options.data || [])]; this.calls = [];
+    Tabulator.last = this; this.draw();
+  }
+  draw() {
+    this.shown = this.rows.map(d => {
+      const row = new El("div"), component = { getData: () => d, getElement: () => row };
+      for (const c of this.options.columns) row.append(c.formatter ? c.formatter({ getData: () => d, getValue: () => d[c.field] }) : String(d[c.field]), " ");
+      this.options.rowFormatter?.(component);
+      return component;
+    });
+    this.box.replaceChildren(...this.shown.map(component => component.getElement()));
+    if (!this.rows.length && this.options.placeholder) this.box.append(this.options.placeholder);
+  }
+  on(name, fn) { if (name === "tableBuilt") fn(); }
+  addData(rows, top) { this.calls.push("addData"); this.rows = top ? [...rows, ...this.rows] : [...this.rows, ...rows]; this.draw(); return Promise.resolve(); }
+  updateData(rows) {
+    this.calls.push("updateData");
+    const key = this.options.index;
+    for (const u of rows) {
+      const i = this.rows.findIndex(d => d[key] === u[key]);
+      if (i < 0) throw new Error(`updateData: no row ${u[key]}`);
+      this.rows[i] = { ...this.rows[i], ...u };
+    }
+    this.draw(); return Promise.resolve();
+  }
+  replaceData(rows) { this.calls.push("replaceData"); this.rows = [...rows]; this.draw(); return Promise.resolve(); }
+  getRows() { return this.shown; }
+  scrollToRow() { return Promise.resolve(); }
+  destroy() { this.calls.push("destroy"); }
+};
 // A panel may defer drawing to a microtask (once its box is on the page): run it
 // now, so that what it throws is caught and named like the rest.
 globalThis.queueMicrotask = fn => fn();
@@ -78,7 +115,7 @@ require("vm").runInThisContext(model[1], { filename: "dashboard.html (model)" })
 let VIEW = null, TIME = null;
 // The run's structure as the page hands it to a panel; null while it loads.
 let STRUCTURE = null;
-const api = { get S() { return S; }, $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table,
+const api = { get S() { return S; }, $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table, grid,
   plot, plotTip, timeAxis, now: () => 200, statusBadge, structure: () => STRUCTURE,
   shownRunId: () => "r1", select() {}, render() {}, stepCell: () => h("td"), queueTable() {},
   time: () => TIME, setTime(t) { TIME = t; }, view: () => VIEW };
@@ -193,6 +230,21 @@ function checkPage(fail) {
     const own = { frame_t: 121, write_t: 122 }[spec.t] ?? 120;
     if (kept && kept.t !== own) fail(`${kind}: its time is ${kept.t}, not the ${spec.t || "guest_t"} it happened at (${own})`);
   }
+  // A run's results are read under the keys a campaign aggregates them under,
+  // and a yes/no is said as one: on a single run "1" reads as a count.
+  const flat = flatMetrics(SCORE.metrics);
+  if (flat["detectors.combined.latency_from_write_s"] !== 0.5 || flat["response.accurate"] !== true || !Array.isArray(flat["tree_fidelity.extra"]))
+    fail(`a run's metrics are not flattened as the campaign's are: ${JSON.stringify(flat)}`);
+  const said = [metricValue(true, metric("response.accurate")), metricValue(null, metric("mitigated_s")), metricValue(4, metric("recovery_s")), metricValue([], metric("x"))];
+  if (said.join("|") !== "yes|—|4 s|none") fail(`a run's results read "${said.join("|")}"`);
+  // The rows of a run's results: the scenario's own first, each beside the
+  // campaign's mean for runs of its mode; with no panel, every metric is "other".
+  const scored = runFrom([START, ...PHASES, SCORE]);
+  const rows = scoreRows(scored, [{ mode: "planner:opportunistic", metric: "recovery_s", n: 3, mean: 5, ci95_low: 4, ci95_high: 6 },
+    { mode: "another", metric: "abnormal_frames", n: 3, mean: 9 }]);
+  const row = key => rows.find(d => d.key === key) || {};
+  if (row("recovery_s").meanText !== "5 [4 – 6]" || row("abnormal_frames").n != null) fail(`a run's results are compared with a campaign's runs of another mode: ${JSON.stringify([row("recovery_s"), row("abnormal_frames")])}`);
+  if (row("response.accurate").sort !== 1 || row("stage_reached").sort !== null || rows.some(d => d.kind !== "other")) fail("a run's results cannot be ordered or have a kind with no panel to give one");
   const aggregate = { kind: "aggregate", t: 300, detection: [], impact: [], response: [{ mode: "m" }], countermeasures: [], ci: [] };
   runFrom([START, { run_id: undefined, ...aggregate }]);
   if (!S.aggregate || !S.aggregate.response) fail("aggregate: a table the campaign reported is dropped before any panel sees it");
@@ -271,21 +323,49 @@ function checkFacts(panel, fail) {
   if ("block_web_src" in panel.graph.overlayAt(run, null).applied) fail("a reverted countermeasure is still drawn as applied");
   has(drawn(cardOf(panel, "journal"), run), /reverts "Block the attacking source"/, "the journal shows a revert as another application");
   if (!panel.graph.marks(run).some(m => /block web src reverted/.test(m.kind))) fail("the time bar names a revert as an application");
-  // The journal reads newest first, and a new fact is a row added on top: the
-  // rows already there stay the elements they were. A list rebuilt at every
-  // event throws the reader back to its top and takes a row from under a click.
+  // The journal reads newest first, and a new fact is a row added on top of
+  // the list that is there: the rows already in it stay. A list replaced at
+  // every event throws the reader back to its top and takes a row from under a click.
   run = runFrom(fullEvents());
   VIEW = null;
-  const journal = new El("div"), factRows = () => all(journal, e => e.tag === "tr").filter(tr => tr.parentNode && tr.parentNode.tag === "tbody");
+  const journal = new El("div");
   cardOf(panel, "journal").render(journal, run, null);
-  const was = factRows();
-  if (!/attack ends/.test(textOf(was[0])) || !/attack starts|reconnaissance/.test(textOf(was[was.length - 1])))
-    fail(`the journal is not newest first: it opens with "${textOf(was[0]).replace(/\s+/g, " ")}"`);
+  const list = Tabulator.last, was = list.rows.map(d => d.key);
+  if (!/attack ends/.test(list.rows[0].text) || !/attack starts|reconnaissance/.test(list.rows[was.length - 1].text))
+    fail(`the journal is not newest first: it opens with "${list.rows[0].text}"`);
   apply(heard({ kind: "finding", guest_t: 155, detector: "rules", klass: "policy_violation", src: null, maps_to: null }));
   cardOf(panel, "journal").render(journal, run, null);
-  const now = factRows();
-  if (now.length !== was.length + 1 || !/policy violation/.test(textOf(now[0]))) fail(`a new fact did not go to the top of the journal: ${now.length} rows after ${was.length}`);
-  if (was.some((tr, i) => now[i + 1] !== tr)) fail("the journal rebuilt its rows for one new fact: the reader loses their place at every event");
+  if (list.rows.length !== was.length + 1 || !/policy violation/.test(list.rows[0].text)) fail(`a new fact did not go to the top of the journal: ${list.rows.length} rows after ${was.length}`);
+  if (Tabulator.last !== list || list.calls.includes("replaceData") || was.some((key, i) => list.rows[i + 1].key !== key))
+    fail("the journal rebuilt its list for one new fact: the reader loses their place at every event");
+  // A burst that grows by one is the same row with its text updated, not a row more.
+  apply(heard({ kind: "finding", guest_t: 156, detector: "rules", klass: "policy_violation", src: null, maps_to: null }));
+  cardOf(panel, "journal").render(journal, run, null);
+  if (list.rows.length !== was.length + 1 || !/policy violation ×2/.test(list.rows[0].text) || list.calls.includes("replaceData"))
+    fail(`a finding repeated within the burst is not folded into its row: the journal opens with "${list.rows[0].text}"`);
+  // A fact after the time shown is greyed, and a click on a fact shows the run then.
+  cardOf(panel, "journal").render(journal, run, 135);
+  const greyed = all(journal, e => e.style && e.style.opacity === ".4").length;
+  if (!greyed || greyed === list.rows.length) fail(`the journal greys ${greyed} of ${list.rows.length} facts at a time in the middle of the run`);
+  // A card that throws is drawn again at the next frame: drawn once and kept,
+  // its error would be shown for a second and a blank card for ever after.
+  const grid = api.grid, broken = new El("div");
+  let tries = 0;
+  api.grid = () => { tries++; throw new Error("no list library"); };
+  for (let i = 0; i < 2; i++) try { cardOf(panel, "journal").render(broken, run, null); } catch (e) { /* the page shows it */ }
+  api.grid = grid;
+  if (tries !== 2) fail(`a journal that failed to draw was tried ${tries} time(s) in two frames: its error would not stay in sight`);
+  // A run's results are filtered by kind: every metric this scenario records
+  // has one, and the ones it reports as results open the list.
+  const results = scoreRows(runFrom([START, ...PHASES, SCORE]), []);
+  const unplaced = results.filter(d => d.kind === "other").map(d => d.key);
+  if (unplaced.length) fail(`these metrics have no kind, so no filter of the run's results finds them but "Other": ${unplaced.join(", ")}`);
+  const kindOf = key => results.find(d => d.key === key)?.kind;
+  if (kindOf("detectors.rules.latency_from_write_s") !== "detection" || kindOf("response.policy") !== "response" || kindOf("stage_reached") !== "attack" || kindOf("recovery_s") !== "plant")
+    fail(`a metric is filed under the wrong kind: ${JSON.stringify(results.map(d => [d.key, d.kind]))}`);
+  if (!results[0].main || results[0].key !== "detectors.combined.detected") fail(`a run's results do not open on the ones the scenario reports: ${results[0].key}`);
+  // The journal is beside every view, so it is in none of them.
+  if (cardOf(panel, "journal").dock !== "side") fail("the journal is not docked beside the views");
   // A model that could not be fitted is said, not left to look like a quiet run.
   run = runFrom([...fullEvents(), { kind: "model_error", guest_t: 112, error: "too few samples" }]);
   if (S.unshown.model_error) fail("model_error is recorded and shown nowhere");

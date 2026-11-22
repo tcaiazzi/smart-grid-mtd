@@ -22,6 +22,17 @@ let chartKey = null, UI = null;
 const COST_HELP = "Each change the moving-target defence makes interrupts the clients a little, and is charged a fixed weight: "
   + "0.30 for a broker or source address, 0.15 for a broker port, 0.01 for a padding or timing change. No unit; 0 with no defence.";
 const LABELS = {
+  // What a metric is about, to filter a run's results by; the first that has the key.
+  kinds: [
+    { id: "setup", label: "Run setup", help: "What the run was: its configuration, seed and policy",
+      has: k => /^(run\.|seed$|variant$|rl_policy$)/.test(k) },
+    { id: "defence", label: "Defence", help: "What the moving-target defence changed, and what that cost",
+      has: k => /^(mtd_|availability_cost$|n_costed_actions$)/.test(k) },
+    { id: "attack", label: "Attack", help: "What the attacker's classifier made of the traffic, and what it blocked",
+      has: k => /^(nanogrid_detect$|blocked_|blocks$|n_nanogrid_ips$)/.test(k) },
+    { id: "delivery", label: "Delivery", help: "What reached the subscribers: messages published and the gaps in the data",
+      has: k => /^(publishes$|data_gaps$|max_data_gap_s$)/.test(k) },
+  ],
   metrics: {
     nanogrid_detect: { label: "attacker's confidence in the nanogrid", unit: "share 0–1",
       help: "Of the packets from the nanogrid's real addresses, the share the attacker's classifier flagged as nanogrid. Lower: the defence hides it better" },

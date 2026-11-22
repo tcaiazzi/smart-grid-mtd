@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Experiment Progress</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="vendor/tabulator_simple.min.css?v=6.7.1">
 <!--
   Progress dashboard of the platform (every scenario), served by
   cyberrange/core/dashboard.py. It follows the progress ledgers (progress.jsonl)
@@ -12,8 +13,8 @@
   /api/ledgers for the list and /api/events for the selected one, and folds
   every event through one reducer (apply()) — a finished campaign and a live
   one are shown by the same code. Nothing is loaded from another host: a lab
-  machine may have no internet access, so the libraries (D3, Observable Plot)
-  are files of this repository, served from /vendor/.
+  machine may have no internet access, so the libraries (D3, Observable Plot,
+  Split.js, Tabulator) are files of this repository, served from /vendor/.
 -->
 <style>
 :root {
@@ -43,8 +44,41 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { margin: 0 auto; padding: 16px 24px; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+main { margin: 0 auto; padding: 0 24px 16px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 8px; }
+/* The band that stays in sight while the page scrolls: which experiment this is,
+   how fresh the view is, and the time the run is shown at. */
+#top { position: sticky; top: 0; z-index: 5; background: var(--page); padding: 12px 0 8px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--ring); }
+/* Under the band, three columns: the runs to choose from, the view chosen, and
+   what is docked beside it. The side columns keep their place while the middle
+   scrolls; Split.js sets the widths and puts the handles (.gutter) between. */
+#shell { display: flex; align-items: flex-start; }
+#center { flex: 1 1 auto; min-width: 0; }
+#rail, #side { position: sticky; top: calc(var(--top-h, 96px) + 12px); height: calc(100vh - var(--top-h, 96px) - 28px);
+  min-width: 0; margin: 0; flex: none; }
+#rail { overflow-y: auto; }
+#side { display: flex; flex-direction: column; gap: 12px; }
+#side > .card { flex: 1 1 0; min-height: 0; margin: 0; display: flex; flex-direction: column; }
+#side > .card > .cbody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+[hidden] { display: none !important; }
+.gutter { align-self: stretch; flex: none; cursor: col-resize; position: relative; }
+.gutter::after { content: ""; position: absolute; inset: 0 5px; border-radius: 2px; }
+.gutter:hover::after { background: var(--axis); }
+/* Too narrow for three columns: the side ones open over the view instead. */
+@media (max-width: 1100px) {
+  #shell { display: block; }
+  #rail, #side { position: fixed; top: var(--top-h, 96px); bottom: 0; height: auto; width: min(92vw, 440px) !important;
+    z-index: 4; border-radius: 0; box-shadow: 0 8px 32px rgba(0,0,0,.3); background: var(--surface); }
+  #rail { left: 0; } #side { right: 0; padding: 12px; }
+}
+/* The runs of the experiment, one a line: its state, its name, how long it took. */
+.runs { list-style: none; margin: 0; padding: 0; }
+.runs li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.runs li:hover { background: var(--wash); }
+.runs li[aria-current="true"] { background: var(--wash); box-shadow: inset 3px 0 0 var(--ink); font-weight: 600; }
+.runs .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs .tm { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 400; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; }
 h2 { font-size: 15px; margin: 0 0 2px; font-weight: 600; }
 .sub { color: var(--ink-2); font-size: 13px; margin: 0 0 12px; }
@@ -58,21 +92,20 @@ select { max-width: 100%; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
   padding: 14px 16px; margin-bottom: 16px; min-width: 0; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; min-width: 0; }
 .tile .label { color: var(--ink-2); font-size: 12px; }
 .tile .value { overflow-wrap: anywhere; font-size: 24px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .tile .note { color: var(--muted); font-size: 12px; }
-.bar { height: 10px; border-radius: 999px; background: var(--wash); overflow: hidden; display: flex; gap: 2px; margin: 4px 0 16px; }
+.bar { height: 10px; border-radius: 999px; background: var(--wash); overflow: hidden; display: flex; gap: 2px; margin: 4px 0 2px; }
 .bar > span { display: block; height: 100%; }
-/* The page is one 12-column grid: each section says how many columns it takes
-   (data-span), the scenario's view says which sections show and in what order. */
+/* The view is one 12-column grid: each section says how many columns it takes
+   (data-span), the view chosen says which sections show and in what order. */
 #board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; grid-auto-flow: row dense; }
 #board > .card { margin-bottom: 0; grid-column: span 12; }
 #board > .card[data-span="4"] { grid-column: span 4; }
 #board > .card[data-span="8"] { grid-column: span 8; }
 #board > .card[data-span="6"] { grid-column: span 6; }
-#board > .card.wide { grid-column: span 12; }
 #board > .offview { display: none !important; }
 @media (max-width: 1100px) { #board > .card[data-span] { grid-column: span 12; } }
 /* Every card can be closed: its head stays, the rest goes. */
@@ -132,7 +165,7 @@ tr.sel td:first-child { box-shadow: inset 3px 0 0 var(--ink); }
 .gwrap { position: relative; overflow-x: auto; }
 .gview svg.graph { display: block; width: 100%; height: auto; }
 .gwrap .tip { max-width: 360px; white-space: normal; overflow-wrap: anywhere; }
-td.wrap { white-space: normal; min-width: 280px; }
+td.wrap { white-space: normal; min-width: 220px; }
 .sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
   padding: 10px 12px; margin-bottom: 10px; }
 .sug .hd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
@@ -148,12 +181,29 @@ td.wrap { white-space: normal; min-width: 280px; }
 .agent { border: 1px solid var(--muted); border-radius: 4px; padding: 0 4px; font-size: 11px; }
 /* The time bar keeps its shape while it is used: the slider takes the free
    width, the label after it has a fixed one. */
-.timebar { display: flex; align-items: center; gap: 8px; margin: -4px 0 16px; font-size: 13px; color: var(--ink-2); }
+.timebar { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--ink-2); }
 .timebar input[type=range] { flex: 1 1 auto; min-width: 120px; margin: 0; }
 .timebar .tlabel { flex: 0 0 38ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink); }
 .timebar button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
 @media (max-width: 760px) { .timebar { flex-wrap: wrap; } .timebar input[type=range] { order: -1; flex-basis: 100%; } .timebar .tlabel { flex-basis: 100%; } }
-.viewtabs { margin: 0; }
+/* The views of the page, as tabs over the board: one question each. */
+.viewtabs { margin: 0 0 12px; flex-wrap: wrap; }
+.viewtabs button { padding: 6px 14px; font-size: 14px; }
+/* A list drawn by Tabulator (ui.grid), in the page's own type and colours. */
+.tabulator { background: none; border: 0; font-size: 13px; margin: 0; }
+.tabulator .tabulator-header { background: none; border-bottom: 1px solid var(--axis); color: var(--ink-2); font-weight: 500; }
+.tabulator .tabulator-header .tabulator-col { background: none; border-right: 0; }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content { padding: 6px 8px; }
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable.tabulator-col-sorter-element:hover { background: var(--wash); }
+.tabulator .tabulator-header .tabulator-col .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-bottom-color: var(--axis); }
+.tabulator .tabulator-header .tabulator-col[aria-sort="ascending"] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-bottom-color: var(--ink); }
+.tabulator .tabulator-header .tabulator-col[aria-sort="descending"] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow { border-top-color: var(--ink); }
+.tabulator .tabulator-tableholder .tabulator-table { background: none; color: var(--ink); }
+.tabulator-row, .tabulator-row.tabulator-row-even { background: none; color: var(--ink); border-bottom: 1px solid var(--grid); }
+.tabulator-row.tabulator-selectable:hover { background: var(--wash); cursor: pointer; }
+.tabulator-row .tabulator-cell { padding: 6px 8px; border-right: 0; font-variant-numeric: tabular-nums; }
+.tabulator-row .tabulator-cell.wrap { white-space: normal; overflow-wrap: anywhere; }
+.tabulator .tabulator-tableholder .tabulator-placeholder .tabulator-placeholder-contents { color: var(--muted); font-size: 14px; font-weight: 400; }
 /* Neutral blocks a panel's cards are built from: two sides, key/value lines, lanes. */
 .cols2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 @media (max-width: 760px) { .cols2 { grid-template-columns: 1fr; } }
@@ -183,42 +233,60 @@ td.wrap { white-space: normal; min-width: 280px; }
 </head>
 <body>
 <main>
-  <header>
-    <h1>Experiment progress</h1>
-    <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
-    <span class="badge" id="net" title="When this page last heard from its server. The view is only as fresh as this."></span>
-    <span class="spacer"></span>
-    <span class="tabs viewtabs" id="views" role="group" aria-label="View"></span>
-    <label class="sub" style="margin:0" for="ledger">Experiment</label>
-    <select id="ledger" aria-label="Campaign or run"></select>
-    <button id="theme" type="button" title="Toggle light/dark">Theme</button>
-  </header>
-
-  <section class="tiles" id="tiles"></section>
-  <div class="bar" id="pbar" role="img" aria-label="campaign progress"></div>
-  <div class="timebar" id="timebar" style="display:none" role="group" aria-label="Time of the run shown">
-    <button type="button" id="t-prev" title="Previous fact of the run (← key)">◀</button>
-    <button type="button" id="t-next" title="Next fact of the run (→ key)">▶</button>
-    <button type="button" id="t-play" title="Replay the run from the time shown (Space)" aria-pressed="false">▶ Play</button>
-    <select id="t-speed" title="Replay speed" aria-label="Replay speed">
-      <option value="1">×1</option><option value="5">×5</option><option value="20">×20</option>
-    </select>
-    <input type="range" id="g-time" min="0" max="0" value="0" step="1" aria-label="Time of the run shown"
-      title="Drag to see the run as it stood at that time; Shift+←/→ moves 10 s">
-    <button type="button" id="g-live" title="Follow the run as it happens (End key)">Live</button>
-    <span class="tlabel" id="g-tlabel">live</span>
+  <div id="top">
+    <header>
+      <h1>Experiment progress</h1>
+      <span class="badge" id="status"><span class="dot"></span><span>—</span></span>
+      <span class="sub" id="summary" style="margin:0"></span>
+      <span class="badge" id="net" title="When this page last heard from its server. The view is only as fresh as this."></span>
+      <span class="spacer"></span>
+      <span class="tabs" id="docks" style="margin:0" role="group" aria-label="Side columns"></span>
+      <label class="sub" style="margin:0" for="ledger">Experiment</label>
+      <select id="ledger" aria-label="Campaign or run"></select>
+      <button id="theme" type="button" title="Toggle light/dark">Theme</button>
+    </header>
+    <div class="err" id="page-err" style="margin:0 0 8px"></div>
+    <div class="timebar" id="timebar" style="display:none" role="group" aria-label="Time of the run shown">
+      <button type="button" id="t-prev" title="Previous fact of the run (← key)">◀</button>
+      <button type="button" id="t-next" title="Next fact of the run (→ key)">▶</button>
+      <button type="button" id="t-play" title="Replay the run from the time shown (Space)" aria-pressed="false">▶ Play</button>
+      <select id="t-speed" title="Replay speed" aria-label="Replay speed">
+        <option value="1">×1</option><option value="5">×5</option><option value="20">×20</option>
+      </select>
+      <input type="range" id="g-time" min="0" max="0" value="0" step="1" aria-label="Time of the run shown"
+        title="Drag to see the run as it stood at that time; Shift+←/→ moves 10 s">
+      <button type="button" id="g-live" title="Follow the run as it happens (End key)">Live</button>
+      <span class="tlabel" id="g-tlabel">live</span>
+    </div>
   </div>
 
+  <div id="shell">
+  <aside class="card" id="rail" aria-label="Runs">
+    <h2>Runs</h2>
+    <p class="sub" id="rail-sub"></p>
+    <ul class="runs" id="rail-list"></ul>
+  </aside>
+
+  <div id="center">
+  <nav class="tabs viewtabs" id="views" aria-label="View"></nav>
   <div id="board">
-    <section class="card" id="queue-card" data-span="4"
+    <section class="card" id="tiles-card"
+      data-help="How far the experiment is: runs done and failed, time elapsed and left, and what is running now. The bar under the figures is the same count: green done, red failed, blue running.">
+      <h2>Progress</h2>
+      <p class="sub">How far the experiment is, and what is running now.</p>
+      <div class="tiles" id="tiles"></div>
+      <div class="bar" id="pbar" role="img" aria-label="campaign progress"></div>
+    </section>
+
+    <section class="card" id="runs-card"
       data-help="One row per run of the selected experiment. A standalone run has one; a campaign one per configuration and seed.&#10;status: pending · running · scoring · done · failed · interrupted (its writer stopped) · retrying.&#10;time: how long the run took, or has been running.&#10;The other columns are the scenario's: hover their headers.">
-      <h2>Queue</h2>
-      <p class="sub">One row per run; click a row to inspect it. Results appear as each run is scored.</p>
+      <h2>Runs</h2>
+      <p class="sub">One row per run, with what the scenario measured on it; click a row to inspect it. Results appear as each run is scored.</p>
       <div class="scroll"><table id="queue"></table></div>
       <p class="sub" style="margin:8px 0 0" id="q-note"></p>
     </section>
 
-    <section class="card" id="detail" data-span="8"
+    <section class="card" id="detail"
       data-help="The selected run: its phases (bar width = expected length, fill = how far it got), then the scenario's view of it: state chips, chart and table. Hover a phase, a chip or a column header for its meaning.">
       <h2 id="d-title">Run</h2>
       <p class="sub" id="d-sub"></p>
@@ -231,6 +299,13 @@ td.wrap { white-space: normal; min-width: 280px; }
       <h2 style="margin-top:14px" id="f-title"></h2>
       <p class="sub" id="f-sub"></p>
       <div class="scroll"><table id="d-findings"></table></div>
+    </section>
+
+    <section class="card" id="score-card"
+      data-help="What was measured on this run when it was scored: the same metrics a campaign aggregates over its runs, here for one.&#10;First the ones the scenario reports as its results, with what each means; a campaign's mean for the same kind of run is beside them, when this run is part of one.&#10;Then, folded, every metric the run recorded. Hover a name for what it means and the key it is recorded under.">
+      <h2>Results of this run</h2>
+      <p class="sub" id="sc-sub"></p>
+      <div id="score"></div>
     </section>
 
   <section class="card" id="graph-card"
@@ -255,7 +330,7 @@ td.wrap { white-space: normal; min-width: 280px; }
     <div class="gwrap"><div class="gview" id="g-view"></div><div class="tip" id="g-tip"></div></div>
   </section>
 
-  <section class="card" id="op-card" style="display:none"
+  <section class="card" id="op-card"
     data-help="Each suggestion the defender's analytics put to its human operator: what it proposed, why, and whether it was approved, rejected or left to expire. Answered at the defender's console, never here.">
     <h2>Operator suggestions</h2>
     <p class="sub">What the defender put to its operator, and what came of it. Shown here only: it is answered at the defender's own console.</p>
@@ -263,7 +338,7 @@ td.wrap { white-space: normal; min-width: 280px; }
     <div class="scroll"><table id="op-history"></table></div>
   </section>
 
-  <section class="card" id="teams-card" style="display:none"
+  <section class="card" id="teams-card"
     data-help="What the players in the lab did, newest first: a step run from a team console, a countermeasure applied or reverted by hand, a mode change, and every command run in a lab shell, with the host and the team it is attributed to. A player may be a person or a harness; a harness is marked 'agent', and the reason it gave for an action is shown under it.">
     <h2>Teams</h2>
     <p class="sub">What the players in the lab did, both sides on one timeline: steps and commands, newest first.</p>
@@ -281,12 +356,18 @@ td.wrap { white-space: normal; min-width: 280px; }
   </section>
   </div>
   <p class="sub" id="unshown" style="margin:16px 0 0"></p>
+  </div>
+
+  <aside id="side" aria-label="Docked beside the view" hidden></aside>
+  </div>
 </main>
 
 <!-- The libraries are this server's own files (vendor/VENDOR.json); the version in the
      URL lets the browser keep them until one changes. Plot reads the global d3. -->
 <script src="vendor/d3.min.js?v=7.9.2"></script>
 <script src="vendor/plot.umd.min.js?v=0.6.19"></script>
+<script src="vendor/split.min.js?v=1.6.5"></script>
+<script src="vendor/tabulator.min.js?v=6.7.1"></script>
 <script src="graph.js"></script>
 <!-- The page's model: its state, the reducer that folds ledger events into it, and
      the helpers every view and every panel calls. Nothing here touches the page
@@ -543,6 +624,44 @@ function metric(key) {
   return { key, label: parts.map(pretty).join(" · "), unit: hit ? hit[1] : "", help: "" };
 }
 const metricHead = m => `${m.label}${m.unit ? ` (${m.unit})` : ""}`;
+// A run's metrics as {key: value}, nested ones under dotted keys — the keys a
+// campaign aggregates them under (core/aggregate.py). A list is kept as a list.
+function flatMetrics(d, prefix = "", out = {}) {
+  for (const [k, v] of Object.entries(d || {})) {
+    if (v && typeof v === "object" && !Array.isArray(v)) flatMetrics(v, `${prefix}${k}.`, out); else out[`${prefix}${k}`] = v;
+  }
+  return out;
+}
+// What a metric is about, as the scenario sorts its own (labels.kinds: [{id,
+// label, help, has(key)}], the first that has the key); one it does not place
+// is "other".
+const OTHER_KIND = { id: "other", label: "Other", help: "Metrics the scenario does not place in one of its kinds" };
+const metricKinds = () => panel()?.labels?.kinds || [];
+const metricKind = key => metricKinds().find(k => k.has(key)) || OTHER_KIND;
+// The run's metrics as the rows of its results: the ones the scenario reports
+// as results first (`main`: those its panel has words for, else its first
+// figures), each with its kind, its value in words and as a figure to order by,
+// and the campaign's mean for runs of the same mode when `ci` has one.
+function scoreRows(r, ci) {
+  const flat = flatMetrics(r.metrics), gk = ci.length && "group" in ci[0] ? "group" : "mode";
+  const named = Object.keys(panel()?.labels?.metrics || {}).filter(k => k in flat);
+  const main = named.length ? named : Object.keys(flat).filter(k => typeof flat[k] === "number").slice(0, 8);
+  return [...main, ...Object.keys(flat).filter(k => !main.includes(k))].map(key => {
+    const m = metric(key), kind = metricKind(key), v = flat[key], c = ci.find(x => x.metric === key && x[gk] === r.mode);
+    return { key, label: m.label, help: m.help, kind: kind.id, kindLabel: kind.label, main: main.includes(key), raw: v, value: metricValue(v, m),
+      sort: typeof v === "boolean" ? +v : typeof v === "number" && isFinite(v) ? v : null,
+      mean: c && c.mean != null ? c.mean : null, n: c ? c.n : null,
+      meanText: !c || c.mean == null ? "—" : `${num(c.mean)}${c.n > 1 ? ` [${num(c.ci95_low)} – ${num(c.ci95_high)}]` : ""}` };
+  });
+}
+// A metric's value on one run, in words: over a campaign a yes/no is a share of
+// runs, on a run it is a yes or a no.
+function metricValue(v, m) {
+  if (v == null || (typeof v === "number" && !isFinite(v))) return "—";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (Array.isArray(v)) return v.length ? v.map(x => typeof x === "string" ? pretty(x) : JSON.stringify(x)).join(", ") : "none";
+  return typeof v === "number" ? `${num(v)}${m.unit && !m.unit.startsWith("share") ? ` ${m.unit}` : ""}` : pretty(v);
+}
 // A recorded identifier by its human name, the identifier itself on hover. The
 // name is the caller's (a run's own structure names its nodes) or the panel's
 // (labels.terms); an identifier nobody named is at least spelled as words.
@@ -573,6 +692,30 @@ function timeAxis(span, since) {
   const long = span >= 180;
   return { label: `time since ${since}${long ? " (min:s)" : " (s)"}`, labelAnchor: "center", labelArrow: "none",
     ticks: 8, tickFormat: v => long ? dur(v) : String(+v.toFixed(1)), tickSize: 4 };
+}
+
+// ── long lists ──────────────────────────────────────────────────────────────
+// A list that may run to thousands of rows is drawn by Tabulator, through this
+// one door: only the rows in sight are in the page, so its length costs nothing,
+// and a row is known by `index`, so new data updates the list where it differs
+// instead of drawing it again under the reader. `options` are Tabulator's.
+function grid(box, options) {
+  const list = new Tabulator(box, { layout: "fitColumns", height: "100%", columnDefaults: { headerSort: false, resizable: false },
+    ...options });
+  // Rows added above the ones in sight push them down, and Tabulator does not
+  // put them back. keepPlace(change) applies a change to the data and leaves
+  // the row the reader was on where it was; at the top of the list the new
+  // rows simply come into sight.
+  list.keepPlace = async change => {
+    const holder = box.querySelector(".tabulator-tableholder");
+    const row = holder && holder.scrollTop > 0 ? list.getRows("visible")[0] : null;
+    if (!row) return change();
+    const top = () => row.getElement().getBoundingClientRect().top - holder.getBoundingClientRect().top, was = top();
+    await change();
+    await list.scrollToRow(row, "top", true);
+    holder.scrollTop += top() - was;
+  };
+  return list;
 }
 
 // A box with nothing to show says why: an empty panel reads as a broken one.
@@ -621,18 +764,23 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 //   detail(run)                 chips, chart and table of the selected run
 //   chart(run)                  the run's chart (null: no run selected)
 //   reduce(run, ev)             fold the scenario's own event kinds into run.x
-//   cards: [{id, title, sub, render(box, run, t)}]   cards of its own, drawn at
-//                               the time the run's time bar selects (null = live)
+//   cards: [{id, title, sub, render(box, run, t), dock?}]   cards of its own, drawn
+//                               at the time the run's time bar selects (null =
+//                               live); dock: "side" puts one in the column beside
+//                               the views, in sight whichever view is chosen
+//   views: [{id, label, help, sections, options?}]   the page's tabs (see views)
 //   graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree,
 //           options?, origin?}  the structure card; marks also drive the time bar
 //   results: {tabs, render}     tabs of the campaign aggregate
-//   labels: {metrics, terms, mode}   the scenario's words: metrics[key] =
+//   labels: {metrics, kinds, terms, mode}   the scenario's words: metrics[key] =
 //                               {label, unit, help} for a metric it reports,
+//                               kinds: [{id, label, help, has(key)}] what its
+//                               metrics are about, to filter a run's results by,
 //                               terms[id] = the name of an identifier it records,
 //                               mode(mode, run) = a run's mode as a sentence
 const panelApi = {
   get S() { return S; },
-  $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table, plot, plotTip, timeAxis,
+  $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table, grid, plot, plotTip, timeAxis,
   now, statusBadge, queueTable, stepCell,
   // The run's recorded structure (knowledge graph, attack tree), or null while it
   // loads: the page draws again when it arrives. It names the tree's nodes.
@@ -661,8 +809,8 @@ const panel = () => panels[S.scenario || ledgerScenario()] || null;
 // in its own card, the rest of the page is drawn as usual.
 function guard(id, fn) {
   const box = $(id), card = box.closest(".card") || box;
-  // A closed card, or one the view hides, is not drawn: it is redrawn when shown.
-  if (card.classList.contains("collapsed") || card.classList.contains("offview")) return;
+  // A closed card, one the view hides, or one in a closed column is not drawn: it is redrawn when shown.
+  if (card.classList.contains("collapsed") || card.classList.contains("offview") || card.closest("[hidden]")) return;
   let note = card.querySelector(":scope > .err.guard");
   try {
     fn();
@@ -678,11 +826,15 @@ function render() {
   const lst = ledgerStatus();
   $("status").replaceWith(Object.assign(statusBadge(lst), { id: "status" }));
   if (wantRun && S.runs[wantRun]) { selectedRun = wantRun; wantRun = null; }
+  guard("summary", () => renderSummary(lst));
+  guard("shell", renderShell);
+  guard("rail-list", renderRail);
   guard("views", renderViews);
   guard("tiles", () => renderTiles(lst));
   guard("queue", renderQueue);
   guard("detail", renderDetail);
   guard("results", renderResults);
+  guard("score", renderScore);
   guard("timebar", renderTimebar);
   guard("board", renderCards);
   guard("graph-card", renderGraph);
@@ -701,6 +853,100 @@ function counts() {
     else if (st === "failed") c.failed++; else if (st === "running" || st === "scoring") c.running++;
   }
   return c;
+}
+
+// The experiment in one line, in the band that stays in sight: the figures in
+// full are the Progress section's.
+function renderSummary(lst) {
+  const c = counts(), live = lst === "running";
+  const curRun = S.current ? S.runs[S.current] : null;
+  const phase = curRun?.phases.find(p => p.start_t && !p.end_t);
+  const parts = [];
+  if (c.total > 1) parts.push(`${c.ok + c.skipped} of ${c.total} runs done${c.failed ? `, ${c.failed} failed` : ""}`);
+  if (live && curRun) parts.push(`now: ${c.total > 1 ? `${curRun.id}, ` : ""}${phase ? `phase ${pretty(phase.name)}` : "starting"}`);
+  if (live && curRun && !curRun.playground && c.total > 1) parts.push(`about ${dur(eta())} left`);
+  const text = parts.join(" · ");
+  if ($("summary").textContent !== text) $("summary").textContent = text;
+}
+
+// ── the shell: the runs on the left, what is docked on the right ────────────
+// Each side column is open or closed by a button in the band, and the reader's
+// choice is remembered. Where the window is too narrow for three columns they
+// open over the view, and start closed. Split.js sizes the columns that are open.
+const NARROW = matchMedia("(max-width: 1100px)");
+const stored = (key, value) => {
+  try { if (value === undefined) return JSON.parse(localStorage.getItem(key)); localStorage.setItem(key, JSON.stringify(value)); }
+  catch (e) { return null; }
+};
+const over = { rail: false, side: false };
+let split = null, shellSig = "", docksSig = "";
+const docked = () => (panel()?.cards || []).filter(c => c.dock === "side");
+function columnOpen(name) {
+  if (name === "side" && !docked().length) return false;
+  if (NARROW.matches) return over[name];
+  const saved = stored(`platform-dash-${name}`);
+  // Unless the reader chose: the runs when there is more than one to choose
+  // from, the docked cards when the window has the width for them.
+  return saved ?? (name === "rail" ? S.order.length > 1 : innerWidth >= 1400);
+}
+function toggleColumn(name) {
+  const open = !columnOpen(name);
+  if (NARROW.matches) { over.rail = over.side = false; over[name] = open; } else stored(`platform-dash-${name}`, open);
+  render();
+}
+function renderShell() {
+  const open = { rail: columnOpen("rail"), side: columnOpen("side") }, cards = docked();
+  const buttons = [["rail", "Runs", "The runs of this experiment: choose the one to show"],
+    ...(cards.length ? [["side", cards.map(c => c.title).join(" · "), "Shown beside the view, whichever is chosen"]] : [])];
+  const dsig = JSON.stringify([buttons, open]);
+  if (dsig !== docksSig) {
+    docksSig = dsig;
+    $("docks").replaceChildren(...buttons.map(([name, label, help]) => h("button", { type: "button", title: help,
+      "aria-pressed": String(open[name]), onclick: () => toggleColumn(name) }, label)));
+  }
+  const sig = JSON.stringify([open, NARROW.matches]);
+  if (sig === shellSig) return;
+  shellSig = sig;
+  if (split) { split.destroy(); split = null; }
+  $("rail").hidden = !open.rail; $("side").hidden = !open.side;
+  const cols = [open.rail && "rail", "center", open.side && "side"].filter(Boolean);
+  // Without the library the columns still stand side by side, at widths of their own.
+  if (window.Split && !NARROW.matches && cols.length > 1) {
+    const w = stored("platform-dash-widths") || {}, share = { rail: w.rail || 18, side: w.side || 26 };
+    const sizes = cols.map(c => c === "center" ? 100 - cols.filter(x => x !== "center").reduce((a, x) => a + share[x], 0) : share[c]);
+    split = Split(cols.map(c => `#${c}`), { sizes, minSize: cols.map(c => c === "center" ? 420 : 160), gutterSize: 12, snapOffset: 0,
+      onDragEnd: got => { cols.forEach((c, i) => { if (c !== "center") share[c] = got[i]; }); stored("platform-dash-widths", share); gSig = ""; render(); } });
+  }
+  gSig = "";  // the drawings were laid out for another width
+}
+NARROW.addEventListener("change", () => { shellSig = ""; render(); });
+
+// The runs to choose from, kept and not redrawn: a row replaced under the
+// pointer would lose the click that was choosing it.
+let railSig = "", railRows = {};
+function renderRail() {
+  const shown = shownRunId(), sig = `${cur.id}|${S.order.join("|")}`;
+  if (sig !== railSig) {
+    railSig = sig; railRows = {};
+    $("rail-list").replaceChildren(...S.order.map(id => {
+      const pick = () => inspect(id);
+      const row = { dot: h("span", { class: "dot" }), tm: h("span", { class: "tm" }) };
+      row.li = h("li", { tabindex: "0", onclick: pick, onkeydown: e => { if (e.key === "Enter") pick(); } },
+        row.dot, h("span", { class: "nm" }, id), row.tm);
+      railRows[id] = row;
+      return row.li;
+    }));
+  }
+  for (const id of S.order) {
+    const r = S.runs[id], row = railRows[id], [colour, label] = STATUS[r.status] || ["var(--axis)", r.status || "—"];
+    const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
+    row.dot.style.background = colour;
+    if (row.tm.textContent !== time) row.tm.textContent = time;
+    row.li.setAttribute("aria-current", String(id === shown));
+    row.li.title = `${id} · ${label}${r.attempt > 1 ? ` (try ${r.attempt})` : ""}${r.mode ? ` · ${panel()?.labels?.mode?.(r.mode, r) || r.mode}` : ""}`;
+  }
+  const n = S.order.length;
+  $("rail-sub").textContent = n ? `${n} run${n === 1 ? "" : "s"}; the one shown is marked. What each measured is in the Runs table.` : "No runs yet.";
 }
 
 const TILE_HELP = {
@@ -756,8 +1002,8 @@ function queueTable({ note, columns, cells }) {
     const r = S.runs[id];
     const time = r.status === "running" ? dur(now() - r.start_t) : dur(r.duration ?? null);
     return h("tr", { class: "click" + (id === shownRunId() ? " sel" : ""), tabindex: "0",
-        onclick: () => { selectedRun = id; render(); },
-        onkeydown: e => { if (e.key === "Enter") { selectedRun = id; render(); } } },
+        onclick: () => inspect(id),
+        onkeydown: e => { if (e.key === "Enter") inspect(id); } },
       h("td", {}, id, r.attempt > 1 ? h("span", { class: "muted" }, ` (try ${r.attempt})`) : null),
       h("td", {}, statusBadge(r.status)), h("td", { class: "num" }, time),
       ...cells(r, id));
@@ -877,6 +1123,73 @@ function renderResults() {
   $("r-sub").textContent = `Aggregated over ${scored} scored run${scored === 1 ? "" : "s"} of this campaign; refreshed after every run. A rate or share is a fraction of runs, from 0 to 1.`;
 }
 
+// ── the results of one run ──────────────────────────────────────────────────
+// What a campaign aggregates, for the run shown, as one list (ui.grid) the
+// reader narrows and orders: by kind (the scenario's own, labels.kinds), by
+// name, by any column. It opens on the metrics the scenario reports as its
+// results; each is beside the campaign's mean for runs of the same kind when
+// there is one. What the reader chose stays across runs and redraws.
+let scoreSig = "", score = null, scoreKind = "main", scoreText = "";
+function scoreFilter() {
+  if (!score || !score.ready) return;
+  const q = scoreText.trim().toLowerCase();
+  score.grid.setFilter(d => (scoreKind === "all" || (scoreKind === "main" ? d.main : d.kind === scoreKind))
+    && (!q || d.label.toLowerCase().includes(q) || d.key.toLowerCase().includes(q)));
+  for (const b of score.chips.children) b.setAttribute("aria-pressed", String(b.dataset.kind === scoreKind));
+  const n = score.grid.getDataCount("active");
+  score.note.textContent = `${n} of ${score.rows.length} metrics shown. Click a column's header to order by it.`;
+}
+function renderScore() {
+  const r = shownRun(), a = S.aggregate, ci = (a && a.ci) || [];
+  const rows = r && r.metrics ? scoreRows(r, ci) : null;
+  const sig = JSON.stringify([cur.id, r && r.id, rows && rows.length, ci.length, a && a.t]);
+  if (sig === scoreSig) return;
+  scoreSig = sig;
+  if (score) { score.grid.destroy(); score = null; }
+  if (!rows) { $("sc-sub").textContent = ""; $("score").replaceChildren(empty(r ? "This run has not been scored yet: a run is scored when it ends" : "Select a run.")); return; }
+  const compared = rows.some(d => d.n != null);
+  $("sc-sub").textContent = `What was measured on run ${r.id} when it was scored: the metrics a campaign aggregates, for this run${compared ? ", beside the campaign's own figures" : ""}.`;
+  // The kinds on offer are the ones this run has metrics of, each with how many.
+  const count = id => rows.filter(d => id === "all" || (id === "main" ? d.main : d.kind === id)).length;
+  const kinds = [{ id: "main", label: "Main results", help: "The metrics the scenario reports as its results" },
+    { id: "all", label: "All", help: "Every metric this run recorded" },
+    // A scenario that sorts none of its metrics has no kinds to offer: "other" alone would be "all" again.
+    ...(metricKinds().length ? [...metricKinds(), OTHER_KIND].filter(k => rows.some(d => d.kind === k.id)) : [])];
+  if (!kinds.some(k => k.id === scoreKind)) scoreKind = "main";
+  const chips = h("div", { class: "tabs", style: "flex-wrap:wrap;margin:0", role: "group", "aria-label": "Kind of metric" },
+    ...kinds.map(k => h("button", { type: "button", "data-kind": k.id, title: k.help || null,
+      onclick: () => { scoreKind = k.id; scoreFilter(); } }, `${k.label} `, h("span", { class: "muted" }, String(count(k.id))))));
+  const find = h("input", { type: "search", placeholder: "filter by name…", value: scoreText, "aria-label": "Filter the metrics by name",
+    style: "font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--ring);border-radius:6px;padding:4px 10px;min-width:220px",
+    // A name is looked for among every metric: the results alone are seven.
+    oninput: e => { scoreText = e.target.value; if (scoreText && scoreKind === "main") scoreKind = "all"; scoreFilter(); } });
+  const note = h("p", { class: "sub", style: "margin:6px 0" }), list = h("div", {});
+  $("score").replaceChildren(h("div", { class: "gbar" }, chips, h("span", { class: "spacer" }), find), note, list);
+  const named = cell => { const d = cell.getData(); return h("span", { title: [d.help, `recorded as: ${d.key}`].filter(Boolean).join("\n") }, d.label); };
+  // Figures before words, and a run with no value for a metric after both.
+  // Whichever way the column is ordered: Tabulator turns the result round for a descending one.
+  const byValue = (x, y, rowX, rowY, column, dir) => { const p = rowX.getData(), q = rowY.getData(), rank = d => d.sort != null ? 0 : d.raw == null ? 2 : 1;
+    return (rank(p) - rank(q)) * (dir === "desc" ? -1 : 1) || (p.sort != null ? p.sort - q.sort : String(p.value).localeCompare(String(q.value))); };
+  const col = (title, field, help, more) => ({ title, field, headerTooltip: help, headerSort: true, ...more });
+  score = { rows, chips, note, ready: false };
+  score.grid = grid(list, {
+    index: "key", data: rows, height: false, maxHeight: 460, placeholder: "No metric of this kind has that in its name",
+    columns: [
+      col("metric", "label", "What was measured; hover a name for what it means and the key it is recorded under", { widthGrow: 3, cssClass: "wrap", variableHeight: true, formatter: named }),
+      ...(metricKinds().length ? [col("kind", "kindLabel", "What the metric is about", { width: 140 })] : []),
+      col("this run", "value", "The value on the run shown; — when the run has none (a latency of an attack that was never detected)",
+        { widthGrow: 2, hozAlign: "right", headerHozAlign: "right", cssClass: "wrap", variableHeight: true, sorter: byValue,
+          formatter: cell => h("b", {}, cell.getValue()) }),
+      ...(compared ? [
+        col("campaign mean [95% CI]", "mean", `Over the campaign's scored runs of the same kind (${pretty(r.mode)}); a yes/no reads as the share of runs, 0 to 1`,
+          { widthGrow: 2, hozAlign: "right", headerHozAlign: "right", sorter: "number", formatter: cell => cell.getData().meanText }),
+        col("runs", "n", "Scored runs the mean is computed over", { width: 80, hozAlign: "right", headerHozAlign: "right", sorter: "number",
+          formatter: cell => cell.getValue() ?? "—" })] : []),
+    ],
+  });
+  score.grid.on("tableBuilt", () => { score.ready = true; scoreFilter(); });
+}
+
 // ── topology / knowledge graph / attack tree (drawing in graph.js) ─────────
 const QS = new URLSearchParams(location.search);
 let wantRun = QS.get("run"), gView = ["topology", "kg", "tree"].includes(QS.get("view")) ? QS.get("view") : "topology";
@@ -979,15 +1292,46 @@ function setPlaying(on) {
 }
 
 // ── views ───────────────────────────────────────────────────────────────────
-// A panel may compose the page into views ({id, label, help, sections,
-// options}): which sections show, in what order, and the graph switches set on
-// entering it. Without views every section shows, in page order.
+// The page is read a view at a time: a tab over the board, holding the sections
+// that answer one question. A panel composes its own ({id, label, help,
+// sections, options}): which sections show, in what order, and the graph
+// switches set on entering it. Without, the page has two: the run and the
+// campaign. A section with nothing to show is left out, and so is a view all of
+// whose sections are.
 let curView = null, viewSig = "";
+const LIVE = {
+  "score-card": r => !!r && !!r.metrics,
+  "graph-card": () => !!panel()?.graph,
+  "op-card": r => !!r && Object.keys(r.approvals).length > 0,
+  "teams-card": r => !!r && (r.teams.length > 0 || Object.keys(r.players).length > 0 || !!(r.info && r.info.players)),
+};
+const sectionLive = (id, r) => (id.startsWith("card-") ? !!r : !LIVE[id] || LIVE[id](r));
+function pageViews() {
+  const own = panel()?.views;
+  if (own && own.length) return own;
+  const cards = (panel()?.cards || []).filter(c => !c.dock).map(c => `card-${c.id}`);
+  return [
+    { id: "run", label: "Run", help: "The run shown: its phases, what the scenario draws of it, the people in it",
+      sections: ["detail", "score-card", ...cards, "graph-card", "op-card", "teams-card"] },
+    { id: "campaign", label: "Campaign", help: "The experiment as a whole: how far it is, every run, the aggregated results",
+      sections: ["tiles-card", "runs-card", "results-card"] },
+  ];
+}
+// Choosing a run is asking to see it: from a view that is all about the
+// experiment (its progress, its runs, its results), the page goes to the first
+// that shows a run.
+const OF_EXPERIMENT = new Set(["tiles-card", "runs-card", "results-card"]);
+function inspect(id) {
+  selectedRun = id; over.rail = false;
+  const views = pageViews(), ofRun = v => v.sections.some(x => !OF_EXPERIMENT.has(x));
+  const at = views.find(v => v.id === curView), to = views.find(ofRun);
+  if (at && !ofRun(at) && to) return enterView(to.id, true);
+  render();
+}
 function renderViews() {
-  const views = panel()?.views || [];
+  const r = shownRun(), views = pageViews().filter(v => v.sections.some(id => sectionLive(id, r)));
   if (!views.some(v => v.id === curView)) {
-    let saved = null; try { saved = localStorage.getItem("platform-dash-view"); } catch (e) {}
-    const want = QS.get("show") || saved;
+    const want = QS.get("show") || stored("platform-dash-view");
     curView = views.find(v => v.id === want)?.id ?? views[0]?.id ?? null;
     if (curView) enterView(curView, false);
   }
@@ -997,34 +1341,48 @@ function renderViews() {
     $("views").replaceChildren(...views.map(v => h("button", { type: "button", title: v.help || null,
       "aria-pressed": String(v.id === curView), onclick: () => enterView(v.id, true) }, v.label)));
   }
-  applyView(views.find(v => v.id === curView));
+  applyView(views.find(v => v.id === curView), r);
 }
 function enterView(id, byHand) {
   curView = id;
-  const v = (panel()?.views || []).find(x => x.id === id);
+  const v = pageViews().find(x => x.id === id);
   const g = panel()?.graph;
   if (g) { graphOpts(g); Object.assign(gOpts, v?.options || {}); gSig = ""; }
-  if (byHand) { try { localStorage.setItem("platform-dash-view", id); } catch (e) {} render(); }
+  if (!byHand) return;
+  stored("platform-dash-view", id);
+  // The view is part of the address, so a link opens the page on it.
+  try { const u = new URL(location.href); u.searchParams.set("show", id); history.replaceState(null, "", u); } catch (e) {}
+  QS.set("show", id);
+  render();
 }
-function applyView(v) {
-  const order = v ? v.sections : null;
+function applyView(v, r) {
+  const order = v ? v.sections : [];
   for (const el of $("board").children) {
     if (!el.id) continue;
-    const i = order ? order.indexOf(el.id) : -1;
-    el.classList.toggle("offview", !!order && i < 0);
-    el.style.order = order && i >= 0 ? String(i) : "";
+    const i = order.indexOf(el.id);
+    el.classList.toggle("offview", i < 0 || !sectionLive(el.id, r));
+    el.style.order = i >= 0 ? String(i) : "";
   }
-  // The run detail takes the whole row when the queue beside it is hidden.
-  $("detail").classList.toggle("wide", $("queue-card").classList.contains("offview"));
 }
 
 // ── cards: every one can be closed and can explain itself ───────────────────
 let closedCards = new Set();
 try { closedCards = new Set(JSON.parse(localStorage.getItem("platform-dash-closed") || "[]")); } catch (e) {}
-function collapsible(sec) {
+function collapsible(sec, fixed) {
   if (sec.querySelector(":scope > .card-head")) return;
   const h2 = sec.querySelector(":scope > h2");
   if (!h2 || !sec.id) return;
+  const head = h("div", { class: "card-head" });
+  sec.insertBefore(head, h2);
+  head.append(h2);
+  if (sec.dataset.help) {
+    const note = h("div", { class: "help", style: "display:none" }, sec.dataset.help);
+    head.after(note);
+    head.append(h("button", { type: "button", title: "What this card shows", onclick: () => {
+      note.style.display = note.style.display === "none" ? "" : "none"; } }, "ⓘ"));
+  }
+  // A docked card is closed with its column, not on its own.
+  if (fixed) { h2.style.cursor = "default"; return; }
   const toggle = h("button", { type: "button", title: "Close or open this card", "aria-expanded": "true" }, "▾");
   const set = closed => {
     sec.classList.toggle("collapsed", closed);
@@ -1040,27 +1398,18 @@ function collapsible(sec) {
   };
   toggle.addEventListener("click", flip);
   h2.addEventListener("click", flip);
-  const head = h("div", { class: "card-head" });
-  sec.insertBefore(head, h2);
-  head.append(h2);
-  if (sec.dataset.help) {
-    const note = h("div", { class: "help", style: "display:none" }, sec.dataset.help);
-    head.after(note);
-    head.append(h("button", { type: "button", title: "What this card shows", onclick: () => {
-      note.style.display = note.style.display === "none" ? "" : "none"; } }, "ⓘ"));
-  }
   head.append(toggle);
   set(closedCards.has(sec.id));
 }
 
-// A panel's own cards, on the page's board, each drawn at the time the bar
-// selects and guarded on its own: one that throws shows its error and leaves
-// the others drawn.
+// A panel's own cards, on the page's board or docked in the side column, each
+// drawn at the time the bar selects and guarded on its own: one that throws
+// shows its error and leaves the others drawn.
 function renderCards() {
-  const board = $("board"), list = panel()?.cards || [];
+  const board = $("board"), side = $("side"), list = panel()?.cards || [];
   const id = shownRunId(), r = id ? S.runs[id] : null;
   const want = list.map(c => `card-${c.id}`);
-  for (const el of [...board.querySelectorAll(":scope > [id^='card-']")]) if (!want.includes(el.id)) el.remove();
+  for (const el of [...board.querySelectorAll(":scope > [id^='card-']"), ...side.children]) if (!want.includes(el.id)) el.remove();
   if (!r) { for (const c of list) $(`card-${c.id}`)?.classList.add("offview"); return; }
   const t = runTime(r).t;
   for (const c of list) {
@@ -1068,10 +1417,11 @@ function renderCards() {
     if (!sec) {
       sec = h("section", { class: "card", id: `card-${c.id}`, "data-span": c.span || null, "data-help": c.help || null },
         h("h2", {}, c.title), h("p", { class: "sub" }, c.sub || ""), h("div", { class: "cbody" }));
-      board.insertBefore(sec, $("graph-card"));
-      collapsible(sec);
-      applyView((panel()?.views || []).find(v => v.id === curView));
+      if (c.dock === "side") side.append(sec); else board.insertBefore(sec, $("graph-card"));
+      collapsible(sec, c.dock === "side");
+      applyView(pageViews().find(v => v.id === curView), r);
     }
+    if (c.dock === "side") sec.classList.remove("offview");
     guard(`card-${c.id}`, () => c.render(sec.querySelector(".cbody"), r, t));
   }
 }
@@ -1120,7 +1470,6 @@ function zoomable(drawing) {
 function renderGraph() {
   // The card exists only for a scenario that declares a graph to draw in it.
   const g = panel()?.graph;
-  $("graph-card").style.display = g ? "" : "none";
   if (!g) return;
   const id = shownRunId(), r = id ? S.runs[id] : null;
   document.querySelectorAll("#g-tabs button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === gView)));
@@ -1180,7 +1529,6 @@ const OUTCOME = { granted: ["var(--good)", "approved"], rejected: ["var(--critic
 function renderOperator() {
   const id = shownRunId(), r = id ? S.runs[id] : null;
   const all = r ? Object.values(r.approvals).sort((a, b) => a.asked_t - b.asked_t) : [];
-  $("op-card").style.display = all.length ? "" : "none";
   if (!all.length) { opSig = ""; return; }
   const live = r.status === "running" && ledgerStatus() === "running";
   const pending = live ? all.filter(a => a.state === "requested") : [], closed = all.filter(a => a.state !== "requested").reverse();
@@ -1198,7 +1546,7 @@ function renderOperator() {
         h("th", { title: "The policy's own justification" }, "why it was suggested"))),
       h("tbody", {}, closed.map(a => { const [c, label] = OUTCOME[a.state] || ["var(--axis)", a.state]; return h("tr", {},
         h("td", { class: "num" }, w0 ? rel(a.t, w0) : clock(a.t)),
-        h("td", {}, a.action ? term(a.action, a.explanation?.countermeasure?.label) : "—"),
+        h("td", { class: "wrap" }, a.action ? term(a.action, a.explanation?.countermeasure?.label) : "—"),
         h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`),
         h("td", {}, a.operator || "—"),
         h("td", { class: "num" }, a.state === "expired" || a.waited_s == null ? "—" : `${num(a.waited_s, 1)} s`),
@@ -1231,7 +1579,6 @@ function seats(r) {
 function renderTeams() {
   const id = shownRunId(), r = id ? S.runs[id] : null, rows = r ? r.teams : [];
   const who = r ? seats(r) : [];
-  $("teams-card").style.display = rows.length || who.length ? "" : "none";
   const sig = `${cur.id}|${id}|${rows.length}|${JSON.stringify(r ? r.players : null)}`;
   if ((!rows.length && !who.length) || sig === teamSig) return;
   teamSig = sig;
@@ -1363,7 +1710,7 @@ document.addEventListener("keydown", e => {
   } else if (e.key === " " && !onSlider) { e.preventDefault(); setPlaying(!playing); }
   else if (e.key === "End") { e.preventDefault(); setPlaying(false); gTime = null; render(); }
 });
-document.querySelectorAll("#board > .card").forEach(collapsible);
+document.querySelectorAll("#board > .card").forEach(sec => collapsible(sec));
 $("theme").addEventListener("click", () => {
   const dark = document.documentElement.dataset.theme
     ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
@@ -1372,6 +1719,16 @@ $("theme").addEventListener("click", () => {
 });
 try { const th = localStorage.getItem("platform-dash-theme"); if (th) document.documentElement.dataset.theme = th; } catch (e) {}
 window.addEventListener("resize", () => renderDetail());
+// The side columns start under the band, however tall it is at this width.
+new ResizeObserver(() => document.documentElement.style.setProperty("--top-h", `${$("top").offsetHeight}px`)).observe($("top"));
+
+// A server started before a library was added to the page answers 404 for it:
+// the views drawn with it would stay blank, with nothing to say why.
+{
+  const missing = Object.entries({ D3: "d3", "Observable Plot": "Plot", "Split.js": "Split", Tabulator: "Tabulator" })
+    .filter(([, name]) => !window[name]).map(([label]) => label);
+  if (missing.length) $("page-err").textContent = `This page could not load ${missing.join(", ")} from its server, so the views drawn with ${missing.length > 1 ? "them" : "it"} are blank. The server was started before the page gained ${missing.length > 1 ? "these libraries" : "this library"}: stop it and start it again (make dashboard).`;
+}
 
 (async function loop() {
   await pollLedgers(); await pollEvents(); render(); renderNet();

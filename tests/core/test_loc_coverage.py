@@ -62,6 +62,8 @@ EXEMPT = {
     # cyberrange/core/vendor/VENDOR.json: not code this project wrote.
     "cyberrange/core/vendor/d3.min.js",
     "cyberrange/core/vendor/plot.umd.min.js",
+    "cyberrange/core/vendor/split.min.js",
+    "cyberrange/core/vendor/tabulator.min.js",
 }
 
 

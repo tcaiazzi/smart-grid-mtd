@@ -131,18 +131,20 @@ configuration (`summary.md`, `ci.csv`).
 run and campaign under `output/`, live or after the fact. It **only reads**:
 nothing on the page can change the lab or the files on disk.
 
-Every scenario gets the common parts of the page: the campaign queue and ETA,
-the phases of the current run, a time bar to replay a run at ×1/×5/×20, and the
-results with confidence intervals. Each scenario adds its own panel on top. The
+Every scenario gets the common parts of the page: the runs to choose from in a
+column on the left, the views as tabs in the middle (the run, and the campaign
+with its progress, ETA and results with confidence intervals), and a time bar,
+always in sight, to replay a run at ×1/×5/×20. Each scenario adds its own panel
+on top. The
 CPS panel is described in [§2.9](#29-following-a-run).
 
 The page is written for a reader who has not seen the code: attack steps,
 countermeasures and metrics go by their names (the recorded identifier is on
 hover), figures carry their unit, a relative time says what it is counted from,
 and an empty table says why it is empty. The badge next to the title tells
-whether the page is still hearing from its server. Its charts are drawn with
-Observable Plot and D3, served from the repository itself, so it works on a
-machine with no internet access.
+whether the page is still hearing from its server. Its charts, columns and long
+lists are drawn with libraries (Observable Plot, D3, Split.js, Tabulator) served
+from the repository itself, so it works on a machine with no internet access.
 
 ### 1.8 The scenarios today
 
@@ -604,15 +606,21 @@ exist to turn indications like these into statistics.
 
 ### 2.9 Following a run
 
-The CPS panel of the dashboard has three views, chosen in the header. The run
-and the time shown stay the same across views, so one moment can be compared
-from both sides:
+The CPS panel of the dashboard has six views, as tabs. The run and the time
+shown stay the same across views, so one moment can be compared from both
+sides:
 
-- **Overview**: the kill chain (when each step happened, when the defence
-  suspected and confirmed it, what covered it, and who was ahead), the
-  attacker · defender card, the journal of every fact, and the structure views.
+- **Match**, the one the page opens on: the kill chain (when each step happened,
+  when the defence suspected and confirmed it, what covered it, and who was
+  ahead), the attacker · defender card and the plant.
+- **Structure**: the structure views, below.
 - **Attacker**: only what the attacker did and knew.
 - **Defender**: only what the defence saw, believed and decided.
+- **Players**: what the defence asked its operator and what each team ran, when
+  people or harnesses play.
+- **Campaign**: progress, every run with what was measured on it, the results.
+
+The **journal** of every fact is in a column beside whichever view is open.
 
 The structure views draw the **topology**, the **knowledge graph** and the
 **attack tree**. The tree can show the defender's belief, the attacker's

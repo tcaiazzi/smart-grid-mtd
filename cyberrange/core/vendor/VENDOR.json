@@ -1,5 +1,5 @@
 {
-  "about": "Third-party libraries the dashboard page loads, served by cyberrange/core/dashboard.py at /vendor/<file>. Copied here unmodified so the page works where a lab has no internet access. To change one: replace the file with the release's own build, update version, source and sha256 below, and check docs/platform.md (section 5) for what the page uses of it.",
+  "about": "Third-party libraries the dashboard page loads, served by cyberrange/core/dashboard.py at /vendor/<file>. Copied here unmodified so the page works where a lab has no internet access. To change one: replace the file with the release's own build, update version, source and sha256 below, and check docs/platform.md (section 5) for what the page uses of it. \"browser_only\": a library that lays out in a real window, which tests/core/panel_draw_harness.js (run under node) replaces with a stand-in instead of loading.",
   "files": [
     {
       "file": "d3.min.js",
@@ -19,6 +19,37 @@
       "source": "https://registry.npmjs.org/@observablehq/plot/-/plot-0.6.19.tgz (package/dist/plot.umd.min.js)",
       "sha256": "0c1f1a0f0ea13cc8fc143bf014dd14ca90abb92d06f9e22a28bb76e42000d131",
       "needs": ["d3.min.js"]
+    },
+    {
+      "file": "split.min.js",
+      "name": "Split.js",
+      "version": "1.6.5",
+      "license": "MIT",
+      "license_file": "split.LICENSE",
+      "source": "https://registry.npmjs.org/split.js/-/split.js-1.6.5.tgz (package/dist/split.min.js)",
+      "sha256": "c32bd277fed98cd8a04033d4eef37201d9b50886189b4bb4d099d133feaf16dc",
+      "browser_only": true
+    },
+    {
+      "file": "tabulator.min.js",
+      "name": "Tabulator",
+      "version": "6.7.1",
+      "license": "MIT",
+      "license_file": "tabulator.LICENSE",
+      "source": "https://registry.npmjs.org/tabulator-tables/-/tabulator-tables-6.7.1.tgz (package/dist/js/tabulator.min.js)",
+      "sha256": "4e218e8d309e9b704089e7808f5484f5257ea645ba4e4808c0ae13969500d55c",
+      "browser_only": true
+    },
+    {
+      "file": "tabulator_simple.min.css",
+      "name": "Tabulator (its stylesheet)",
+      "version": "6.7.1",
+      "license": "MIT",
+      "license_file": "tabulator.LICENSE",
+      "source": "https://registry.npmjs.org/tabulator-tables/-/tabulator-tables-6.7.1.tgz (package/dist/css/tabulator_simple.min.css)",
+      "sha256": "2802e99322e3cbcddf0592573c39a1081fcf1e807e85196401960515a325eee8",
+      "browser_only": true,
+      "needs": ["tabulator.min.js"]
     }
   ]
 }

@@ -267,21 +267,55 @@ make cps-soc-dashboard    # only the cps-soc runs
 changes anything, in the lab or on disk. It shows two kinds of content.
 
 The page loads nothing from another host, so it works where a lab machine has
-no internet access. Its two libraries are files of this repository, under
+no internet access. Its libraries are files of this repository, under
 `cyberrange/core/vendor/` and served at `/vendor/<file>`: **D3** (the attack
-tree's layout, the links, zoom and pan on the structure views) and **Observable
-Plot** (every chart). `VENDOR.json` there pins each one by version and SHA-256,
-and is the route's whitelist; `tests/core/test_dashboard.py` fails if a file is
-not the release the manifest names, or if the page loads a script that is not
-listed. To update one, replace the file with the release's own build and record
+tree's layout, the links, zoom and pan on the structure views), **Observable
+Plot** (every chart), **Split.js** (the widths of the page's columns, dragged by
+their handles) and **Tabulator** (a list that may run to thousands of rows: only
+the rows in sight are drawn). `VENDOR.json` there pins each one by version and
+SHA-256, and is the route's whitelist; `tests/core/test_dashboard.py` fails if a
+file is not the release the manifest names, if the page loads a script or a
+stylesheet that is not listed, or if a vendored stylesheet fetches anything
+itself. To update one, replace the file with the release's own build and record
 its version, source and checksum in the manifest.
+
+**How the page is laid out.** A band at the top stays in sight while the page
+scrolls: the experiment chosen, its state in one line, whether the page is still
+hearing from its server, and the time bar. Under it, three columns:
+
+- on the left the **runs** of the experiment, one a line; a click shows that
+  run. Open by default when there is more than one run;
+- in the middle the **views**, as tabs: each holds the sections that answer one
+  question, so a view is read without scrolling past the others. A scenario's
+  panel composes its own (`views`, below); without, the page has two, *Run* and
+  *Campaign*. A section with nothing to show is left out, and so is a tab whose
+  sections all are. The view chosen is in the address (`?show=<id>`), so a link
+  opens the page on it; choosing a run from a view about the whole experiment
+  goes to the first view that shows a run;
+- on the right what a panel **docks** beside the views (a card with
+  `dock: "side"`): in sight whichever tab is chosen.
+
+The two side columns are opened and closed by the buttons in the band and sized
+by dragging the handle between columns; both are remembered by the browser.
+Under 1100 px of width they open over the view instead of beside it.
 
 **Common to every scenario:**
 
 - the list of ledgers, with the scenario of each;
-- campaign progress and ETA (fixed-length phases are flagged `timed`);
-- the queue;
+- campaign progress and ETA (fixed-length phases are flagged `timed`): the
+  *Progress* section;
+- the runs: the column on the left to choose from, and the *Runs* table with the
+  scenario's columns;
 - the current run's phases;
+- the **results of the run shown**, once it is scored: every metric it
+  recorded, in one list the reader filters and orders. It opens on the metrics
+  the scenario's panel names (`labels.metrics`); the buttons above it narrow it
+  to a kind of metric (the scenario's own, `labels.kinds`), the field to the
+  names that contain a text, and a click on a column's header orders by it.
+  When the run is part of a campaign, each metric is beside the campaign's mean
+  and 95% CI for runs of the same mode. The keys are the ones a campaign
+  aggregates under (`core/aggregate.py`), so a figure here and its mean in
+  *Campaign* are the same metric;
 - one time bar for the selected run, on the run's own clock: the slider is a
   time (a live run is laid on its planned length, so the thumb does not jump as
   facts arrive), ◀ ▶ step through the facts the scenario's panel marks, Play
@@ -340,6 +374,7 @@ panel's. The helpers:
 | `metric(key)`, `metricHead(m)` | a metric as `{label, unit, help}`: the panel's own words (`labels.metrics`), else the key spelled out and the unit read off its suffix (`_s`, `_pu`, `_kw`, `_rate`) |
 | `term(id, label?, help?)`, `termText(id, label?)` | a recorded identifier shown by its name (the caller's, else `labels.terms`), the identifier on hover |
 | `table(heads, rows, none)`, `empty(why)`, `queueTable` | a table with headers that explain themselves, a box that says why it is empty, the shared run table |
+| `grid(box, options)` | a long list, drawn by Tabulator (`options` are its own: `index`, `columns`, `data`, …) in the page's type and theme; `list.keepPlace(change)` applies a change to the data and leaves the row the reader was on where it was |
 | `plot(options)`, `plotTip(data, …)`, `timeAxis(span, since)` | an Observable Plot chart in the page's type and theme, its tooltip, a time axis in one unit that names its origin |
 | `structure(run)` | the run's recorded knowledge graph and attack tree, or `null` while they load (the page draws again when they arrive): it is where the names of the tree's steps and countermeasures come from |
 | `time()`, `setTime(t)`, `view()`, `render()`, `select(id)`, `S` | the time shown and the view chosen, and the page's state |
@@ -358,22 +393,27 @@ The hooks, all optional:
 | `detail(run)` | chips, chart and table of the selected run |
 | `chart(run)` | the selected run's chart |
 | `reduce(run, ev)` | folds the event kinds only it knows into `run.x`, and returns `true` for a kind it took (a kind nobody takes is listed at the foot of the page) |
-| `cards: [{id, title, sub, help?, span?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the page |
-| `views: [{id, label, help, sections, options?}]` | buttons in the page's header, one per view: `sections` lists, in order, the page's sections (`queue-card`, `detail`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it |
+| `cards: [{id, title, sub, help?, span?, dock?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the view; `dock: "side"` puts the card in the column beside the views instead of in one of them |
+| `views: [{id, label, help, sections, options?}]` | the page's tabs, the first being the one it opens on: `sections` lists, in order, the page's sections (`tiles-card`, `runs-card`, `detail`, `score-card`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it. Every section and every card that is not docked must be in some view, or no tab leads to it |
 | `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches (`{id, label, view?, default}` a check box, with `choices: [{id, label}]` a row of buttons), `origin(run)` the time the bar counts from |
 | `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one; `aggregate` is the campaign's `aggregate` event whole |
-| `labels: {metrics, terms, mode}` | its words: `metrics[key] = {label, unit, help}` for each metric it reports, `terms[id]` the name of an identifier it records, `mode(mode, run)` a run's mode as a sentence |
+| `labels: {metrics, kinds, terms, mode}` | its words: `metrics[key] = {label, unit, help}` for each metric it reports, `kinds: [{id, label, help, has(key)}]` what its metrics are about (the first whose `has` takes a key is its kind; a run's results are filtered by them), `terms[id]` the name of an identifier it records, `mode(mode, run)` a run's mode as a sentence |
 
 `tests/core/test_panels.py` checks the contract (a view lists only sections that
-exist, every headline metric of a campaign has a label and a unit) and draws
+exist, nothing is left out of every view, a docked card is in none, every
+headline metric of a campaign has a label and a unit) and draws
 runs through every hook of every panel, each card under every view and the
 attack tree from every perspective. It runs under node with the page's own
 reducer and helpers (the `data-part="model"` script of `dashboard.html`) and
 its own libraries, and builds each run by folding ledger events, shaped as the
 components write them, through `apply()`: a run built by hand would hold what
-its author believes the reducer keeps. Charts are drawn for real.
+its author believes the reducer keeps. Charts are drawn for real. The two
+libraries that lay out in a real window (`browser_only` in `VENDOR.json`) are
+not loaded there: the harness has a stand-in for Tabulator that keeps a list's
+data as its calls do, so a check can tell a list added to from one built again.
 
-- **CPS:** three views, *Overview*, *Attacker* and *Defender* (below); the plant
+- **CPS:** six views — *Match*, *Structure*, *Attacker*, *Defender*, *Players*
+  and *Campaign* — and the journal docked beside them (below); the plant
   voltage chart, findings and score; the **Attacker · Defender**
   card — what each side is doing and what it can see (the attacker from its own
   record: steps, plans, recon, observations; the defender from its telemetry,

@@ -244,14 +244,28 @@ class Vendored(_Fixture):
 
     def test_the_page_loads_only_its_panels_and_vendored_files(self):
         _status, _ctype, body = self.get("/")
-        srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"', body.decode())
+        page = body.decode()
+        srcs = re.findall(r'<script[^>]*\ssrc="([^"]+)"', page)
+        sheets = re.findall(r'<link[^>]*\srel="stylesheet"[^>]*\shref="([^"]+)"', page)
         allowed = {f"vendor/{e['file']}?v={e['version']}" for e in self.manifest()} | {"graph.js"}
         self.assertTrue(srcs, "the page loads no script at all")
         self.assertLessEqual(set(srcs), allowed, "the page loads a script nobody pinned")
-        for src in srcs:
+        self.assertLessEqual(set(sheets), allowed, "the page loads a stylesheet nobody pinned")
+        # A file sent under the wrong type is refused by the browser, silently.
+        for src, kind in [(s, "javascript") for s in srcs] + [(s, "css") for s in sheets]:
             status, ctype, _body = self.get("/" + src)
             self.assertEqual(status, 200, src)
-            self.assertIn("javascript", ctype, src)
+            self.assertIn(kind, ctype, src)
+
+    def test_a_stylesheet_fetches_nothing_of_its_own(self):
+        """A vendored stylesheet that pulled a font or an image from elsewhere
+        would break the page where the lab has no internet access."""
+        for entry in self.manifest():
+            if entry["file"].endswith(".css"):
+                with open(os.path.join(VENDOR_DIR, entry["file"])) as f:
+                    css = f.read()
+                self.assertNotIn("url(", css, entry["file"])
+                self.assertNotIn("@import", css, entry["file"])
 
     def test_a_vendored_file_is_kept_by_the_browser(self):
         name = self.manifest()[0]["file"]

@@ -16,6 +16,7 @@ Run: `.venv/bin/python -m pytest tests/core/test_panels.py`
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import unittest
@@ -52,7 +53,16 @@ console.log(JSON.stringify(out));
 
 KNOWN_KEYS = {"queue", "detail", "chart", "graph", "results", "reduce", "cards", "views", "labels"}
 # The page's own sections, which a view may list beside the panel's cards.
-PAGE_SECTIONS = {"queue-card", "detail", "results-card", "graph-card", "op-card", "teams-card"}
+PAGE_SECTIONS = {
+    "tiles-card",
+    "runs-card",
+    "detail",
+    "score-card",
+    "results-card",
+    "graph-card",
+    "op-card",
+    "teams-card",
+}
 GRAPH_KEYS = {"index", "overlayAt", "marks", "drawTopology", "drawKG", "drawTree"}
 GRAPH_OPTIONAL = {"options", "origin"}
 
@@ -66,12 +76,15 @@ def run_node(script):
     """Run a script under node, handed over on stdin: every panel in one script
     is longer than the operating system lets a single argument be. The drawing
     harness loads the page's libraries from the files named in the environment,
-    in the order VENDOR.json lists them (a library after the one it needs)."""
+    in the order VENDOR.json lists them (a library after the one it needs). One
+    that lays out in a real window (browser_only) is not loaded: the harness
+    has a stand-in for it."""
     from cyberrange.core.dashboard import PAGE, VENDOR_DIR, vendored
 
+    files = [f for f, entry in vendored().items() if not entry.get("browser_only")]
     env = {
         **os.environ,
-        "DASHBOARD_VENDOR_FILES": json.dumps([os.path.join(VENDOR_DIR, f) for f in vendored()]),
+        "DASHBOARD_VENDOR_FILES": json.dumps([os.path.join(VENDOR_DIR, f) for f in files]),
         # The harness takes the page's reducer and helpers from the page itself.
         "DASHBOARD_PAGE": PAGE,
     }
@@ -217,7 +230,8 @@ console.log(JSON.stringify(out));""",
                 continue
             script = (HARNESS % open(path).read()).replace(
                 "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
-                "{ views: panel.views || [], cards: (panel.cards || []).map(c => c.id) }",
+                "{ views: panel.views || [], cards: (panel.cards || []).map(c => c.id),"
+                " docked: (panel.cards || []).filter(c => c.dock).map(c => [c.id, c.dock]) }",
             )
             result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
@@ -235,6 +249,32 @@ console.log(JSON.stringify(out));""",
                         set(view["sections"]) - known,
                         f"view {view['id']} shows sections nobody draws",
                     )
+                # A docked card is beside every view, so it is in none; anything
+                # else that no view lists can never be brought on screen.
+                shown = {s for view in got["views"] for s in view["sections"]}
+                docked = {f"card-{c}" for c, _where in got["docked"]}
+                self.assertEqual({"side"}, {where for _c, where in got["docked"]} | {"side"})
+                self.assertEqual(set(), shown & docked, "a docked card is also listed in a view")
+                self.assertEqual(
+                    set(),
+                    known - docked - shown,
+                    "these sections are in no view: no tab of the page leads to them",
+                )
+
+    def test_the_page_has_the_sections_a_view_may_list(self):
+        from cyberrange.core.dashboard import PAGE
+
+        with open(PAGE) as f:
+            page = f.read()
+        for section in sorted(PAGE_SECTIONS):
+            self.assertIn(
+                f'id="{section}"', page, f"a view may list {section}, which is not on the page"
+            )
+        # The views of a scenario that declares none are the page's own.
+        own = set(
+            re.findall(r'"([a-z]+-card|detail)"', page[page.index("function pageViews") :][:1200])
+        )
+        self.assertEqual(PAGE_SECTIONS, own, "the page's own views do not cover its sections")
 
     def test_every_panel_draws_a_run(self):
         """Every hook of every panel, run on an empty run and on one with every

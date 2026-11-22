@@ -78,8 +78,9 @@ should stay empty; an entry in it is a debt with no due date.
 ### The dashboard's libraries and its panels
 
 - **`Vendored`** (`tests/core/test_dashboard.py`) — a file under
-  `cyberrange/core/vendor/` is not the release `VENDOR.json` names, or the page
-  loads a script the manifest does not list. *Legitimate fix:* put back the
+  `cyberrange/core/vendor/` is not the release `VENDOR.json` names, the page
+  loads a script or a stylesheet the manifest does not list, or a vendored
+  stylesheet fetches something itself. *Legitimate fix:* put back the
   release's own build, or record the new version, source and SHA-256 when the
   update is meant. *Forbidden:* editing a vendored file, or pasting a new hash
   to quiet the test without knowing where the file came from.

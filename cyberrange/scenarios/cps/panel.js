@@ -909,6 +909,21 @@
   // here: every metric of the campaign's mean [95% CI] table (metrics.CI_HEADLINE),
   // the detectors by what they are, and a run's mode as a sentence.
   const LABELS = {
+    // What a metric is about, to filter a run's results by; the first that has the key.
+    kinds: [
+      { id: "harness", label: "Harnesses", help: "How the harness at each seat played: its calls, decisions, tokens and cost",
+        has: k => k.startsWith("players.") },
+      { id: "setup", label: "Run setup", help: "What the run was: its mode, seed, and the versions it ran with",
+        has: k => /^(run\.|seed$|variant$|model_thresholds?(\.|$)|n_frames$)/.test(k) },
+      { id: "attack", label: "Attack", help: "What the attacker did and how far it got",
+        has: k => /^(attack(_|$)|attacker_|stage_reached$|plan_steps$|planner$|time_to_impact_s$|tree_fidelity(\.|$))/.test(k) },
+      { id: "detection", label: "Detection", help: "What the defender's sensors saw, and how soon",
+        has: k => /^(detectors\.|detected$|detection_latency_s$|false_alarms$|findings$|first_finding_t$)/.test(k) },
+      { id: "response", label: "Response", help: "What the defender decided and did about it, and what it cost",
+        has: k => /^(response(\.|$)|mitigated_s$|prevented$)/.test(k) },
+      { id: "plant", label: "Plant", help: "What happened to the plant: how far and how long it left its normal band",
+        has: k => /^(abnormal_|impact_|recover|manual_mode_s$|max_abs_deviation_pu$|v_(max|min)$|energy_|data_gaps$|max_data_gap_s$)/.test(k) },
+    ],
     metrics: {
       "detectors.combined.detected": { label: "attack detected, by any detector", unit: "share of runs",
         help: "Runs in which at least one detector reported after the attack began" },
@@ -1249,6 +1264,8 @@
       timeline,
       h("div", { class: "legend" }, key("●", "var(--critical)", "the attacker did the step"), key("✕", "var(--critical)", "tried and failed"),
         key("▲", "var(--s1)", "the defender suspected it"), key("◆", "var(--s1)", "confirmed it"), key("■", "var(--good)", "a countermeasure covering it was applied")),
+      // The chart says it all at a glance; the same times as figures are a click away.
+      fold("killchain-table", `the ${rows.length} step${rows.length === 1 ? "" : "s"} as a table, with the times as figures`,
       table([th("attack step", "A step of the attack tree the attacker ran, or the defender has an opinion on; hover for the name it is recorded under"),
         th("attacker did it", `When the attacker did the step, ${SINCE}; ✗ when it tried and failed`, true),
         th("defender suspected", `When the defender first believed the step possible, ${SINCE}`, true),
@@ -1259,7 +1276,7 @@
           h("td", { class: "num" }, x.did != null ? rel(x.did, t0) : x.failed != null ? h("span", { style: "color:var(--critical)" }, `✗ ${rel(x.failed, t0)}`) : "—"),
           h("td", { class: "num" }, rel(x.sus, t0)), h("td", { class: "num" }, rel(x.conf, t0)),
           h("td", { class: "num" }, lag(x)),
-          h("td", { class: "wrap" }, x.c ? [N.el(x.c.id), h("span", { class: "muted" }, ` at ${rel(x.c.t, t0)}`)] : h("span", { class: "muted", title: "No applied countermeasure covers this step" }, "nothing")))), ""));
+          h("td", { class: "wrap" }, x.c ? [N.el(x.c.id), h("span", { class: "muted" }, ` at ${rel(x.c.t, t0)}`)] : h("span", { class: "muted", title: "No applied countermeasure covers this step" }, "nothing")))), ""), false));
   }
 
   // A card redraws only when what it shows changed: same run, time, data, width.
@@ -1274,8 +1291,11 @@
     box.dataset.sig = sig;
     return true;
   }
+  // A card that threw has drawn nothing worth keeping: it is drawn again at the
+  // next frame, so its error stays in sight instead of leaving a blank card.
+  const retried = draw => (box, r, t) => { try { return draw(box, r, t); } catch (e) { box.dataset.sig = ""; throw e; } };
 
-  // ── the cards of the three views ──────────────────────────────────────────
+  // ── the cards of the views ──────────────────────────────────────────
   function renderSides(box, r, t) {
     if (!keep(box, r, t)) return;
     const v = sidesAt(r, t), N = namer(r);
@@ -1381,7 +1401,7 @@
   // ── journal ───────────────────────────────────────────────────────────────
   // Every fact of the run in order, by side; a click shows the run at its time.
   const SIDES = { attacker: "var(--critical)", defender: "var(--s1)", plant: "var(--axis)" };
-  const journalShow = {}, journalAll = {};
+  const journalShow = {};
   function journalDefaults(view) {
     return view === "attacker" ? { attacker: true, defender: false, plant: true }
       : view === "defender" ? { attacker: false, defender: true, plant: true } : { attacker: true, defender: true, plant: true };
@@ -1436,69 +1456,75 @@
     }
     return out.sort((a, b) => a.t - b.t);
   }
-  // The journal lists the newest fact first, and is kept, not redrawn: a new
-  // fact is a row put in at the top, a fact that changed (a burst grown by one)
-  // has its text updated, and every other row stays the element it was. So a
-  // reader scrolled down the list, or about to click a row, keeps their place
-  // while a live run goes on adding facts above.
+  // The journal lists the newest fact first, in a list of the page's (ui.grid):
+  // only the rows in sight are drawn, so a long match costs nothing, and the
+  // list is kept, not redrawn. A new fact is a row added at the top, a fact that
+  // changed (a burst grown by one) has its row updated, every other row stays
+  // the row it was. So a reader scrolled down the list, or about to click a
+  // row, keeps their place while a live run goes on adding facts above.
   const journals = new WeakMap();
   function renderJournal(box, r, t) {
-    const view = UI.view() || "overview";
+    const view = UI.view() || "match";
     const show = journalShow[view] || (journalShow[view] = journalDefaults(view));
-    if (!keep(box, r, t, [view, show, !!journalAll[view]])) return;
-    const items = journalOf(r).filter(e => show[e.side]);
-    const all = !!journalAll[view], shown = (all ? items : items.slice(-300)).reverse();
-    // The frame (filters, note, table) is built when what frames the list changes.
-    const frame = JSON.stringify([r.id, view, show, all, items.length > shown.length]);
+    if (!keep(box, r, t, [view, show])) return;
+    const t0 = r.start_t, seen = {};
+    // A fact is known by when it happened and whose it is; two at one instant by their order.
+    const rows = journalOf(r).filter(e => show[e.side]).map(e => {
+      const base = `${e.t}|${e.side}`;
+      return { key: `${base}|${seen[base] = (seen[base] || 0) + 1}`, t: e.t, side: e.side, text: e.text, when: t0 ? rel(e.t, t0) : clock(e.t) };
+    }).reverse();
+    // The frame (filters, note, list) is built when what frames the list changes.
+    const frame = JSON.stringify([r.id, view, show]);
     let J = journals.get(box);
     if (!J || J.frame !== frame) {
+      if (J) J.grid.destroy();
       const redraw = () => { box.dataset.sig = ""; UI.render(); };
       const filters = h("div", { class: "tabs", role: "group", "aria-label": "Sides shown" },
         ...Object.keys(SIDES).map(k => h("button", { type: "button", "aria-pressed": String(!!show[k]), title: `Show the ${k}'s facts`,
           onclick: () => { show[k] = !show[k]; redraw(); } },
           h("span", { class: "dot", style: `background:${SIDES[k]};margin-right:5px` }), k)));
-      J = { frame, rows: new Map(), tbody: h("tbody", {}), note: h("span", {}) };
-      // The list keeps its own place when rows are added above (set below), so the browser must not also try to.
-      J.scroll = h("div", { class: "scroll", style: "max-height:420px;overflow-y:auto;overflow-anchor:none" }, h("table", {},
-        h("thead", {}, h("tr", {}, th("since run start", "When the fact happened, counted from the start of the run", true),
-          th("side", "Whose fact it is: the attacker's, the defender's, or the plant's own state"),
-          th("what happened", "The newest fact is at the top. Facts after the time shown on the time bar are greyed"))),
-        J.tbody));
-      // replaceChildren would print a null as the text "null": the button is spread in or not at all.
-      box.replaceChildren(filters, h("p", { class: "sub", style: "margin:6px 0" }, "Newest first. ", J.note,
-        ...(items.length > shown.length ? [" ", h("button", { type: "button", onclick: () => { journalAll[view] = true; redraw(); } }, "show all")] : [])),
-        J.scroll);
+      J = { frame, at: t, ready: false, note: h("p", { class: "sub", style: "margin:6px 0" }) };
+      // A fact after the time shown on the time bar is greyed.
+      const dim = row => { const d = row.getData(), el = row.getElement(); el.style.opacity = J.at != null && d.t > J.at + 1e-6 ? ".4" : ""; };
+      J.dimAll = () => { for (const row of J.grid.getRows("visible")) dim(row); };
+      // The list takes the height its box has left; alone on a board, a height of its own.
+      const list = h("div", {});
+      box.replaceChildren(filters, J.note, h("div", { style: "flex:1 1 auto;min-height:260px;position:relative" }, h("div", { style: "position:absolute;inset:0" }, list)));
+      J.grid = UI.grid(list, {
+        index: "key", data: rows,
+        placeholder: Object.values(show).some(Boolean) ? "Nothing has happened yet on the sides shown" : "Every side is switched off: choose one above",
+        columns: [
+          { title: "since run start", field: "when", width: 104, hozAlign: "right", headerHozAlign: "right",
+            headerTooltip: "When the fact happened, counted from the start of the run" },
+          { title: "what happened", field: "text", cssClass: "wrap", variableHeight: true,
+            headerTooltip: "The newest fact is at the top; the dot says whose it is. Facts after the time shown on the time bar are greyed",
+            formatter: cell => { const e = cell.getData(); return h("span", { title: `${e.side} — click to show the run at this time` },
+              h("span", { class: "dot", style: `background:${SIDES[e.side]};margin-right:6px` }), e.text); } },
+        ],
+        rowFormatter: dim,
+      });
+      J.grid.on("tableBuilt", () => { J.ready = true; });
+      J.grid.on("rowClick", (e, row) => UI.setTime(row.getData().t));
+      J.grid.on("scrollVertical", () => J.dimAll());
       journals.set(box, J);
-    }
-    J.note.textContent = items.length > shown.length ? `The latest ${shown.length} of ${items.length} facts.`
-      : `${items.length} fact${items.length === 1 ? "" : "s"}.`;
-    // A fact is known by when it happened and whose it is; two at one instant by their order.
-    const seen = {}, wanted = [], t0 = r.start_t;
-    for (const e of [...shown].reverse()) {
-      const base = `${e.t}|${e.side}`, key = `${base}|${seen[base] = (seen[base] || 0) + 1}`;
-      let row = J.rows.get(key);
-      if (!row) {
-        row = { what: h("td", { class: "wrap" }), text: null, dim: null };
-        row.tr = h("tr", jump(e.t), h("td", { class: "num" }, t0 ? rel(e.t, t0) : clock(e.t)),
-          h("td", {}, h("span", { class: "dot", style: `background:${SIDES[e.side]}` }), ` ${e.side}`), row.what);
-        J.rows.set(key, row);
+    } else if (!J.ready) {
+      box.dataset.sig = "";  // the list is still being built: this frame is drawn at the next one
+      return;
+    } else {
+      const old = J.keys, fresh = rows.length - old.length;
+      // The common case, a live run: the list is the one shown with new facts on top.
+      const grown = fresh >= 0 && old.every((key, i) => rows[fresh + i].key === key);
+      if (!grown) J.grid.replaceData(rows);
+      else {
+        const changed = rows.slice(fresh).filter(x => J.texts.get(x.key) !== x.text);
+        if (changed.length) J.grid.updateData(changed);
+        if (fresh) J.grid.keepPlace(() => J.grid.addData(rows.slice(0, fresh), true));
       }
-      if (row.text !== e.text) row.what.textContent = row.text = e.text;
-      const dim = t != null && e.t > t + 1e-6;
-      if (row.dim !== dim) { row.dim = dim; row.tr.style.opacity = dim ? ".4" : ""; }
-      wanted.push([key, row]);
+      if (J.at !== t) { J.at = t; J.dimAll(); }
     }
-    wanted.reverse();
-    const keys = new Set(wanted.map(([key]) => key));
-    for (const [key, row] of J.rows) if (!keys.has(key)) { row.tr.remove(); J.rows.delete(key); }
-    if (J.empty) { J.empty.remove(); J.empty = null; }
-    // Rows go where they belong; one already there is not touched. A reader who
-    // has scrolled down stays on the rows they were reading.
-    const before = J.scroll.scrollHeight, at = J.scroll.scrollTop;
-    wanted.forEach(([, row], i) => { if (J.tbody.children[i] !== row.tr) J.tbody.insertBefore(row.tr, J.tbody.children[i] || null); });
-    if (at > 0) J.scroll.scrollTop = at + (J.scroll.scrollHeight - before);
-    if (!wanted.length) J.tbody.append(J.empty = h("tr", {}, h("td", { colspan: 3, class: "empty" },
-      Object.values(show).some(Boolean) ? "Nothing has happened yet on the sides shown" : "Every side is switched off: choose one above")));
+    J.keys = rows.map(x => x.key);
+    J.texts = new Map(rows.map(x => [x.key, x.text]));
+    J.note.textContent = `${rows.length} fact${rows.length === 1 ? "" : "s"}, the newest first. Click one to show the run at that time.`;
   }
 
   const GRAPH_OPTIONS = [
@@ -1514,15 +1540,22 @@
   ];
   const origin = r => r.writes.length ? { t: r.writes[0].t, label: "since the first malicious write" } : null;
 
-  // The page's sections and this panel's cards, composed into three views.
+  // The page's sections and this panel's cards, composed into views: one
+  // question each, the match first since that is what is followed live. The
+  // journal is in none: it is docked beside whichever is chosen.
   const VIEWS = [
-    { id: "overview", label: "Overview", help: "Both sides, side by side: the kill chain, what each is doing and seeing, the plant",
-      sections: ["card-killchain", "card-sides", "queue-card", "detail", "card-journal", "graph-card", "op-card", "teams-card", "results-card"],
-      options: { perspective: "both" } },
+    { id: "match", label: "Match", help: "The match as it stands: the kill chain, its results once it is scored, what each side is doing and seeing, the plant",
+      sections: ["card-killchain", "score-card", "card-sides", "detail"], options: { perspective: "both" } },
+    { id: "structure", label: "Structure", help: "The lab as structure: its topology, its knowledge graph, the attack tree with what happened on it",
+      sections: ["graph-card"], options: { perspective: "both" } },
     { id: "attacker", label: "Attacker", help: "Only the attacker: what it did, what it knew and planned, the tree as it knew it",
-      sections: ["card-attacker", "card-journal", "graph-card", "detail"], options: { perspective: "attacker" } },
+      sections: ["card-attacker", "graph-card"], options: { perspective: "attacker" } },
     { id: "defender", label: "Defender", help: "Only the defender: what it saw and believed, what it decided and ran",
-      sections: ["card-defender", "card-journal", "detail", "graph-card", "op-card"], options: { perspective: "defender" } },
+      sections: ["card-defender", "op-card", "graph-card"], options: { perspective: "defender" } },
+    { id: "players", label: "Players", help: "The people and harnesses in the match: what the defender asked its operator, what each team did",
+      sections: ["op-card", "teams-card"] },
+    { id: "campaign", label: "Campaign", help: "The experiment as a whole: how far it is, every run with what was measured on it, the aggregated results",
+      sections: ["tiles-card", "runs-card", "results-card"] },
   ];
   const CARDS = [
     { id: "killchain", title: "Kill chain", render: renderKillchain,
@@ -1537,9 +1570,9 @@
     { id: "defender", title: "Defender", render: renderDefender,
       sub: "Only the defender: what it saw, what it believed and when, what it decided and ran.",
       help: "Everything here comes from the defender's sensors and analytics: nothing of what the attacker really did.\nIts decisions: each response with the finding that triggered it and what the policy weighed. Alerts: raised and cleared. Its belief: when each step of the attack tree was first suspected, inferred, confirmed.\nClick a row to show the run at that time." },
-    { id: "journal", title: "Journal", render: renderJournal,
-      sub: "Every fact of the run, the newest first. Click a row to show the run at that time.",
-      help: "The run as a log, newest fact at the top: the attacker's steps, plans and writes; the defender's findings, beliefs, decisions and actions; the plant's changes of state. Repeated findings and writes within 5 s are grouped. Facts after the time shown are greyed. The buttons choose whose facts to list." },
+    { id: "journal", title: "Journal", render: renderJournal, dock: "side",
+      sub: "Every fact of the run, beside whichever view is open.",
+      help: "The run as a log, newest fact at the top: the attacker's steps, plans and writes; the defender's findings, beliefs, decisions and actions; the plant's changes of state. Repeated findings and writes within 5 s are grouped. Facts after the time shown are greyed. The buttons choose whose facts to list. Click a fact to show the run at that time." },
   ];
 
   let UI = null;
@@ -1552,7 +1585,7 @@
       chart: drawChart,
       reduce,
       views: VIEWS,
-      cards: CARDS,
+      cards: CARDS.map(c => ({ ...c, render: retried(c.render) })),
       graph: { index, overlayAt, marks, drawTopology, drawKG, drawTree, options: GRAPH_OPTIONS, origin },
       // The results tabs this scenario fills, shown before any run is scored.
       results: { tabs: RESULT_TABS, render: results },

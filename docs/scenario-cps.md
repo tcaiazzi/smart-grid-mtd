@@ -316,29 +316,40 @@ attack acted on. The voltage chart, the plant's state and "rules fired" /
 journal are the whole run's and name the feeder of every row. A run on a plant
 of one feeder shows none of this.
 
-The panel composes the page into three views, chosen in the header; the run and
-the time shown stay the same across them, so one moment can be compared from both
-sides:
+The panel composes the page into six views, as tabs, each answering one
+question; the run and the time shown stay the same across them, so one moment
+can be compared from both sides:
 
-- **Overview**: the kill chain, the Attacker · Defender card, the queue and the
-  run, the journal, the structure views (attack tree from both sides), the
-  operator's suggestions and the teams.
+- **Match**, the one the page opens on: the kill chain, the results of the run
+  once it is scored (the metrics a campaign aggregates, for this run: filtered
+  by kind — attack, detection, response, plant, harnesses, run setup — or by
+  name, and ordered by any column), the
+  Attacker · Defender card, and the run with the plant's chart and the findings.
+- **Structure**: the structure views (attack tree from both sides).
 - **Attacker**: only the attacker — its steps and what each one told it, its
   plans (each choice of impact, the options open, the paths closed), its
-  reconnaissance, the journal of its facts and the plant's, and the attack tree
-  as it knows it.
+  reconnaissance, and the attack tree as it knows it.
 - **Defender**: only the defender — what it saw, believed and when (alerts as
   intervals, each tree node's first suspected / inferred / confirmed), its
-  decisions with their trigger and costs, the journal of its facts and the
-  plant's, and the attack tree as it believes it.
+  decisions with their trigger and costs, the operator's suggestions, and the
+  attack tree as it believes it.
+- **Players**: the operator's suggestions and what each team did. The tab is
+  there only when a run has an operator or players.
+- **Campaign**: progress, the table of every run, the aggregated results.
+
+The **Journal** is in none of them: it is docked in a column beside whichever
+is open, and in the Attacker and Defender views it starts on that side's facts
+and the plant's.
 
 The **Kill chain** card puts each step of the attack on one axis: when the
 attacker did it, when the defender first suspected and confirmed it, the
 countermeasure that covered it, and four figures — time to detect, to respond,
-to impact, and who is ahead. The **Journal** lists every fact of the run, the
-newest first, by side; a click on a row (or on a mark of the lanes) shows the
-run at that time. While a run is live a new fact is a row added at the top:
-the list is not redrawn, so a reader who has scrolled down keeps their place.
+to impact, and who is ahead; the same times as figures are in a table folded
+under the chart. The **Journal** lists every fact of the run, the newest first,
+by side; a click on a row (or on a mark of the lanes) shows the run at that
+time. However long the run, only the rows in sight are drawn. While a run is
+live a new fact is a row added at the top: the list is not redrawn, so a reader
+who has scrolled down keeps their place.
 
 An **Attacker · Defender** card puts the two sides next to
 each other, each split into what it is *doing* and what it *knows* (attacker) or

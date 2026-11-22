@@ -48,6 +48,13 @@ PAGE = os.path.join(HERE, "dashboard.html")
 VENDOR_DIR = os.path.join(HERE, "vendor")
 # A vendored file never changes under its versioned URL, so the browser keeps it.
 CACHE_FOREVER = "public, max-age=31536000, immutable"
+# What a vendored file is served as, by its extension: a browser refuses a
+# stylesheet or a script sent under the wrong type.
+VENDOR_TYPE = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+
+
+def ext(name):
+    return os.path.splitext(name)[1]
 
 
 def vendored():
@@ -56,7 +63,12 @@ def vendored():
     The manifest is the whitelist: a name is looked up in it, never joined into
     a path, so the route serves these files and nothing else."""
     with open(os.path.join(VENDOR_DIR, "VENDOR.json")) as f:
-        return {entry["file"]: entry for entry in json.load(f)["files"]}
+        files = {entry["file"]: entry for entry in json.load(f)["files"]}
+    unknown = [name for name in files if ext(name) not in VENDOR_TYPE]
+    assert not unknown, (
+        f"VENDOR.json lists {unknown}: the server would not know what to serve them as"
+    )
+    return files
 
 
 def scenario_panels():
@@ -134,9 +146,7 @@ class ProgressDashboard:
                         return
                     try:
                         with open(os.path.join(VENDOR_DIR, name), "rb") as f:
-                            self._send(
-                                f.read(), "text/javascript; charset=utf-8", cache=CACHE_FOREVER
-                            )
+                            self._send(f.read(), VENDOR_TYPE[ext(name)], cache=CACHE_FOREVER)
                     except OSError:
                         self.send_error(404, "vendored file missing")
                 elif url.path == "/api/structure":
