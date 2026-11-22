@@ -29,11 +29,14 @@ def needs(tree, node_id):
     return out
 
 
-def build_steps(tree, target_url, engine_ip, engine_port, interval=0.5, ways=None, plant_b64=None):
+def build_steps(
+    tree, target_url, engine_ip, engine_port, interval=0.5, ways=None, plant_b64=None, give_up=0
+):
     """The steps a person may run: every executable, feasible node of the attack
     ``tree``, in stage order, each with its command and its prerequisites.
     ``ways`` ({host: URL}) are the applications of the tree's ways in, for a lab
-    with several; a step that names none uses ``target_url``."""
+    with several; a step that names none uses ``target_url``. ``give_up`` is
+    how many writes refused in a row end a step early (0: it tries them all)."""
     ctx = {
         "target_url": target_url,
         "engine_ip": engine_ip,
@@ -41,6 +44,7 @@ def build_steps(tree, target_url, engine_ip, engine_port, interval=0.5, ways=Non
         "interval": interval,
         "ways": ways or {},
         "plant_b64": plant_b64,
+        "give_up": give_up,
     }
     places = S.places(tree)
     nodes = [n for n in tree_doc.walk(tree) if S.is_step(n) and tree_doc.feasible(n)]
@@ -53,6 +57,9 @@ def build_steps(tree, target_url, engine_ip, engine_port, interval=0.5, ways=Non
             "attck": n.get("attck"),
             "attck_name": n.get("attck_name"),
             "stage": S.stage_of(n),
+            # How far into the attack the stage is: the range has the order of
+            # the stages from here, not a copy of its own to keep in step.
+            "stage_rank": S.STAGE_INDEX[S.stage_of(n)],
             **places[n["id"]],
             "detectability": S.DETECTABILITY.get(S.kind_of(n)),
             "needs": [p for p in needs(tree, n["id"]) if p in known],

@@ -17,6 +17,12 @@ produce an over-voltage or a trip.
   response system's suggestions, and decides what to apply.
 - The **referee** watches both teams from a read-only dashboard.
 
+A seat need not be a person's: a harness such as Claude Code can play either
+team, at the same console and under the same rules
+([playing-with-agents.md](playing-with-agents.md)). On the consoles and on the
+referee's dashboard a harness's actions are marked *agent*, each with the reason
+it gave. A person can give a reason too, in the *why* box next to their name.
+
 The SOC here **does not act on its own**: it proposes each countermeasure with its
 explanation and waits for a person to approve it. A suggestion left unanswered expires
 and is not applied.
@@ -82,7 +88,7 @@ is written stays.
 To each team the referee hands **two links**, and nothing else: the console and the
 terminal. They are printed on the terminal the lab was started from (the red team's
 only once calibration is over) and written to
-`output/cps-advisor/run-1/teams.json`. Each link carries the team's secret: whoever
+`output/cps-advisor/latest/teams.json`. Each link carries the team's secret: whoever
 has the link gets in.
 
 | | Console | Terminal |
@@ -205,7 +211,7 @@ show. Here too every command is recorded.
 
 The same game, with the blue team on the tools of a real SOC instead of the SOC's
 console (technical details in [scenario-cps-soc.md](scenario-cps-soc.md)). The blue
-team's links, written to `output/cps-soc/run-1/teams.json`, are three: the
+team's links, written to `output/cps-soc/latest/teams.json`, are three: the
 terminal, the **SIEM** (the Wazuh dashboard, with the run's login) and the **cases**
 (DFIR-IRIS, same login). The certificates come from the lab's own authority: the
 browser asks for an exception once.
@@ -266,7 +272,7 @@ On a defence host, a command's team is read from how the shell arrived there:
 
 ## 8. What is left after the game
 
-In the run directory (`output/cps-advisor/run-1/`):
+In the run directory (`output/cps-advisor/latest/`):
 
 - `ground_truth.jsonl` — what really happened (red team steps, Modbus writes,
   commands);
@@ -277,6 +283,6 @@ In the run directory (`output/cps-advisor/run-1/`):
 - `teams.json` — the links handed to the teams.
 
 The score is computed as for the `cps` scenario:
-`make cps-metrics CPS_OUT=output/cps-advisor/run-1`. Keep in mind that here the timings
+`make cps-metrics CPS_RUN=output/cps-advisor/latest`. Keep in mind that here the timings
 include the operators', and that an effect obtained with a hand-written shell write
 (instead of a step) shows in the plant but not among the scored effects.

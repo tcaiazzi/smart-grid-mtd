@@ -62,6 +62,20 @@ def fetch(machine, guest_path: str, dst_path: str) -> None:
     download_file_from_container(machine.api_object, guest_path, dst_path)
 
 
+def push(machine, guest_path: str, data: bytes, mode: int = 0o600) -> None:
+    """Write ``data`` as ``guest_path`` in a deployed Kathará machine, owned by
+    root with ``mode``. For what must reach a node without ever being part of
+    a command line: a secret passed as an argument is in the node's process
+    table, and in every log that keeps the command."""
+    info = tarfile.TarInfo(os.path.basename(guest_path))
+    info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        tar.addfile(info, io.BytesIO(data))
+    if not machine.api_object.put_archive(os.path.dirname(guest_path) or "/", buf.getvalue()):
+        raise OSError(f"could not write {guest_path} in {getattr(machine, 'name', machine)}")
+
+
 def drain(exec_stream) -> None:
     """Exhaust an exec stream so the command runs to completion. Kathará's
     exec streams (IExecStream) define __next__ but not __iter__: no for-loop."""
@@ -125,6 +139,7 @@ class RunContext:
         self.components = []
         self.gt = None
         self._extra_artifacts = []
+        self.reported_down = set()
 
     # Seeds
     @property
@@ -169,6 +184,11 @@ class RunContext:
             log.warning("could not download %s:%s (%s)", node, guest_path, e)
             return None
 
+    def upload(self, node, guest_path, text, mode=0o600):
+        """Write ``text`` as a file in ``node`` without it passing through a
+        command line (secrets, tokens)."""
+        push(self.machine(node), guest_path, text.encode(), mode)
+
     # Streams
     def open_ground_truth(self, **run_meta):
         """Open <out_dir>/ground_truth.jsonl (host-only) and record run_meta."""
@@ -203,6 +223,36 @@ class RunContext:
         component.start(self)
         self.components.append(component)
         return component
+
+    def down(self):
+        """The essential components that are not running, by name; each is
+        also put on the ledger as ``component_down``, once."""
+        out = []
+        for c in self.components:
+            alive = getattr(c, "alive", None)
+            try:
+                if alive is None or alive(self):
+                    continue
+            except Exception as e:  # a node that does not answer is not a dead component
+                log.debug("could not check %r: %s", c, e)
+                continue
+            out.append(c.name)
+            if c.name not in self.reported_down:
+                self.reported_down.add(c.name)
+                self.emit("component_down", component=c.name, node=getattr(c, "node", None))
+        return out
+
+    def require_alive(self):
+        """Fail the run now if an essential component has died: going on would
+        spend the rest of the episode measuring a lab that is not the one meant."""
+        down = self.down()
+        if down:
+            # Imported here: lifecycle imports this module.
+            from cyberrange.core.lifecycle import ComponentDown
+
+            raise ComponentDown(
+                f"not running: {', '.join(down)}. Their console logs are with the run's artifacts."
+            )
 
     def stop_all(self):
         for c in reversed(self.components):

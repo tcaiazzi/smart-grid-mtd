@@ -13,6 +13,13 @@ served from three places, so that each side sees only what its side knows:
     control   the platform's dashboard, on the host   everything, read-only
     blue      the SOC's console, on the soc node      the defence, and its levers
     red       the red console, on the attacker node   the attack's steps
+
+A seat need not be a person's. Given a harness (--red-harness, --blue-harness),
+a team is played by a program: on a node of its own, with one link to its
+team's console and a way out to its model's API, and nothing else of the lab or
+of the host within reach. It sits at the same console as a person would, behind
+the same token. With a harness at both seats nobody has to be there: the
+episode gives them an engagement of fixed length and ends by itself.
 """
 
 import json
@@ -21,7 +28,12 @@ import os
 import re
 import secrets
 import sys
+import time
 
+from cyberrange.core import paths, runcard
+from cyberrange.core.component import SeatPlayer
+from cyberrange.core.scenario import PhaseSpec
+from cyberrange.core.topology import Iface, Node
 from cyberrange.planes.attack import components as attack
 from cyberrange.planes.defense import components as defense
 from cyberrange.planes.defense import ot_registers as reg
@@ -29,7 +41,15 @@ from cyberrange.planes.monitor import components as monitor
 from cyberrange.scenarios.cps import topology as T
 from cyberrange.scenarios.cps.feature import Feature
 from cyberrange.scenarios.cps.scenario import plant_of
-from cyberrange.scenarios.cps_advisor.guest_files import RED_FILES, SOC_CONSOLE_FILES, TEAM_FILES
+from cyberrange.scenarios.cps_advisor.briefing import briefing
+from cyberrange.scenarios.cps_advisor.guest_files import (
+    PLAYER_FILES,
+    RED_FILES,
+    SEAT_FILES,
+    SOC_CONSOLE_FILES,
+    TEAM_FILES,
+)
+from cyberrange.scenarios.cps_advisor.harnesses import HARNESSES
 
 log = logging.getLogger("scenarios.cps_advisor")
 
@@ -40,6 +60,34 @@ MANAGED_ROLES = ("boundary", "sensor", "hmi")
 # The service an attacker gets a shell through, on the hosts that run one.
 ENTRY = {"hmi": attack.VulnApp.SCRIPT}
 TEAMS_FILE = "teams.json"  # where the teams' links are written; host only
+ENGAGEMENT = "engagement"  # the phase two harnesses play each other in
+# What every harness plays through and is first told, whichever it is: the
+# run's card keeps their fingerprints.
+ADAPTER, PLAYER_KIT = "nodes/players/seat_mcp.py", "nodes/players/harness_kit.py"
+# The link between a team's console and its player's node: a network of two
+# addresses, of a range no lab uses (RFC 2544's, never routed).
+SEAT_NETS = {BLUE: "198.18.0.0", RED: "198.18.0.4"}
+PLANE_OF = {BLUE: defense.PLANE, RED: attack.PLANE}
+
+
+def fresh_token():
+    """A team's secret for one run. It is passed to the consoles as the value
+    of an option, and one that began with a dash would be read as an option
+    itself: the console would not start, and the run would go on without it."""
+    while True:
+        token = secrets.token_urlsafe(24)
+        if token[0].isalnum():
+            return token
+
+
+def seat_link(team):
+    """(link, console's address, player's address) of ``team``'s seat."""
+    a, b, c, d = (int(x) for x in SEAT_NETS[team].split("."))
+    return f"seat{team}", f"{a}.{b}.{c}.{d + 1}", f"{a}.{b}.{c}.{d + 2}"
+
+
+def player_node(team):
+    return f"{team}player"  # Kathará takes no '-' in a machine's name
 
 
 def managed(spec):
@@ -87,6 +135,43 @@ class People(Feature):
         )
         t.add_argument("--blue-token", default=None, help="default: a fresh one per run")
         t.add_argument("--red-token", default=None, help="default: a fresh one per run")
+        if not self.console:
+            return  # the harnesses sit at the SOC's console, which this lab does not serve
+        p = ap.add_argument_group(
+            "players", "a harness at a team's seat instead of a person (with --teams)"
+        )
+        for team in (RED, BLUE):
+            p.add_argument(
+                f"--{team}-harness",
+                default=None,
+                choices=sorted(HARNESSES),
+                help=f"what plays the {team} team; default: a person",
+            )
+            p.add_argument(f"--{team}-model", default=None, help="the model that harness runs")
+        p.add_argument(
+            "--engagement-s",
+            type=float,
+            default=900.0,
+            help="with a harness at both seats: how long they play, at most",
+        )
+        p.add_argument(
+            "--max-calls", type=int, default=None, help="each harness's budget of tool calls"
+        )
+        p.add_argument(
+            "--player-dns",
+            default="1.1.1.1,8.8.8.8",
+            help="name servers of the players' nodes, comma-separated: a lab node has none, "
+            "and a harness must find its model's API",
+        )
+
+    def players(self, args):
+        """{team: Harness} for the seats a harness plays."""
+        named = {team: getattr(args, f"{team}_harness", None) for team in (BLUE, RED)}
+        return {team: HARNESSES[name] for team, name in named.items() if name}
+
+    def engaged(self, args):
+        """Whether both seats are a harness's: then nobody has to be there."""
+        return len(self.players(args)) == 2
 
     def validate(self, args):
         if (args.respond or "off") == "off":
@@ -94,10 +179,29 @@ class People(Feature):
                 "--respond off: an advisor with no policy has nothing to suggest; "
                 "use rules or solver (or the cps scenario, to only watch)"
             )
-        if args.teams:
-            if not getattr(args, "playground", False):
+        players = self.players(args)
+        if players and not args.teams:
+            raise SystemExit(
+                f"--{next(iter(players))}-harness: a harness plays a team, and there are "
+                "teams only with --teams"
+            )
+        for team, harness in players.items():
+            if harness.seats and team not in harness.seats:
                 raise SystemExit(
-                    "--teams needs --playground: the lab has to stay up for the people in it"
+                    f"--{team}-harness {harness.name}: it plays the "
+                    f"{' or '.join(harness.seats)} team only"
+                )
+            missing = harness.missing()
+            if missing:
+                raise SystemExit(
+                    f"--{team}-harness {harness.name} needs {' or '.join(missing)} in the "
+                    "environment: its node is given nothing else of this host"
+                )
+        if args.teams:
+            if not self.engaged(args) and not getattr(args, "playground", False):
+                raise SystemExit(
+                    "--teams needs --playground: the lab has to stay up for the people in it "
+                    "(or a harness at both seats: --red-harness and --blue-harness)"
                 )
             if args.attack:
                 raise SystemExit(
@@ -126,22 +230,77 @@ class People(Feature):
         # the other's console, so it never reaches the ledger.
         for team in (BLUE, RED):
             if not getattr(args, f"{team}_token", None):
-                setattr(args, f"{team}_token", secrets.token_urlsafe(24))
+                setattr(args, f"{team}_token", fresh_token())
 
     def run_info(self, args):
-        return {"approval": args.approval, "teams": bool(args.teams)}
+        info = {"approval": args.approval, "teams": bool(args.teams)}
+        if args.teams:
+            # Who plays each seat: what a comparison of harnesses is grouped by.
+            played = self.players(args)
+            info["players"] = {
+                team: {
+                    "kind": "agent",
+                    "harness": played[team].name,
+                    "model": self.model(args, team),
+                }
+                if team in played
+                else {"kind": "human"}
+                for team in (BLUE, RED)
+            }
+        return info
+
+    def secret_options(self, args):
+        return ("blue_token", "red_token")
+
+    def run_card(self, scenario, args):
+        """What the players were given, as fingerprints: the seat's adapter and
+        the first message (nodes/players, the same for every harness), and
+        each team's briefing. Two games are comparable when these match."""
+        if not args.teams:
+            return {}
+        card = {
+            "seat_adapter": runcard.file_fingerprint(paths.resolve(ADAPTER)),
+            "player_kit": runcard.file_fingerprint(paths.resolve(PLAYER_KIT)),
+        }
+        for team in (BLUE, RED):
+            card[f"briefing_{team}"] = runcard.fingerprint(self.briefing(scenario, args, team))
+        return card
+
+    def model(self, args, team):
+        return getattr(args, f"{team}_model", None) or self.players(args)[team].default_model
 
     # ── the lab ──────────────────────────────────────────────────────────────
     def extras(self, spec, args):
         def published(*pairs):
             return [f"{host}:{guest}/tcp" for host, guest in pairs]
 
+        def seated(host, team):
+            """What a team's node gains when a harness plays the team: a foot
+            on the link to the player's node, open to that node for the console
+            and to nothing else. Without the last two rules the node would also
+            carry the player's packets on into the lab."""
+            link, here, there = seat_link(team)
+            iface = f"eth{len(spec.host(host).nics)}"  # after the lab's own
+            return T.Extra(
+                ifaces=[Iface(link, f"{here}/30")],
+                startup=[
+                    f"iptables -A INPUT -i {iface} -p tcp -s {there} "
+                    f"--dport {T.CONSOLE_GUEST_PORT} -j ACCEPT",
+                    f"iptables -A INPUT -i {iface} -j DROP",
+                    f"iptables -A FORWARD -i {iface} -j DROP",
+                    f"iptables -A FORWARD -o {iface} -j DROP",
+                ],
+            )
+
+        players = self.players(args)
         soc = spec.one("soc").name
         served = [(args.blue_shell_port, T.TERMINAL_GUEST_PORT)]
         files = list(TEAM_FILES)
         if self.console:
             served.insert(0, (args.blue_port, T.CONSOLE_GUEST_PORT))
             files = SOC_CONSOLE_FILES + files
+            if args.teams:
+                files = SEAT_FILES + files
         out = {name: T.Extra(files=TEAM_FILES) for name in managed(spec)}
         # Closed on the SOC's lab network, where the HMI is.
         out[soc] = T.Extra(
@@ -154,7 +313,7 @@ class People(Feature):
         if args.teams:
             attacker = spec.one("it-host").name
             out[attacker] = T.Extra(
-                files=RED_FILES + TEAM_FILES,
+                files=RED_FILES + SEAT_FILES + TEAM_FILES,
                 ports=published(
                     (args.red_port, T.CONSOLE_GUEST_PORT),
                     (args.red_shell_port, T.TERMINAL_GUEST_PORT),
@@ -166,7 +325,26 @@ class People(Feature):
                     T.TERMINAL_GUEST_PORT,
                 ),
             )
+            if RED in players:
+                out[attacker] = out[attacker].merged(seated(attacker, RED))
+        if BLUE in players:
+            out[soc] = out[soc].merged(seated(soc, BLUE))
         return out
+
+    def nodes(self, spec, args):
+        """A node per harness: one foot on the link to its team's console, a
+        way out for its model's API, and none of the lab's networks."""
+        return [
+            Node(
+                player_node(team),
+                [Iface(seat_link(team)[0], f"{seat_link(team)[2]}/30")],
+                image=harness.image,
+                role="player",
+                files=PLAYER_FILES + list(harness.files),
+                bridged=True,
+            )
+            for team, harness in self.players(args).items()
+        ]
 
     # ── where each team goes ─────────────────────────────────────────────────
     def links(self, args):
@@ -189,7 +367,20 @@ class People(Feature):
             operator_port=T.CONSOLE_GUEST_PORT,
             operator_token=args.blue_token,
             operator_terminal=self.links(args)[BLUE]["terminal"],
+            # With teams the console is a team's seat, served to a player of
+            # any kind; a lone operator's console stays the page it was.
+            seat_team=BLUE if args.teams else None,
+            briefing=self.briefing(scenario, args, BLUE) if args.teams else None,
         )
+
+    def briefing(self, scenario, args, team):
+        spec = scenario.lab_spec(args)
+        return briefing(team, spec, args, managed=managed(spec), engaged=self.engaged(args))
+
+    def phases(self, args):
+        if args.teams and self.engaged(args):
+            return [PhaseSpec(ENGAGEMENT, float(args.engagement_s), timed=True)]
+        return []
 
     # ── the episode ──────────────────────────────────────────────────────────
     def services(self, ctx):
@@ -247,6 +438,56 @@ class People(Feature):
                 terminal=links["terminal"],
                 ways=p.ways,
                 plant_b64=reg.plant_b64(ctx.scenario.plant_spec(a)),
+                briefing=self.briefing(ctx.scenario, a, RED),
             )
         )
         hand_over(RED, links)
+        self.play(ctx)
+
+    def play(self, ctx):
+        """Start the harnesses, both at once so that neither side has a head
+        start; with one at each seat, give them their engagement and end it
+        when the time is up or both have stopped playing."""
+        a = ctx.args
+        played = self.players(a)
+        if not played:
+            return
+        spec = ctx.scenario.lab_spec(a)
+        engaged = self.engaged(a)
+        deadline = time.time() + float(a.engagement_s) if engaged else None
+        seats = {BLUE: spec.one("soc").name, RED: spec.one("it-host").name}
+        started = []
+        for team, harness in played.items():
+            _link, console, _player = seat_link(team)
+            model = self.model(a, team)
+            started.append(
+                ctx.start(
+                    SeatPlayer(
+                        player_node(team),
+                        team,
+                        harness,
+                        # The console's address on the link, as the player's node sees it.
+                        (console, T.CONSOLE_GUEST_PORT, "eth0"),
+                        getattr(a, f"{team}_token"),
+                        terms={
+                            "CR_OPERATOR": f"agent:{harness.name}" + (f":{model}" if model else ""),
+                            "CR_MODEL": model,
+                            "CR_DEADLINE": deadline,
+                            "CR_MAX_CALLS": a.max_calls,
+                        },
+                        secrets=harness.secrets(),
+                        resolvers=[ns for ns in a.player_dns.split(",") if ns.strip()],
+                        plane=PLANE_OF[team],
+                    )
+                )
+            )
+            log.info("The %s team is played by %s, at %s", team, harness.name, seats[team])
+        if not engaged:
+            return
+        log.info("Engagement: %.0fs at most, until both players have stopped", a.engagement_s)
+        with ctx.phase(ENGAGEMENT):
+            while time.time() < deadline and not all(p.exited for p in started):
+                ctx.observe(min(2.0, max(0.0, deadline - time.time())))
+                # The players' transcripts are read here: without this pull a
+                # run that polls nothing would never see a player stop.
+                ctx.poll()

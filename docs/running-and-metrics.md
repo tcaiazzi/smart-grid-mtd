@@ -21,10 +21,20 @@ anything deploys.
   a campaign sweeps a range of seeds (e.g. `CPS_SEEDS=1-5`, the default) across a set
   of modes (`CPS_MODES`), so results come with a confidence interval rather than a
   single number.
-- **Output directory.** Each run writes under `output/`. Single-run targets take an
-  explicit path (e.g. `CPS_OUT=output/cps/hijack`); campaigns write under
-  `output/campaigns/<name>/`. `make clean` removes everything under `output/` —
-  nothing there is tracked by git.
+- **Output directory.** Each run writes under `output/`, and — for the CPS
+  scenarios — in a directory of its own:
+  `output/<scenario>/runs/<date-time>[-RUN_NAME]`, with `output/<scenario>/latest`
+  pointing at the last one. Two runs never share a directory: they would share a
+  ledger and overwrite each other's artifacts.
+  - `RUN_NAME=hijack` adds a name to the directory's.
+  - `CPS_OUT=output/cps/mine` names the directory yourself. One that already
+    holds a run is refused; `OVERWRITE=1` empties it first.
+  - The targets that read a run (`cps-metrics`, `cps-replay`) look at `latest`
+    unless told another (`CPS_RUN=…`).
+  - Campaigns write under `output/campaigns/<name>/`.
+  - `make runs` lists the runs kept, one line each (`RUNS_OF=cps-advisor` for one
+    scenario's). `make clean` removes everything under `output/` — nothing there
+    is tracked by git.
 
 ## What a run leaves behind
 
@@ -33,12 +43,20 @@ from a lab node are prefixed with that node's name (`<node>.<file>`):
 
 | File | What it is |
 |---|---|
+| `run.json` | The run's card: the commit it was made with and whether the tree had uncommitted changes, fingerprints of the lab it deployed, the node images, its options (secrets masked), and how it ended. Written at the start, so a run that dies still says what it was. |
 | `progress.jsonl` | The run's timeline — the event stream the dashboard shows. |
 | `ground_truth.jsonl` | What really happened: attack steps, Modbus writes, footholds (host-side, never seen by the in-lab sensors). |
 | `<node>.telemetry.jsonl` | What a sensor reported (e.g. `sensor.telemetry.jsonl`, `hmi.it_telemetry.jsonl`). |
 | `response.jsonl` | The SOC's findings, suggestions, verdicts and responses (CPS scenarios). |
 | `<node>.*.log` | Each node's logs (the PLC, the engine, Wazuh, the SOC analytics, …). |
-| `metrics.json` / `metrics.md` | The scored metrics, as data and as a report. A campaign writes them for each of its runs. A single run puts its score on its ledger (`run_metrics`, what the dashboard shows); `make cps-metrics` writes `metrics.md` and prints the data (see below). |
+| `metrics.json` / `metrics.md` | The scored metrics, as data and as a report, for a single run and for each run of a campaign alike. Under `run.card` they carry the fingerprints of the run's card, so a row of a table still says which code and lab it comes from. |
+
+A run whose essential services are not all running — the engine, the PLC, the
+sensor, the SOC's analytics, the red team's console — **fails**, with a
+`component_down` event naming the one that died, instead of ending as a valid run
+that measured a lab with a piece missing. Its artifacts are downloaded all the
+same: the dead component's console log is among them. In a campaign the run is
+retried.
 
 Campaigns write under `output/campaigns/<name>/`, one directory per run in `runs/`,
 plus:
@@ -55,7 +73,8 @@ Metrics are computed **offline** from a finished run's artifacts, so you can
 re-score without re-running:
 
 ```bash
-make cps-metrics CPS_OUT=output/cps/hijack     # detection, impact, response -> metrics.md
+make cps-metrics                               # the last run: detection, impact, response
+make cps-metrics CPS_RUN=output/cps/runs/<run> # another one
 ```
 
 For the MQTT scenario the figures and comparisons are their own targets
@@ -65,7 +84,7 @@ To ask *what a response policy would have done* on an already-finished run, with
 touching the lab:
 
 ```bash
-make cps-replay CPS_OUT=output/cps/hijack
+make cps-replay CPS_RUN=output/cps/runs/<run>
 ```
 
 ## Following a run live

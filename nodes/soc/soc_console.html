@@ -61,6 +61,7 @@ td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeri
 td.num, th.num { text-align: right; white-space: nowrap; }
 td.wrap { overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+.agent { border: 1px solid var(--muted); border-radius: 4px; padding: 0 4px; font-size: 11px; }
 .empty { color: var(--muted); padding: 18px 0; text-align: center; }
 .err { color: var(--critical); font-size: 12px; overflow-wrap: anywhere; }
 .sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
@@ -114,9 +115,12 @@ summary { cursor: pointer; color: var(--ink-2); }
       </span>
       <label class="sub" for="who" style="margin:0">operator</label>
       <input id="who" type="text" maxlength="80" autocomplete="off" spellcheck="false" style="width:130px">
+      <input id="why" type="text" maxlength="500" autocomplete="off" placeholder="why (optional)" title="The reason for your next action, kept with it on record" style="width:190px">
       <a class="btn" id="term" target="_blank" rel="noopener" style="display:none">Open terminal</a>
     </header>
     <div class="err" id="err"></div>
+    <details class="card" id="briefing-wrap" style="display:none"><summary>Briefing</summary>
+      <pre id="briefing" style="white-space:pre-wrap"></pre></details>
 
     <div class="grid2">
       <div>
@@ -188,11 +192,24 @@ const sent = {};  // suggestion id -> verdict sent from this page, until the SOC
 async function call(method, path, body) {
   const res = await fetch(path, { method, cache: "no-store",
     headers: { "Authorization": `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
-    body: body ? JSON.stringify({ ...body, operator: operator() }) : undefined });
+    body: body ? JSON.stringify({ ...body, operator: operator(), ...why() }) : undefined });
   if (res.status === 401) { gate("That token was not accepted."); throw new Error("unauthorized"); }
   const doc = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(doc.error || String(res.status));
   return doc;
+}
+// Who acted, as the record names them: a player that is not a person says so
+// itself ("agent:<name>"), and is shown apart from the people at the console.
+const who = name => !name ? "—" : String(name).startsWith("agent:")
+  ? [h("span", { class: "agent" }, "agent"), ` ${String(name).slice(6)}`] : name;
+// The reason typed for the next action: sent with it once, then cleared.
+function why() { const v = $("why").value.trim(); $("why").value = ""; return v ? { note: v } : {}; }
+// The team's briefing, when the console has one to give.
+async function briefing() {
+  try {
+    const doc = await call("GET", "/briefing");
+    if (doc.briefing) { $("briefing").textContent = doc.briefing; $("briefing-wrap").style.display = ""; }
+  } catch (e) {}
 }
 async function order(method, path, body) {
   $("err").textContent = "";
@@ -272,7 +289,7 @@ function render() {
     table("closed", ["#at", "suggestion", "outcome", "by", "why it was suggested"], closed.map(a => {
       const [c, label] = OUTCOME[a.state] || ["var(--muted)", a.state];
       return h("tr", {}, h("td", { class: "num" }, clock(a.closed_t)), h("td", {}, a.action),
-        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`), h("td", {}, a.operator || "—"),
+        h("td", {}, h("span", { class: "dot", style: `background:${c}` }), ` ${label}`), h("td", {}, who(a.operator), a.note ? h("div", { class: "muted" }, `“${a.note}”`) : null),
         h("td", { class: "wrap" }, a.explanation?.rationale || "—")); }), "");
     table("cms", ["countermeasure", "host", "state", ""], (S.countermeasures || []).map(c => h("tr", {},
       h("td", {}, h("div", {}, c.label || c.id), h("details", {}, h("summary", {}, c.id),
@@ -290,7 +307,7 @@ function render() {
       h("td", {}, [f.src, f.name].filter(Boolean).join(" · ") || "—"), h("td", { class: "num" }, num(f.confidence)))), "No finding yet");
     table("actions", ["#at", "action", "host", "asked by", "outcome"], [...(S.actions || [])].reverse().map(a => h("tr", {},
       h("td", { class: "num" }, clock(a.t)), h("td", {}, `${a.op === "revert" ? "revert " : ""}${a.id}`), h("td", {}, a.machine || "—"),
-      h("td", {}, a.by || "soc"),
+      h("td", {}, who(a.by || "soc"), a.note ? h("div", { class: "muted" }, `“${a.note}”`) : null),
       h("td", { class: "wrap" }, h("span", { class: "dot", style: `background:${a.ok ? "var(--good)" : "var(--critical)"}` }),
         a.ok ? " done" : ` failed${a.commands?.[0]?.out ? `: ${a.commands[0].out}` : ""}`))), "Nothing has run yet");
   }
@@ -335,6 +352,7 @@ async function refresh() {
   render();
 }
 refresh();
+if (token) briefing();
 setInterval(refresh, 1000);
 </script>
 </body>

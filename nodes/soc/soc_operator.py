@@ -16,6 +16,14 @@ further into the SOC than this.
     POST /countermeasures/<id>   {"op": "apply" | "revert", "operator": "name"}
     POST /mode                   {"mode": "advise" | "auto", "operator": "name"}
 
+Every POST also takes a "note": the reason for the action, in the operator's
+words, kept with it on record. Given a seat (seat.py), the console serves a
+player that is not a browser as well:
+
+    GET  /seat                   the seat: team, actions, the node's clock
+    GET  /briefing               {"briefing": the team's briefing, Markdown}
+    POST /shell                  {"cmd": "...", "operator": "name"}; runs it on this node
+
 Everything but the page carries ``Authorization: Bearer <token>``; the page is
 static and holds no data of its own.
 
@@ -35,6 +43,13 @@ MODES = ("advise", "auto")
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "soc_console.html")
 MAX_BODY = 4096  # a verdict is a few dozen bytes; anything longer is not one
 CLOSED_KEPT = 200  # closed suggestions kept for a console that connects late
+NOTE_MAX = 500  # a reason, not a report
+ACTIONS = ("answer_suggestion", "apply_countermeasure", "revert_countermeasure", "set_mode")
+
+
+def note_of(doc):
+    """The reason an operator gave for an action, or None."""
+    return str(doc["note"])[:NOTE_MAX] if doc.get("note") else None
 
 
 class ApprovalDesk:
@@ -76,7 +91,7 @@ class ApprovalDesk:
             ]
             return {"now": round(self.clock(), 3), "pending": pending, "closed": list(self._closed)}
 
-    def submit(self, request, verdict, operator=None):
+    def submit(self, request, verdict, operator=None, note=None):
         """-> "ok" | "unknown" | "decided". Queued for the analytics' next step."""
         with self._lock:
             if request not in self._pending:
@@ -90,6 +105,7 @@ class ApprovalDesk:
                     "verdict": verdict,
                     "operator": operator,
                     "t": round(self.clock(), 3),
+                    **({"note": note} if note else {}),
                 }
             )
             return "ok"
@@ -129,12 +145,13 @@ class OperatorApi:
     """The desk over HTTP. Refuses to exist without a token: an open port that
     applies countermeasures for whoever asks is the attacker's best tool."""
 
-    def __init__(self, desk, token, port=0, host="0.0.0.0", page=PAGE, terminal=None):
+    def __init__(self, desk, token, port=0, host="0.0.0.0", page=PAGE, terminal=None, seat=None):
         if not token:
             raise ValueError(
                 "the operator console needs a token: it will not serve unauthenticated"
             )
         self.desk, self.token, self.page, self.terminal = desk, str(token), page, terminal
+        self.seat = seat  # a seat.Seat, where a team sits at this console
         self.httpd = ThreadingHTTPServer((host, port), self._handler())
         self.httpd.daemon_threads = True
 
@@ -205,6 +222,10 @@ class OperatorApi:
                     self._reply(200, {**api.desk.state(), "terminal": api.terminal})
                 elif path == "/approvals":
                     self._reply(200, api.desk.listing())
+                elif path == "/seat" and api.seat:
+                    self._reply(200, api.seat.describe())
+                elif path == "/briefing" and api.seat:
+                    self._reply(200, {"briefing": api.seat.briefing})
                 else:
                     self._reply(404, {"error": "not found"})
 
@@ -213,8 +234,9 @@ class OperatorApi:
                     self._reply(401, {"error": "a bearer token is required"})
                     return
                 parts = self.path.split("?")[0].strip("/").split("/")
-                if parts[0] not in ("approvals", "countermeasures", "mode") or len(parts) != (
-                    1 if parts[0] == "mode" else 2
+                single = ("mode",) + (("shell",) if api.seat else ())
+                if parts[0] not in ("approvals", "countermeasures") + single or len(parts) != (
+                    1 if parts[0] in single else 2
                 ):
                     self._reply(404, {"error": "not found"})
                     return
@@ -222,11 +244,20 @@ class OperatorApi:
                 if doc is None:
                     return
                 operator = str(doc.get("operator"))[:80] if doc.get("operator") else None
-                if parts[0] == "mode":
+                # Kept only when given: an action nobody explained stays as it was.
+                noted = {"note": note_of(doc)} if note_of(doc) else {}
+                if parts[0] == "shell":
+                    if not isinstance(doc.get("cmd"), str) or not doc["cmd"].strip():
+                        self._reply(400, {"error": "cmd must be a command line"})
+                        return
+                    # The desk's lock is not held here: a command may run for
+                    # seconds, and the analytics must keep taking verdicts.
+                    self._reply(200, api.seat.shell(doc["cmd"], operator, noted.get("note")))
+                elif parts[0] == "mode":
                     if doc.get("mode") not in MODES:
                         self._reply(400, {"error": f"mode must be one of {', '.join(MODES)}"})
                         return
-                    api.desk.order("mode", operator, mode=doc["mode"])
+                    api.desk.order("mode", operator, mode=doc["mode"], **noted)
                     self._reply(200, {"mode": doc["mode"]})
                 elif parts[0] == "countermeasures":
                     if doc.get("op") not in OPS:
@@ -234,14 +265,16 @@ class OperatorApi:
                     elif not api.desk.knows(parts[1]):
                         self._reply(404, {"error": "the SOC has no such countermeasure"})
                     else:
-                        api.desk.order("countermeasure", operator, id=parts[1], op=doc["op"])
+                        api.desk.order(
+                            "countermeasure", operator, id=parts[1], op=doc["op"], **noted
+                        )
                         self._reply(200, {"id": parts[1], "op": doc["op"]})
                 else:
                     verdict = doc.get("verdict")
                     if verdict not in VERDICTS:
                         self._reply(400, {"error": f"verdict must be one of {', '.join(VERDICTS)}"})
                         return
-                    status = api.desk.submit(parts[1], verdict, operator)
+                    status = api.desk.submit(parts[1], verdict, operator, noted.get("note"))
                     if status == "unknown":
                         self._reply(404, {"error": "no suggestion with this id is waiting"})
                     elif status == "decided":

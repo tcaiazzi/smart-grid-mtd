@@ -122,6 +122,8 @@ def step_command(node, ctx, place=None):
         base += f" --unit-id {place['unit']}"
     if ctx.get("plant_b64"):
         base += f" --plant-b64 {ctx['plant_b64']}"
+    if ctx.get("give_up"):
+        base += f" --give-up {ctx['give_up']}"
     if kind in IMPACT_MODE:
         return f"{base} --step impact --attack {IMPACT_MODE[kind]}"
     return f"{base} --step {kind}"

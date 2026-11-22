@@ -41,6 +41,15 @@ class Feature:
     def run_info(self, args):
         return {}
 
+    def run_card(self, scenario, args):
+        """What this feature adds to the run's card: flat values that tell
+        whether two runs ran the same thing."""
+        return {}
+
+    def secret_options(self, args):
+        """Names of this feature's options whose value is a secret."""
+        return ()
+
     # ── the lab ──────────────────────────────────────────────────────────────
     def extras(self, spec, args):
         """{host: Extra}: what this feature adds to the lab's hosts."""
@@ -60,6 +69,10 @@ class Feature:
         return {}
 
     # ── the episode ──────────────────────────────────────────────────────────
+    def phases(self, args):
+        """[PhaseSpec] this feature adds to the episode, after the lab's own."""
+        return []
+
     def services(self, ctx):
         """Components started with the lab's services, before normal operation."""
 

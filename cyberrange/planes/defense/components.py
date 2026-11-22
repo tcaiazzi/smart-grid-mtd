@@ -94,6 +94,7 @@ class OtSensor(GuestAgent):
             plane=PLANE,
             name="ot_sensor",
             artifacts=[Artifact(node, self.TELEMETRY, f"{node}.telemetry.jsonl")],
+            watch="ot_sensor.py",
         )
 
     def telemetry(self):
@@ -201,6 +202,11 @@ class WazuhAgent(GuestAgent):
         )
 
 
+def _noted(ev):
+    """The reason an operator gave for an action, when they gave one."""
+    return {"note": ev["note"]} if ev.get("note") else {}
+
+
 class SocAnalytics(GuestAgent):
     """The SOC's analytics on the manager's node (soc_analytics.py): it reads
     the manager's alerts, keeps the attack tree's belief and asks the manager
@@ -225,7 +231,16 @@ class SocAnalytics(GuestAgent):
     RESPONSE = "/response.jsonl"
     KG, TREE = "/kg.json", "/tree.json"
     # What a suggestion's ledger event carries, of the SOC's approval record.
-    APPROVAL_FIELDS = ("request", "action", "state", "due_t", "explanation", "operator", "waited_s")
+    APPROVAL_FIELDS = (
+        "request",
+        "action",
+        "state",
+        "due_t",
+        "explanation",
+        "operator",
+        "waited_s",
+        "note",
+    )
 
     def __init__(
         self,
@@ -240,6 +255,8 @@ class SocAnalytics(GuestAgent):
         operator_terminal=None,
         iris=None,
         belief_feed=None,
+        seat_team=None,
+        briefing=None,
     ):
         inv = base64.b64encode(json.dumps(inventory).encode()).decode()
         operator = ""
@@ -253,6 +270,12 @@ class SocAnalytics(GuestAgent):
             operator = f" --operator-port {operator_port} --operator-token {operator_token}"
             if operator_terminal:
                 operator += f" --operator-terminal {operator_terminal}"
+            if seat_team:
+                # The team at the console, and what it is told: the console then
+                # serves its seat to a player that is not a browser as well.
+                operator += f" --seat-team {seat_team}"
+                if briefing:
+                    operator += f" --briefing-b64 {base64.b64encode(briefing.encode()).decode()}"
         artifacts = [
             Artifact(node, self.RESPONSE, "response.jsonl"),
             Artifact(node, self.KG, f"{node}.kg.json"),
@@ -273,6 +296,7 @@ class SocAnalytics(GuestAgent):
             plane=PLANE,
             name="soc_analytics",
             artifacts=artifacts,
+            watch="soc_analytics.py",
         )
 
     def telemetry(self):
@@ -309,9 +333,14 @@ class SocAnalytics(GuestAgent):
                 op=ev.get("op") or "apply",
                 by=ev.get("by") or "soc",
                 guest_t=ev.get("done_t"),
+                **_noted(ev),
             )
         if kind == "mode":
-            return "soc_mode", {"mode": ev.get("mode"), "operator": ev.get("operator")}
+            return "soc_mode", {
+                "mode": ev.get("mode"),
+                "operator": ev.get("operator"),
+                **_noted(ev),
+            }
         if kind == "approval":
             fields = {k: ev[k] for k in self.APPROVAL_FIELDS if ev.get(k) is not None}
             return "approval", fields | {"guest_t": ev.get("t")}

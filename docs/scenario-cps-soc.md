@@ -169,7 +169,7 @@ The other targets:
   runs.
 
 The run writes the blue team's links, with the run's login, to
-`output/cps-soc/run-1/teams.json`:
+`output/cps-soc/latest/teams.json`:
 
 ```
 blue team siem: https://127.0.0.1:8770/  (login blue / …)
@@ -185,7 +185,7 @@ exception once.
 |---|---|---|
 | `CPS_SIEM_PORT` | `8770` | host port of the Wazuh dashboard |
 | `CPS_CASES_PORT` | `8771` | host port of IRIS |
-| `CPS_SOC_OUT` | `output/cps-soc/run-1` | run directory |
+| `CPS_SOC_OUT` | a new one per run, under `output/cps-soc/runs/` | run directory |
 
 The `CPS_ADVISOR_*` variables (policy, timeout of a suggestion, post-attack
 observation) and the `CPS_*` variables of `cps` apply unchanged.

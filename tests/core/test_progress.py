@@ -310,7 +310,18 @@ class RunLifecycle(unittest.TestCase):
             "a standalone run's score must reach its ledger before the run ends, or the "
             "dashboard shows a finished run with no score",
         )
-        self.assertEqual(evs[-2]["metrics"], {"abnormal_frames": 3, "run_dir": self.out})
+        scored = evs[-2]["metrics"]
+        self.assertEqual((scored["abnormal_frames"], scored["run_dir"]), (3, self.out))
+        with open(os.path.join(self.out, "metrics.json")) as f:
+            kept = json.load(f)
+        self.assertEqual(
+            kept,
+            scored,
+            "a single run leaves its score only on the ledger: nothing next to its artifacts "
+            "says how it went, and it cannot be put in a table with a campaign's runs",
+        )
+        self.assertEqual(kept["run"]["run_id"], os.path.basename(self.out))
+        self.assertIn("commit", kept["run"]["card"], "the score does not say what code made it")
 
     def test_a_score_that_fails_leaves_the_run_ok(self):
         def boom(_self, run_dir):

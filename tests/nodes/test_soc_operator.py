@@ -12,8 +12,9 @@ import urllib.request
 
 from tests.helpers import guest_paths
 
-guest_paths.add(guest_paths.SOC)
+guest_paths.add(guest_paths.SOC)  # the SOC's own modules and nodes/common, seat.py among them
 
+import seat  # noqa: E402  (flat guest import, needs the path set above)
 import soc_operator as O  # noqa: E402  (flat guest import, needs the path set above)
 
 TOKEN = "s3cret"
@@ -140,6 +141,51 @@ class Api(unittest.TestCase):
         self.assertEqual(self.call("POST", "/mode", {"mode": "off"})[0], 400)
         self.assertEqual(
             [(o["kind"], o["mode"]) for o in self.desk.take_orders()], [("mode", "auto")]
+        )
+
+
+class TheSeatAtTheConsole(Api):
+    """With a team at the console, a player that is not a browser sits at the
+    same seat behind the same token; a console nobody sits at serves none."""
+
+    def setUp(self):
+        super().setUp()
+        self.typed = []
+
+        def run(cmd):
+            self.typed.append(cmd)
+            return 0, "out", ""
+
+        place = seat.Seat("blue", O.ACTIONS, briefing="# Blue team", audit_log="/dev/null", run=run)
+        self.seated = O.OperatorApi(self.desk, TOKEN, host="127.0.0.1", seat=place).start()
+        self.addCleanup(self.seated.shutdown)
+
+    def test_a_console_nobody_sits_at_serves_no_seat(self):
+        self.assertEqual(self.call("GET", "/seat")[0], 404)
+        self.assertEqual(self.call("POST", "/shell", {"cmd": "id"})[0], 404)
+
+    def test_the_seat_the_briefing_and_the_shell_are_the_teams_only(self):
+        self.api = self.seated
+        self.assertEqual(self.call("GET", "/seat", token=None)[0], 401)
+        self.assertEqual(self.call("POST", "/shell", {"cmd": "id"}, token="x")[0], 401)
+        self.assertEqual(self.call("POST", "/shell", {"cmd": "  "})[0], 400)
+        self.assertEqual(self.typed, [], "a command ran for a caller it should have refused")
+        _s, doc, _h = self.call("GET", "/seat")
+        self.assertEqual(doc["team"], "blue")
+        self.assertEqual(doc["actions"], [*O.ACTIONS, "shell"])
+        self.assertEqual(self.call("GET", "/briefing")[1], {"briefing": "# Blue team"})
+        status, out, _h = self.call("POST", "/shell", {"cmd": "id", "operator": "agent:x"})
+        self.assertEqual((status, out["stdout"], self.typed), (200, "out", ["id"]))
+
+    def test_the_reason_given_travels_with_the_verdict_and_the_order(self):
+        body = {"verdict": "approve", "operator": "agent:x", "note": "the write is unauthorized"}
+        self.assertEqual(self.call("POST", "/approvals/abc", body)[0], 200)
+        self.assertEqual(self.desk.take()[0]["note"], "the write is unauthorized")
+        self.call("POST", "/mode", {"mode": "auto", "note": "x" * 2000})
+        self.assertEqual(
+            len(self.desk.take_orders()[0]["note"]),
+            O.NOTE_MAX,
+            "a note of any length would be copied whole into every record of the run",
         )
 
 

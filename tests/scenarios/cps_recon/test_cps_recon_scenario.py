@@ -26,7 +26,9 @@ class Options(unittest.TestCase):
     def test_registered_under_its_own_name_and_lab(self):
         self.assertEqual(registry.get("cps-recon").name, "cps-recon")
         self.assertEqual(self.s.lab_name, "cps-recon")
-        self.assertEqual(self.args.out_dir, "output/cps-recon/run-1")
+        self.assertIsNone(
+            self.args.out_dir, "a run is given a directory of its own, not a fixed one"
+        )
 
     def test_recon_scope_defaults(self):
         self.assertEqual(self.args.it_cidr, "10.10.0.0/24")

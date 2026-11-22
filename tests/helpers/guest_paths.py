@@ -40,6 +40,8 @@ SOC = (NODES / "soc", COMMON)
 #: Attacker node: the autonomous attacker (red_agent, with its planner) and the
 #: red team's console.
 REDTEAM = NODES / "redteam"
+#: A player's node: the seat's MCP adapter and the launchers of the harnesses.
+PLAYERS = NODES / "players"
 #: IRIS's nodes (cps-soc): the SOC response module, a package IRIS imports by name.
 SOAR = NODES / "soar"
 

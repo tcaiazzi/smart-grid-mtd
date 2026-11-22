@@ -119,8 +119,13 @@ class CpsScenario(Scenario):
     lab_name = T.LAB_NAME
     overhead_s = OVERHEAD_S
     features = ()
+    # A run's directory is its own: a new one unless --out-dir names it. A
+    # scenario built on this lab may name a fixed default instead; a second run
+    # into it is then refused until the first is moved or --overwrite is given.
+    one_run_per_dir = True
+    DEFAULT_OUT_DIR = None
+    structure_files = ("kg.json", "tree.json")
     # Defaults a scenario built on this lab may set differently.
-    DEFAULT_OUT_DIR = "output/cps/run-1"
     DEFAULT_RESPOND = "off"
     DEFAULT_APPROVAL = "auto"
     APPROVAL_HELP = (
@@ -139,7 +144,11 @@ class CpsScenario(Scenario):
     # ── options ──────────────────────────────────────────────────────────────
     def add_arguments(self, ap):
         g = ap.add_argument_group("cps scenario")
-        g.add_argument("--out-dir", default=self.DEFAULT_OUT_DIR)
+        g.add_argument(
+            "--out-dir",
+            default=self.DEFAULT_OUT_DIR,
+            help="the run's directory (default: a new one under --out-root, see there)",
+        )
         g.add_argument("--step-interval", type=float, default=1.0)
         g.add_argument("--normal-duration", type=float, default=60.0)
         g.add_argument(
@@ -351,6 +360,8 @@ class CpsScenario(Scenario):
                 PhaseSpec("attack", OVERHEAD_S["attack"]),
                 PhaseSpec("post_attack", float(args.post_attack_duration), timed=True),
             ]
+        for f in self.features:
+            ph += f.phases(args)
         return ph
 
     def write_structure(self, ctx):
@@ -368,6 +379,37 @@ class CpsScenario(Scenario):
         from cyberrange.scenarios.cps.metrics import compute_metrics
 
         return compute_metrics(run_dir)
+
+    def report(self, metrics):
+        from cyberrange.scenarios.cps.metrics import format_report
+
+        return format_report(metrics)
+
+    def headline(self, card, metrics):
+        m, said = metrics or {}, []
+        players = (m.get("players") or {}).items()
+        said += [
+            f"{team}: {p.get('harness')}" + (f" ({p['model']})" if p.get("model") else "")
+            for team, p in sorted(players)
+        ]
+        if m.get("attack"):
+            said.append("detected" if m.get("detected") else "not detected")
+            if m.get("stage_reached"):
+                said.append(f"reached {m['stage_reached']}")
+            if m.get("attack_succeeded") is not None:
+                said.append("plant affected" if m["attack_succeeded"] else "plant untouched")
+        elif m:
+            said.append("no attack")
+        return ", ".join(said)
+
+    def run_card(self, args):
+        card = {}
+        for f in self.features:
+            card |= f.run_card(self, args)
+        return card
+
+    def secret_options(self, args):
+        return tuple(name for f in self.features for name in f.secret_options(args))
 
     # ── dashboard ────────────────────────────────────────────────────────────
     def panel_js(self):
@@ -594,6 +636,10 @@ class CpsScenario(Scenario):
         )
         with ctx.phase("normal", learn_s=a.learn_seconds):
             ctx.observe(a.normal_duration)
+        # The lab's services had the whole of normal operation to fall over:
+        # an attack played against a SOC or a sensor that is not there would
+        # be scored as one the defence failed to stop.
+        ctx.require_alive()
 
         ctx.open_ground_truth(
             seed=a.seed,

@@ -402,6 +402,7 @@ class CpsMetricsV2(unittest.TestCase):
         self.assertEqual(
             op,
             {
+                "by_kind": {"human": {"answered": 2, "latency_median_s": 6.0}},
                 "suggestions": 3,
                 "suggestions_approved": 1,
                 "suggestions_rejected": 1,
@@ -422,6 +423,57 @@ class CpsMetricsV2(unittest.TestCase):
             ],
         )
         self.assertIsNone(compute_metrics(str(self.d))["response"]["operator"])
+
+    def isolating(self, *truth):
+        """The response's score when the SOC also took the workstation off the
+        link, with ``truth`` added to what the attack did."""
+        with open(self.d / "ground_truth.jsonl", "a") as f:
+            for row in truth:
+                f.write(json.dumps({"t": self.attack_t + 1.0, **row}) + "\n")
+        act = {"kind": "action", "ok": True, "issued_t": self.write_t + 3.0}
+        _write(
+            self.d / "response.jsonl",
+            [
+                {"t": 2000.0, "kind": "response_up", "policy": "solver", "approval": "auto"},
+                {
+                    **act,
+                    "t": self.write_t + 3.0,
+                    "id": "isolate_ot_host",
+                    "done_t": self.write_t + 3.0,
+                },
+            ],
+        )
+        return compute_metrics(str(self.d))["response"]
+
+    def test_isolating_a_host_the_attacker_took_is_not_over_response(self):
+        for how, row in (
+            ("at the red console", {"kind": "red_step", "stage": "ot_foothold", "ok": True}),
+            ("by the planner", {"kind": "plan_step", "stage": "ot_foothold", "ok": True}),
+            ("by the scripted attack", {"kind": "ot_foothold", "ok": True}),
+        ):
+            with self.subTest(taken=how):
+                self.assertEqual(
+                    self.isolating(row)["over_response"],
+                    [],
+                    "the defence is marked down for cutting off a host the attacker was on",
+                )
+
+    def test_isolating_a_host_the_attacker_never_took_still_is(self):
+        self.assertEqual(self.isolating()["over_response"], ["isolate_ot_host"])
+        failed = {"kind": "red_step", "stage": "ot_foothold", "ok": False}
+        self.assertEqual(
+            self.isolating(failed)["over_response"],
+            ["isolate_ot_host"],
+            "a foothold the attacker tried for and did not get was counted as taken",
+        )
+
+    def test_a_host_the_attacker_took_does_not_make_isolating_it_required(self):
+        took = {"kind": "red_step", "stage": "ot_foothold", "ok": True}
+        self.assertNotIn(
+            "isolate_ot_host",
+            self.isolating(took)["expected_actions"],
+            "a defence that stopped the attack another way is now scored as inaccurate",
+        )
 
     def test_response_inaccurate_and_false(self):
         _write(

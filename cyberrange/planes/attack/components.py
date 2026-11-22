@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import threading
+import time
 
 from cyberrange.planes.attack import active_attack
 from cyberrange.core.component import Artifact, Component, GuestAgent, TelemetryCursor, tail_reader
@@ -476,7 +477,11 @@ class RedConsole(GuestAgent):
     What they run is the attack, so it is this component that writes the
     ground truth: it follows the console's record and turns every step into
     what a driven attack would have recorded — attack_start at the first one,
-    the Modbus writes, the foothold — plus the step itself."""
+    the Modbus writes, the falsified readings, the foothold — plus the step
+    itself, and when the console is stopped the attack's end: how far it got
+    and whether it reached the plant. Nobody tells a red team its attack is
+    over, so without that last row a run played at the console could not be
+    scored like one that was driven."""
 
     RECORD = "/red_actions.jsonl"
     MODE = "manual"
@@ -494,10 +499,13 @@ class RedConsole(GuestAgent):
         terminal=None,
         ways=None,
         plant_b64=None,
+        briefing=None,
     ):
         packed = base64.b64encode(json.dumps(tree).encode()).decode()
         where = "".join(f" --way {host}={url}" for host, url in (ways or {}).items())
         where += f" --plant-b64 {plant_b64}" if plant_b64 else ""
+        if briefing:
+            where += f" --briefing-b64 {base64.b64encode(briefing.encode()).decode()}"
         super().__init__(
             node,
             f"python3 red_console.py --port {port} --token {token} --tree-b64 {packed} "
@@ -507,9 +515,27 @@ class RedConsole(GuestAgent):
             plane=PLANE,
             name="red_console",
             artifacts=[Artifact(node, self.RECORD, f"{node}.red_actions.jsonl")],
+            watch="red_console.py",
         )
         self._cursor = None
         self._started = False
+        self._reached = (-1, "none")  # (rank, stage) of the furthest step that worked
+        self._acts_ok = 0  # writes and falsified readings the plant took
+
+    def stop(self, ctx):
+        try:
+            self.poll(ctx)  # the steps run since the last pull belong to the attack too
+        except Exception as e:  # a node already gone must not cost the attack its end
+            log.debug("last pull of the red console's record failed: %s", e)
+        if self._started and ctx.gt is not None:
+            ctx.gt.record(
+                "attack_end",
+                t=time.time(),
+                mode=self.MODE,
+                success=self._acts_ok > 0,
+                stage_reached=self._reached[1],
+                writes_ok=self._acts_ok,
+            )
 
     def poll(self, ctx):
         if ctx.gt is None:
@@ -522,18 +548,34 @@ class RedConsole(GuestAgent):
             if not self._started:
                 self._started = True
                 ctx.gt.record("attack_start", t=row.get("t"), mode=self.MODE)
-            step = dict(step=row.get("step"), ok=row.get("ok"), operator=row.get("operator"))
-            ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
-            ctx.emit(
-                "red_step",
-                guest_t=row.get("t"),
+            step = dict(
+                step=row.get("step"),
                 stage=row.get("stage"),
-                observed=observed(row.get("phases")),
-                **step,
+                ok=row.get("ok"),
+                operator=row.get("operator"),
             )
+            if row.get("ok") and row.get("stage_rank") is not None:
+                self._reached = max(self._reached, (row["stage_rank"], row.get("stage")))
+            if row.get("note"):
+                step["note"] = row["note"]  # the reason the operator gave, when they gave one
+            if row.get("detectability") is not None:
+                step["detectability"] = row["detectability"]
+            ctx.gt.record("red_step", t=row.get("t"), mode=self.MODE, **step)
+            ctx.emit("red_step", guest_t=row.get("t"), observed=observed(row.get("phases")), **step)
             for e in row.get("phases") or []:
+                if e.get("phase") in ("ot_foothold", "ot_aitm"):
+                    # The workstation taken, the PLC's session intercepted: on
+                    # record by name, as a driven attack leaves them.
+                    ctx.gt.record(e["phase"], t=e.get("t"), mode=self.MODE, ok=e.get("ok"))
+                if e.get("phase") == "fdi":
+                    # An act on the plant with no write of the attacker's: left
+                    # out, the plant would be scored as never reached.
+                    fdi = {k: e.get(k) for k in ("ok", "t_end", "readings", "sent")}
+                    ctx.gt.record("fdi", t=e.get("t_start") or e.get("t"), mode=self.MODE, **fdi)
+                    self._acts_ok += bool(e.get("ok"))
                 if e.get("phase") != "modbus_write":
                     continue
+                self._acts_ok += bool(e.get("ok"))
                 write = dict(
                     unit=e.get("unit"),
                     register=e.get("register"),

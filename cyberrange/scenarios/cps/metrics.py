@@ -47,6 +47,7 @@ import json
 import os
 
 from cyberrange.planes.defense import ot_registers as reg
+from cyberrange.scenarios.cps import scorecard
 
 V_NOMINAL = 1.0
 # Register name by holding-register address, for writes recorded without one.
@@ -207,6 +208,8 @@ def _detection(findings, attack_start, first_write, first_abnormal, manual_spans
 # off the way in: what makes the HMI unavailable to its operator.
 HMI_CUTTING = ("block_flow", "isolate_way")
 OPERATOR_OUTCOMES = ("granted", "rejected", "expired")
+AGENT = "agent:"  # how a harness names itself as operator (nodes/common/seat.py)
+MANUAL = "manual"  # the mode of an attack run at the red console (attack.RedConsole)
 
 
 def _plant_acts(gt, ok_only=False):
@@ -242,12 +245,45 @@ def expected_response(gt):
     return want
 
 
+def justified_response(gt):
+    """Kinds of countermeasure the attack gave cause for without making them
+    necessary: the attacker took the engineering workstation, or got between
+    the PLC and the engine, and then reached the plant another way. Taking that
+    host off the link was no over-response — the attacker was on it — but a
+    defence that stopped the attack without doing so was not wrong either.
+
+    A stage is read from wherever the attack's driver wrote it: the scripted
+    one records it by name, the planner and the red console as a step."""
+
+    def reached(stage):
+        return any(
+            e.get("ok")
+            and (
+                e.get("kind") == stage
+                or (e.get("kind") in ("plan_step", "red_step") and e.get("stage") == stage)
+            )
+            for e in gt
+        )
+
+    out = set()
+    if reached("ot_foothold"):
+        out.add("isolate_ot_host")
+    if reached("ot_aitm"):
+        out |= {"isolate_ot_host", "repair_arp"}
+    return out
+
+
 def _explained(decision):
     acts = [a for a in decision.get("actions") or [] if a != "notify"]
     covers = decision.get("covers") or {}
     return bool(decision.get("rationale")) and all(
         (covers.get(a) or {}).get("prevents") or (covers.get(a) or {}).get("restores") for a in acts
     )
+
+
+def _player_kind(operator):
+    """Who acted, by how the records name them: a harness says so itself."""
+    return "agent" if str(operator or "").startswith(AGENT) else "human"
 
 
 def _operator(resp):
@@ -258,7 +294,19 @@ def _operator(resp):
     if not rows:
         return None
     closed = {s: [r for r in rows if r.get("state") == s] for s in OPERATOR_OUTCOMES}
+    answered = closed["granted"] + closed["rejected"]
+    by_kind = {}
+    for kind in ("human", "agent"):
+        own = [r for r in answered if _player_kind(r.get("operator")) == kind]
+        if own:
+            # Apart, because the two are not the same measure: a person's
+            # seconds are attention, a harness's are a model's turn.
+            by_kind[kind] = {
+                "answered": len(own),
+                "latency_median_s": _median(r.get("waited_s") for r in own),
+            }
     return {
+        "by_kind": by_kind,
         "suggestions": sum(1 for r in rows if r.get("state") == "requested"),
         "suggestions_approved": len(closed["granted"]),
         "suggestions_rejected": len(closed["rejected"]),
@@ -359,7 +407,8 @@ def _response(
         over = []  # preventing before the plant is good
     else:
         accurate = expected <= applied_kinds
-        over = sorted(a for a in applied_ids - {"notify"} if kind(a) not in expected)
+        called_for = expected | justified_response(gt)
+        over = sorted(a for a in applied_ids - {"notify"} if kind(a) not in called_for)
     return {
         "policy": up.get("policy"),
         "approval": up.get("approval"),
@@ -385,6 +434,18 @@ def _response(
             else 0.0
         ),
         "operator": _operator(resp),
+        # What was applied or reverted at the console on someone's initiative,
+        # by who that was; the SOC's own actions are not anyone's.
+        "by_hand": {
+            kind: sum(
+                1
+                for r in resp
+                if r.get("kind") == "action"
+                and (r.get("by") or "soc") != "soc"
+                and _player_kind(r.get("by")) == kind
+            )
+            for kind in ("human", "agent")
+        },
         "countermeasure_times": _countermeasure_times(resp, restoring, mitigated_t),
     }
 
@@ -426,6 +487,9 @@ def compute_metrics(out_dir: str) -> dict:
     mode = next((e.get("mode") for e in gt if e.get("kind") == "attack_start"), None)
     attack_end_ev = next((e for e in gt if e.get("kind") == "attack_end"), {})
     planner = bool(mode) and str(mode).startswith("planner:")
+    # An attack that goes by the tree's stages and says how it ended: the
+    # planner's, and one a team ran at the red console.
+    staged = planner or mode == MANUAL
     plan_steps = [e for e in gt if e.get("kind") == "plan_step"]
 
     ts = [fr.get("timestamp", 0) for fr in frames]
@@ -525,7 +589,7 @@ def compute_metrics(out_dir: str) -> dict:
         if resp is not None
         else None
     )
-    return {
+    m = {
         "attack": attack_start is not None,
         "attack_mode": mode,
         # Combined detection (kept flat for backwards compatibility)
@@ -563,9 +627,9 @@ def compute_metrics(out_dir: str) -> dict:
         # Tree-guided attacker (planner driver)
         "planner": planner,
         "attacker_profile": (mode.split(":", 1)[1] if planner else None),
-        "stage_reached": attack_end_ev.get("stage_reached") if planner else None,
-        "attack_succeeded": (bool(attack_end_ev.get("success")) if planner else None),
-        "prevented": (not _plant_acts(gt, ok_only=True) if planner else None),
+        "stage_reached": attack_end_ev.get("stage_reached") if staged else None,
+        "attack_succeeded": (bool(attack_end_ev.get("success")) if staged else None),
+        "prevented": (not _plant_acts(gt, ok_only=True) if staged else None),
         "plan_steps": [
             {"node": e.get("node"), "stage": e.get("stage"), "ok": e.get("ok")} for e in plan_steps
         ]
@@ -581,6 +645,20 @@ def compute_metrics(out_dir: str) -> dict:
         "energy_kwh_during_attack": energy_attack,
         "n_frames": len(frames),
     }
+    # The harnesses that played a team's seat, each with how it played; taken
+    # last, because a card reads the run's own outcome rather than work it out
+    # again.
+    kinds = _kinds(out_dir)
+    m["players"] = scorecard.players(
+        out_dir,
+        gt,
+        resp,
+        findings,
+        m,
+        called_for=expected_response(gt) | justified_response(gt),
+        kind_of=lambda action: kinds.get(action, action),
+    )
+    return m
 
 
 def format_report(m: dict) -> str:

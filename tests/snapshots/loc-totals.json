@@ -1,9 +1,9 @@
 {
- "cps": 9099,
- "cps-advisor": 1220,
- "cps-recon": 412,
- "cps-soc": 2628,
+ "cps": 9558,
+ "cps-advisor": 2893,
+ "cps-recon": 411,
+ "cps-soc": 2627,
  "mqtt-mtd": 8485,
- "platform": 4460,
+ "platform": 4996,
  "shared": 2183
 }

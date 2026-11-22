@@ -10,8 +10,13 @@ decides nothing and knows only what the tree tells it.
     GET  /             the console page (red_console.html)
     GET  /state        {"steps": [...], "history": [...], "terminal": url}
     POST /steps/<id>   run the step now; answers with its outcome
+    GET  /seat         the seat: team, actions, the node's clock (seat.py)
+    GET  /briefing     {"briefing": the team's briefing, Markdown}
+    POST /shell        {"cmd": "...", "operator": "name"}; runs it on this node
 
-Everything but the page carries ``Authorization: Bearer <token>``.
+A POST may carry the operator's name and a "note", the reason for the action in
+the operator's words; both are kept with it on record. Everything but the page
+carries ``Authorization: Bearer <token>``.
 
 Every run is appended to --record as one JSON line ({"kind": "red_step", ...}
 with the step's own machine-readable lines under "phases"): the range reads it
@@ -23,28 +28,51 @@ import base64
 import hmac
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import red_steps
+import seat
 
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "red_console.html")
 STEP_TIMEOUT_S = 60.0
+# Writes refused in a row after which a step stops trying: the way is cut, and
+# a team is better told so in seconds than by the timeout.
+GIVE_UP_AFTER = 3
 OUTPUT_TAIL = 2000
 HISTORY_KEPT = 200
+MAX_BODY = 4096  # a name, a note and a command line; anything longer is none of them
+ACTIONS = ("run_step",)
 
 
-def run_shell(cmd):
-    """-> (rc, output). From "/", where the node's tools are staged."""
+def run_shell(cmd, timeout=STEP_TIMEOUT_S):
+    """-> (rc, output). From "/", where the node's tools are staged.
+
+    A step cut at the timeout still did what it did until then: its output is
+    kept, or the writes the plant took before the defence slowed the step down
+    would be on no record, and the attack scored as one that never landed. The
+    step runs in a process group of its own and the whole group is killed, or
+    the step would go on writing to the plant after the console called it over."""
+    p = subprocess.Popen(
+        ["sh", "-c", cmd],
+        cwd="/",
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        start_new_session=True,
+    )
     try:
-        p = subprocess.run(
-            ["sh", "-c", cmd], cwd="/", capture_output=True, text=True, timeout=STEP_TIMEOUT_S
-        )
-        return p.returncode, p.stdout + p.stderr
+        out, _err = p.communicate(timeout=timeout)
+        return p.returncode, out
     except subprocess.TimeoutExpired:
-        return -1, f"timed out after {STEP_TIMEOUT_S:.0f}s"
+        os.killpg(p.pid, signal.SIGKILL)
+        out, _err = p.communicate()
+        return -1, f"{out}\ntimed out after {timeout:.0f}s"
 
 
 def phases_of(text):
@@ -76,7 +104,7 @@ class Bench:
         self._history = []
         self._file = open(record_path, "a", buffering=1) if record_path else None
 
-    def launch(self, step_id, operator=None):
+    def launch(self, step_id, operator=None, note=None):
         """Run one step; returns its record, or None if there is no such step."""
         step = self.steps.get(step_id)
         if step is None:
@@ -94,10 +122,19 @@ class Bench:
                 "kind": "red_step",
                 "step": step_id,
                 "stage": stage,
+                **({"stage_rank": step["stage_rank"]} if "stage_rank" in step else {}),
+                # How noticeable the step is, by the registry's reckoning: kept
+                # with the run, so the range can say how quiet a team played.
+                **(
+                    {"detectability": step["detectability"]}
+                    if step.get("detectability") is not None
+                    else {}
+                ),
                 "ok": bool(said[-1]) if said else rc == 0,
                 "rc": rc,
                 "duration_s": round(self.clock() - started, 3),
                 "operator": operator,
+                **({"note": note} if note else {}),
                 "phases": phases,
                 "output": text[-OUTPUT_TAIL:],
             }
@@ -130,10 +167,11 @@ class Bench:
 
 
 class RedConsole:
-    def __init__(self, bench, token, port=0, host="0.0.0.0", page=PAGE, terminal=None):
+    def __init__(self, bench, token, port=0, host="0.0.0.0", page=PAGE, terminal=None, seat=None):
         if not token:
             raise ValueError("the red console needs a token: it will not serve unauthenticated")
         self.bench, self.token, self.page, self.terminal = bench, str(token), page, terminal
+        self.seat = seat  # a seat.Seat: what a player that is not a browser is served
         self.httpd = ThreadingHTTPServer((host, port), self._handler())
         self.httpd.daemon_threads = True
 
@@ -181,6 +219,10 @@ class RedConsole:
                     self._reply(401, {"error": "a bearer token is required"})
                 elif path == "/state":
                     self._reply(200, {**console.bench.state(), "terminal": console.terminal})
+                elif path == "/seat" and console.seat:
+                    self._reply(200, console.seat.describe())
+                elif path == "/briefing" and console.seat:
+                    self._reply(200, {"briefing": console.seat.briefing})
                 else:
                     self._reply(404, {"error": "not found"})
 
@@ -189,17 +231,30 @@ class RedConsole:
                     self._reply(401, {"error": "a bearer token is required"})
                     return
                 parts = self.path.split("?")[0].strip("/").split("/")
-                if len(parts) != 2 or parts[0] != "steps":
+                shell = parts == ["shell"] and console.seat is not None
+                if not shell and (len(parts) != 2 or parts[0] != "steps"):
                     self._reply(404, {"error": "not found"})
                     return
-                operator = None
+                doc = {}
                 try:
-                    length = min(int(self.headers.get("Content-Length") or 0), 4096)
+                    length = min(int(self.headers.get("Content-Length") or 0), MAX_BODY)
                     if length > 0:
-                        operator = json.loads(self.rfile.read(length)).get("operator")
-                except (ValueError, AttributeError):
+                        doc = json.loads(self.rfile.read(length))
+                except ValueError:
                     pass  # the operator's name is optional; a bad body names nobody
-                row = console.bench.launch(parts[1], str(operator)[:80] if operator else None)
+                if not isinstance(doc, dict):
+                    doc = {}
+                operator = str(doc["operator"])[:80] if doc.get("operator") else None
+                note = seat.note_of(doc)
+                if shell:
+                    if not isinstance(doc.get("cmd"), str) or not doc["cmd"].strip():
+                        self._reply(400, {"error": "cmd must be a command line"})
+                    else:
+                        # Outside the bench's turn: a command typed while a step
+                        # runs must not wait for it, as in the team's terminal.
+                        self._reply(200, console.seat.shell(doc["cmd"], operator, note))
+                    return
+                row = console.bench.launch(parts[1], operator, note)
                 if row is None:
                     self._reply(404, {"error": "no such step"})
                 else:
@@ -230,6 +285,8 @@ def main():
     ap.add_argument("--token", required=True)
     ap.add_argument("--record", default="/red_actions.jsonl")
     ap.add_argument("--terminal", default=None, help="URL of the team's web terminal")
+    ap.add_argument("--team", default="red", help="the team that sits at this console")
+    ap.add_argument("--briefing-b64", default=None, help="that team's briefing, base64 of text")
     args = ap.parse_args()
     tree = json.loads(base64.b64decode(args.tree_b64))
     steps = red_steps.build_steps(
@@ -240,8 +297,14 @@ def main():
         interval=args.interval,
         ways=dict(w.split("=", 1) for w in args.way),
         plant_b64=args.plant_b64,
+        give_up=GIVE_UP_AFTER,
     )
-    console = RedConsole(Bench(steps, args.record), args.token, args.port, terminal=args.terminal)
+    briefing = base64.b64decode(args.briefing_b64).decode() if args.briefing_b64 else ""
+    # The console is given the attack tree itself: that is what this team knows.
+    place = seat.Seat(args.team, ACTIONS, knowledge="tree", briefing=briefing)
+    console = RedConsole(
+        Bench(steps, args.record), args.token, args.port, terminal=args.terminal, seat=place
+    )
     print(f"red console on port {console.port}, {len(steps)} steps", flush=True)
     console.httpd.serve_forever()
 

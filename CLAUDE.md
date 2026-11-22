@@ -13,7 +13,8 @@ cyberrange/core/       the platform: topology, lifecycle, context, campaigns, le
 cyberrange/planes/     traffic | attack | defense | monitor — components.py + agents/ (guest code)
 cyberrange/scenarios/  mqtt_mtd/, cps/, cps_advisor/, cps_recon/ and cps_soc/ — one directory per experiment, whole
 nodes/                 software of the lab's nodes that is not the platform's (Wazuh set-up, the SOC,
-                       the red team; nodes/common/: the knowledge graph and attack-tree generator they share)
+                       the red team, the players' nodes a harness plays a seat from; nodes/common/:
+                       the knowledge graph and attack-tree generator they share)
 make/ scripts/ tools/ tests/ docs/
 ```
 

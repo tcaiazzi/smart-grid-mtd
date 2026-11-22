@@ -45,6 +45,7 @@ scoring) expose their own blocking method, such as `attack(ctx)` or
 | `GuestAgent(node, command, console_log, plane=, name=, artifacts=(), wait=False)` | One process in one container. `start` runs `command` on `node` with stdout and stderr captured to the guest file `/<console_log>`. That file is always an artifact, saved as `<node>.<console_log>`; extra artifacts can be added. |
 | `Artifact(node, guest_path, local_name, required=False)` | A file to download after the episode. |
 | `TelemetrySource(node, path, name)` | A guest telemetry file. `name` is a label (`"ot"`, `"it"`, `"mtd"`) that consumers filter on. |
+| `SeatPlayer(node, team, harness, seat, token, terms=, secrets=, plane=)` | A harness (`cyberrange.core.harness.Harness`) at a team's seat, on a node of its own. `start` writes the team's token, the terms and the harness's secrets into the node as files, then runs `player-run.sh`, which closes the node's firewall around `seat` and starts the harness as an unprivileged user. Its transcript is mirrored as `player_start`, `player_call`, `player_usage` and `player_exit`; `exited` turns true at the last. See [playing-with-agents.md](playing-with-agents.md). |
 | `TelemetryCursor(read)` | Reads a growing JSONL file incrementally. It consumes complete lines only, so a partial last line is read again on the next pull, and an unparseable line is skipped. |
 | `tail_reader(exec_text, node, path)` | A `read` function for `TelemetryCursor`, built on `tail -n +N` inside the guest. |
 

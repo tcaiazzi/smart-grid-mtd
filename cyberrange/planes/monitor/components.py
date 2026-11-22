@@ -160,7 +160,8 @@ class RecordedShell(Component):
     Whose shell it is is read from how it got there, never assumed:
 
         ``team``      the host's own people: over SSH (from ``jump`` only, when
-                      given) or through the node's WebTerminal
+                      given), through the node's WebTerminal, or through the
+                      shell of the team's seat at its console (seat.py)
         ``intruder``  the other side, on a host it may take: a shell that
                       descends from ``entry`` (a fragment of the command line
                       of the service it gets in through), one such a service
@@ -186,6 +187,10 @@ class RecordedShell(Component):
     def whose(self, ev):
         """The team a recorded command belongs to."""
         src, ancestry = ev.get("from"), ev.get("ancestry") or []
+        if ev.get("seat") == self.team:
+            # Written by the team's console for a command it ran itself: it has
+            # no terminal above it to be told by.
+            return self.team
         if src:
             if self.jump in (None, src):
                 return self.team
@@ -218,8 +223,9 @@ class RecordedShell(Component):
                 node=self.node,
                 cmd=ev.get("cmd"),
                 cwd=ev.get("cwd"),
-                via=ev.get("from") or None,
+                via=ev.get("from") or ("seat" if ev.get("seat") else None),
                 guest_t=ev.get("t"),
+                **{k: ev[k] for k in ("operator", "note") if ev.get(k)},
             )
             ctx.emit("team_command", **fields)
             witnessed = self.witnessed and team == self.team

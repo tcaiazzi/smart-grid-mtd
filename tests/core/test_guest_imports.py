@@ -43,7 +43,10 @@ from cyberrange.scenarios.cps.guest_files import (  # noqa: E402
     SOC_FILES,
 )
 from cyberrange.scenarios.cps_advisor.guest_files import (  # noqa: E402
+    CLAUDE_PLAYER_FILES,
+    PLAYER_FILES,
     RED_FILES,
+    SEAT_FILES,
     SOC_CONSOLE_FILES,
     TEAM_FILES,
 )
@@ -71,11 +74,13 @@ MACHINES = {
     "firewall": FW_FILES,
     "plc": PLC_FILES,
     "sensor": SENSOR_FILES,
-    "soc": SOC_FILES + SOC_CONSOLE_FILES + TEAM_FILES,
+    "soc": SOC_FILES + SOC_CONSOLE_FILES + SEAT_FILES + TEAM_FILES,
     "hmi": HMI_FILES + TEAM_FILES,
     "ews": EWS_FILES,
-    "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + TEAM_FILES,
+    "attacker_cps": ATTACKER_CPS_FILES + RED_FILES + SEAT_FILES + TEAM_FILES,
     # cps-recon: the attacker on its own red-team image, with the recon agents.
+    # cps-advisor: the node a harness plays a team's seat from.
+    "player": PLAYER_FILES + CLAUDE_PLAYER_FILES,
     "attacker_recon": ATTACKER_CPS_FILES + RECON_FILES,
     # cps-soc: the SOC on its own image, with the IRIS desk and the alert shipper,
     # and the Wazuh dashboard, which is given the script that creates the lab's
@@ -90,6 +95,7 @@ MACHINES = {
 MQTT_IMAGE, CPS_IMAGE = "docker/mqtt/Dockerfile", "docker/cps/Dockerfile"
 SOC_IMAGE = "docker/soc/Dockerfile"
 REDTEAM_IMAGE = "docker/redteam/Dockerfile"
+PLAYER_IMAGE = "docker/player-claude/Dockerfile"
 SOC_SIEM_IMAGE = "docker/soc-siem/Dockerfile"
 WAZUH_DASHBOARD_IMAGE = "docker/wazuh-dashboard/Dockerfile"
 IMAGE_OF = {
@@ -104,6 +110,7 @@ IMAGE_OF = {
     "hmi": CPS_IMAGE,
     "ews": CPS_IMAGE,
     "attacker_cps": CPS_IMAGE,
+    "player": PLAYER_IMAGE,
     "attacker_recon": REDTEAM_IMAGE,
     "soc_siem": SOC_SIEM_IMAGE,
     "wazuh_dashboard": WAZUH_DASHBOARD_IMAGE,

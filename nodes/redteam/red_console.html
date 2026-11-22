@@ -60,6 +60,7 @@ td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeri
 td.num, th.num { text-align: right; white-space: nowrap; }
 td.wrap { overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
+.agent { border: 1px solid var(--muted); border-radius: 4px; padding: 0 4px; font-size: 11px; }
 .empty { color: var(--muted); padding: 18px 0; text-align: center; }
 .err { color: var(--critical); font-size: 12px; overflow-wrap: anywhere; }
 .sug { border: 1px solid var(--ring); border-left: 3px solid var(--warning); border-radius: 8px;
@@ -103,9 +104,12 @@ pre { margin: 6px 0 0; padding: 8px 10px; background: var(--wash); border-radius
       <span class="spacer"></span>
       <label class="sub" for="who" style="margin:0">operator</label>
       <input id="who" type="text" maxlength="80" autocomplete="off" spellcheck="false" style="width:130px">
+      <input id="why" type="text" maxlength="500" autocomplete="off" placeholder="why (optional)" title="The reason for your next action, kept with it on record" style="width:190px">
       <a class="btn" id="term" target="_blank" rel="noopener" style="display:none">Open terminal</a>
     </header>
     <div class="err" id="err"></div>
+    <details class="card" id="briefing-wrap" style="display:none"><summary>Briefing</summary>
+      <pre id="briefing" style="white-space:pre-wrap"></pre></details>
 
     <div class="grid2">
       <div>
@@ -173,9 +177,23 @@ $("gate-go").addEventListener("click", () => {
 });
 $("gate-token").addEventListener("keydown", e => { if (e.key === "Enter") $("gate-go").click(); });
 
+// Who acted, as the record names them: a player that is not a person says so
+// itself ("agent:<name>"), and is shown apart from the people at the console.
+const who = name => !name ? "—" : String(name).startsWith("agent:")
+  ? [h("span", { class: "agent" }, "agent"), ` ${String(name).slice(6)}`] : name;
+// The reason typed for the next action: sent with it once, then cleared.
+function why() { const v = $("why").value.trim(); $("why").value = ""; return v ? { note: v } : {}; }
+// The team's briefing, when the console has one to give.
+async function briefing() {
+  try {
+    const doc = await call("GET", "/briefing");
+    if (doc.briefing) { $("briefing").textContent = doc.briefing; $("briefing-wrap").style.display = ""; }
+  } catch (e) {}
+}
+
 async function launch(id) {
   running = id; sig = ""; render(); $("err").textContent = "";
-  try { await call("POST", `/steps/${encodeURIComponent(id)}`, { operator: $("who").value.trim() || "operator" }); }
+  try { await call("POST", `/steps/${encodeURIComponent(id)}`, { operator: $("who").value.trim() || "operator", ...why() }); }
   catch (e) { $("err").textContent = `Not run: ${e.message}`; }
   running = null; sig = ""; refresh();
 }
@@ -238,7 +256,7 @@ function render() {
   const hist = [...S.history].reverse();
   $("history").replaceChildren(...(hist.length ? hist.map(r => h("details", {},
     h("summary", {}, h("span", { class: "dot", style: `background:${r.ok ? "var(--good)" : "var(--critical)"}` }),
-      ` ${clock(r.t)} · ${r.step} · ${r.ok ? "worked" : `failed (exit ${r.rc})`} · ${r.duration_s}s${r.operator ? ` · ${r.operator}` : ""}`),
+      ` ${clock(r.t)} · ${r.step} · ${r.ok ? "worked" : `failed (exit ${r.rc})`} · ${r.duration_s}s · `, who(r.operator), r.note ? ` · “${r.note}”` : ""),
     h("pre", {}, r.output || "(no output)"))) : [h("div", { class: "empty" }, "Nothing has run yet")]));
 }
 async function refresh() {
@@ -253,6 +271,7 @@ async function refresh() {
   render();
 }
 refresh();
+if (token) briefing();
 setInterval(refresh, 1500);
 </script>
 </body>
