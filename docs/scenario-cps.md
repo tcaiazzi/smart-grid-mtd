@@ -335,9 +335,10 @@ sides:
 The **Kill chain** card puts each step of the attack on one axis: when the
 attacker did it, when the defender first suspected and confirmed it, the
 countermeasure that covered it, and four figures — time to detect, to respond,
-to impact, and who is ahead. The **Journal** lists every fact of the run in
-order, by side; a click on a row (or on a mark of the lanes) shows the run at
-that time.
+to impact, and who is ahead. The **Journal** lists every fact of the run, the
+newest first, by side; a click on a row (or on a mark of the lanes) shows the
+run at that time. While a run is live a new fact is a row added at the top:
+the list is not redrawn, so a reader who has scrolled down keeps their place.
 
 An **Attacker · Defender** card puts the two sides next to
 each other, each split into what it is *doing* and what it *knows* (attacker) or
@@ -366,7 +367,11 @@ and the knowledge graph place their nodes themselves, because their columns
 mean something (a zone, a type of node). Each view can be dragged, and zoomed
 with the − + buttons or Ctrl + wheel. The same two files give the page the
 names of the attack steps and countermeasures, which the cards show in place
-of the identifiers the run records. Every run writes both files; for runs that predate
+of the identifiers the run records. On the attack tree a node's fill is what
+the defender believes of the step; what happened there is drawn over it: a red
+strip on a step the attacker did (dashed when it tried and failed, or only
+aims at it), red links along the path the attack took, and a green *countered*
+tag where a countermeasure against the step is in force. Every run writes both files; for runs that predate
 them the structure is rebuilt from today's lab model and the card says so.
 
 - **Topology**: zones as columns, firewall and sensor on the boundary of two

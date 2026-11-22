@@ -87,6 +87,8 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { white-space: nowrap; text-align: left; font-weight: 500; color: var(--ink-2); border-bottom: 1px solid var(--axis); padding: 6px 8px; vertical-align: bottom; }
 td { border-bottom: 1px solid var(--grid); padding: 6px 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 td.num, th.num { text-align: right; }
+/* In a list that scrolls, the headers stay in sight. */
+.scroll thead th { position: sticky; top: 0; background: var(--surface); }
 tr.click { cursor: pointer; }
 tr.click:hover td { background: var(--wash); }
 tr.sel td { background: var(--wash); }

@@ -374,7 +374,7 @@
       tree = { attack_tree: ov.redTree || S.tree.attack_tree, defense: {}, countermeasures: [] };
     }
     const T = treeIndex(tree), root = tree.attack_tree, def = tree.defense || {};
-    const NW = 190, NH = 62, CHIP = 13, XG = 12, LV = 40, CHIP_CHARS = 33;
+    const NW = 190, NH = 62, CHIP = 13, XG = 12, LV = 48, CHIP_CHARS = 33, STRIP = 16;
     // The countermeasures under a node, as lines that fit its width: each list
     // (⊘ would prevent, ↺ would restore) wraps instead of running into the next node.
     const chipLines = id => [["⊘", def[id]?.prevented_by], ["↺", def[id]?.restored_by]].flatMap(([kind, list]) => {
@@ -398,9 +398,17 @@
     // The top margin leaves room for the attacker's badge above a root node.
     const M = 12, W = right - left + NW + 2 * M, H = (depthMax + 1) * rowH() + 20;
     const link = d3.linkVertical();
-    const Y = d => 18 + d * rowH();
+    const Y = d => 22 + d * rowH();
+    // A wide tree is not shrunk until its text cannot be read: below four fifths
+    // of its size the card scrolls sideways instead (and it can be zoomed).
     const drawing = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Attack tree", class: "graph",
-      style: `max-width:${Math.max(W, 600)}px` });
+      style: `max-width:${Math.max(W, 600)}px;min-width:${Math.round(W * 0.8)}px` });
+    // What really happened at a node, beside what the defender believes of it:
+    // the attacker did the step, tried and failed, or aims at it; and whether a
+    // countermeasure against the step is in force at the time shown.
+    const rd0 = ov.red || {};
+    const happened = id => persp === "attacker" ? null : id in (rd0.done || {}) ? "done" : id in (rd0.failed || {}) ? "failed" : rd0.target === id ? "target" : null;
+    const countered = id => [...(def[id]?.prevented_by || []), ...(def[id]?.restored_by || [])].filter(cm => cm in ov.applied);
     const edges = svg("g"), nodes = svg("g");
     (function draw(n) {
       const p = pos[n.id], x = M + p.x, y = Y(p.d);
@@ -413,22 +421,35 @@
         : (STATE_STYLE[s.state] || STATE_STYLE.unknown);
       for (const c of n.children || []) {
         const q = pos[c.id], cx = M + q.x + NW / 2, cy = Y(q.d);
-        edges.append(svg("path", { d: link({ source: [x + NW / 2, y + NH + chipLines(n.id).length * CHIP + 4], target: [cx, cy] }),
-          fill: "none", stroke: "var(--axis)", "stroke-width": 1.3 }));
+        // The links down to the steps the attacker did are the path the attack took.
+        const taken = happened(c.id) === "done";
+        edges.append(svg("path", { d: link({ source: [x + NW / 2, y + NH + chipLines(n.id).length * CHIP + 4], target: [cx, cy - (happened(c.id) ? STRIP : 0)] }),
+          fill: "none", stroke: taken ? "var(--critical)" : "var(--axis)", "stroke-width": taken ? 3 : 1.3 }));
         draw(c);
       }
       const g = svg("g");
+      // A strip on top of the node says what happened there in words, solid when the
+      // step was done; drawn first, so that the node's body covers its lower edge.
+      const what = happened(n.id);
+      if (what) {
+        const solid = what === "done";
+        g.append(svg("rect", { x, y: y - STRIP, width: NW, height: STRIP + 8, rx: 8, fill: solid ? "var(--critical)" : "var(--surface)",
+          stroke: "var(--critical)", "stroke-width": 2, "stroke-dasharray": solid ? null : "4 3" }));
+        g.append(svg("text", { x: x + 8, y: y - STRIP + 12, "font-size": 10.5, "font-weight": 700, fill: solid ? "var(--surface)" : "var(--critical)" },
+          { done: "✓ the attacker did this", failed: "✗ the attacker tried and failed", target: "◎ the attacker aims at this" }[what]));
+      }
+      g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: "var(--surface)" }));
       if (st.fill) g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill, opacity: 0.13 }));
-      g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: st.fill ? "none" : "var(--surface)", stroke: st.stroke,
+      g.append(svg("rect", { x, y, width: NW, height: NH, rx: 8, fill: "none", stroke: st.stroke,
         "stroke-width": st === STATE_STYLE.unknown ? 1 : 2, "stroke-dasharray": st.dash }));
       wrap2(n.label || n.id, 27).forEach((line, i) =>
         g.append(svg("text", { x: x + 8, y: y + 15 + i * 13, "font-size": 11.5, "font-weight": 600, fill: "var(--ink)" }, line)));
       const sub = [n.attck, n.gate !== "LEAF" ? n.gate : null, n.observable === false ? "not observable" : null].filter(Boolean).join(" · ");
-      g.append(svg("text", { x: x + 8, y: y + 43, "font-size": 10.5, fill: "var(--ink-2)" }, clip(sub, 34)));
+      g.append(svg("text", { x: x + 8, y: y + 43, "font-size": 10.5, fill: "var(--ink-2)" }, clip(sub, n.impact ? 25 : 34)));
       const line3 = persp === "attacker" ? (st === STATE_STYLE.unknown ? (n.feasible === false ? "believed infeasible" : "not tried") : st.label)
         : s.state === "unknown" ? st.label : `${st.label} ${(+s.score).toFixed(2)}`;
       g.append(svg("text", { x: x + 8, y: y + 56, "font-size": 10.5, fill: st === STATE_STYLE.unknown ? "var(--muted)" : st.stroke, "font-weight": 600 }, line3));
-      if (n.impact) g.append(svg("text", { x: x + NW - 8, y: y + 56, "font-size": 10, fill: "var(--muted)", "text-anchor": "end" }, `impact ${n.impact}`));
+      if (n.impact) g.append(svg("text", { x: x + NW - 8, y: y + 43, "font-size": 10, fill: "var(--muted)", "text-anchor": "end" }, `impact ${n.impact}`));
       g.append(svg("title", {}, [n.label, n.attck_name, n.review ? `review: ${n.review}` : null, (n.targets || []).join(", ")].filter(Boolean).join("\n")));
       // countermeasure chips: filled = applied by t
       let cy = y + NH + CHIP - 1;
@@ -446,11 +467,13 @@
       }
       // The attacker's side of the same node: what it did, what it aims at,
       // and (when it built its own tree) whether it knows the node at all.
-      const mark = persp === "attacker" ? null : n.id in (rd.done || {}) ? "✓ attacker" : n.id in (rd.failed || {}) ? "✗ attacker"
-        : rd.target === n.id ? "◎ target" : null;
-      if (mark) {
-        g.append(svg("rect", { x: x + NW - 72, y: y - 9, width: 68, height: 16, rx: 8, fill: "var(--surface)", stroke: "var(--critical)" }));
-        g.append(svg("text", { x: x + NW - 38, y: y + 3, "font-size": 10, "font-weight": 600, "text-anchor": "middle", fill: "var(--critical)" }, mark));
+      const cms = countered(n.id);
+      if (cms.length) {
+        const tag = svg("g");
+        tag.append(svg("rect", { x: x + NW - 78, y: y + NH - 20, width: 72, height: 15, rx: 7.5, fill: "var(--good)" }));
+        tag.append(svg("text", { x: x + NW - 42, y: y + NH - 9, "font-size": 10, "font-weight": 700, "text-anchor": "middle", fill: "var(--surface)" }, "countered"));
+        tag.append(svg("title", {}, `In force against this step: ${cms.map(cm => T.cms[cm]?.label || cm).join("; ")}`));
+        g.append(tag);
       }
       if (ov.redKnows && !ov.redKnows.has(n.id) && !(ov.redLeavesOnly && (n.children || []).length))
         g.append(svg("rect", { x: x - 4, y: y - 4, width: NW + 8, height: NH + 8, rx: 11, fill: "none",
@@ -463,13 +486,14 @@
     const legend = [];
     if (persp !== "attacker") legend.push([null, "Defender believes:"],
       ...Object.values(STATE_STYLE).map(v => [v.stroke, v.label]),
-      [null, "Countermeasures:"], ["var(--muted)", "⊘ would prevent · ↺ would restore"], ["var(--good)", "✓ applied by the time shown"]);
+      [null, "Countermeasures:"], ["var(--muted)", "⊘ would prevent · ↺ would restore"], ["var(--good)", "✓ applied by the time shown · green tag: the step is countered"]);
     if (persp !== "defender") {
       legend.push([null, "Attacker:"]);
       if (persp === "attacker") {
         legend.push(...Object.values(ATTACKER_STYLE).map(v => [v.stroke, v.label]), [STATE_STYLE.unknown.stroke, "not tried"]);
         legend.push([null, ov.redTree ? "the tree it built by its own reconnaissance" : "the tree it was handed (or the red console's steps)"]);
-      } else legend.push(["var(--critical)", "✓ done · ✗ failed · ◎ its target"]);
+      } else legend.push(["var(--critical)", "red strip on a step: the attacker did it (dashed: tried and failed, or aims at it)"],
+        ["var(--critical)", "red link: the path the attack took"]);
       if (ov.redKnows) {
         legend.push(["var(--critical)", "dashed frame: real, but unknown to it"]);
         const extra = [...ov.redKnows].filter(id => !T.nodes[id]);
@@ -1358,30 +1382,69 @@
     }
     return out.sort((a, b) => a.t - b.t);
   }
+  // The journal lists the newest fact first, and is kept, not redrawn: a new
+  // fact is a row put in at the top, a fact that changed (a burst grown by one)
+  // has its text updated, and every other row stays the element it was. So a
+  // reader scrolled down the list, or about to click a row, keeps their place
+  // while a live run goes on adding facts above.
+  const journals = new WeakMap();
   function renderJournal(box, r, t) {
     const view = UI.view() || "overview";
     const show = journalShow[view] || (journalShow[view] = journalDefaults(view));
     if (!keep(box, r, t, [view, show, !!journalAll[view]])) return;
     const items = journalOf(r).filter(e => show[e.side]);
-    const all = !!journalAll[view], shown = all ? items : items.slice(-300);
-    const filters = h("div", { class: "tabs", role: "group", "aria-label": "Sides shown" },
-      ...Object.keys(SIDES).map(k => h("button", { type: "button", "aria-pressed": String(!!show[k]), title: `Show the ${k}'s facts`,
-        onclick: () => { show[k] = !show[k]; box.dataset.sig = ""; UI.render(); } },
-        h("span", { class: "dot", style: `background:${SIDES[k]};margin-right:5px` }), k)));
-    const t0 = r.start_t;
-    const rows = shown.map(e => h("tr", { ...jump(e.t), style: t != null && e.t > t + 1e-6 ? "opacity:.4" : null },
-      h("td", { class: "num" }, t0 ? rel(e.t, t0) : clock(e.t)),
-      h("td", {}, h("span", { class: "dot", style: `background:${SIDES[e.side]}` }), ` ${e.side}`),
-      h("td", { class: "wrap" }, e.text)));
-    // replaceChildren would print a null as the text "null": the note is spread in or not at all.
-    box.replaceChildren(filters,
-      ...(items.length > shown.length ? [h("p", { class: "sub" }, `The last ${shown.length} of ${items.length} facts. `,
-        h("button", { type: "button", onclick: () => { journalAll[view] = true; box.dataset.sig = ""; UI.render(); } }, "show all"))] : []),
-      h("div", { class: "scroll", style: "max-height:420px;overflow-y:auto" }, h("table", {},
+    const all = !!journalAll[view], shown = (all ? items : items.slice(-300)).reverse();
+    // The frame (filters, note, table) is built when what frames the list changes.
+    const frame = JSON.stringify([r.id, view, show, all, items.length > shown.length]);
+    let J = journals.get(box);
+    if (!J || J.frame !== frame) {
+      const redraw = () => { box.dataset.sig = ""; UI.render(); };
+      const filters = h("div", { class: "tabs", role: "group", "aria-label": "Sides shown" },
+        ...Object.keys(SIDES).map(k => h("button", { type: "button", "aria-pressed": String(!!show[k]), title: `Show the ${k}'s facts`,
+          onclick: () => { show[k] = !show[k]; redraw(); } },
+          h("span", { class: "dot", style: `background:${SIDES[k]};margin-right:5px` }), k)));
+      J = { frame, rows: new Map(), tbody: h("tbody", {}), note: h("span", {}) };
+      // The list keeps its own place when rows are added above (set below), so the browser must not also try to.
+      J.scroll = h("div", { class: "scroll", style: "max-height:420px;overflow-y:auto;overflow-anchor:none" }, h("table", {},
         h("thead", {}, h("tr", {}, th("since run start", "When the fact happened, counted from the start of the run", true),
-          th("side", "Whose fact it is: the attacker's, the defender's, or the plant's own state"), th("what happened", "Facts after the time shown on the time bar are greyed"))),
-        h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: 3, class: "empty" },
-          Object.values(show).some(Boolean) ? "Nothing has happened yet on the sides shown" : "Every side is switched off: choose one above"))))));
+          th("side", "Whose fact it is: the attacker's, the defender's, or the plant's own state"),
+          th("what happened", "The newest fact is at the top. Facts after the time shown on the time bar are greyed"))),
+        J.tbody));
+      // replaceChildren would print a null as the text "null": the button is spread in or not at all.
+      box.replaceChildren(filters, h("p", { class: "sub", style: "margin:6px 0" }, "Newest first. ", J.note,
+        ...(items.length > shown.length ? [" ", h("button", { type: "button", onclick: () => { journalAll[view] = true; redraw(); } }, "show all")] : [])),
+        J.scroll);
+      journals.set(box, J);
+    }
+    J.note.textContent = items.length > shown.length ? `The latest ${shown.length} of ${items.length} facts.`
+      : `${items.length} fact${items.length === 1 ? "" : "s"}.`;
+    // A fact is known by when it happened and whose it is; two at one instant by their order.
+    const seen = {}, wanted = [], t0 = r.start_t;
+    for (const e of [...shown].reverse()) {
+      const base = `${e.t}|${e.side}`, key = `${base}|${seen[base] = (seen[base] || 0) + 1}`;
+      let row = J.rows.get(key);
+      if (!row) {
+        row = { what: h("td", { class: "wrap" }), text: null, dim: null };
+        row.tr = h("tr", jump(e.t), h("td", { class: "num" }, t0 ? rel(e.t, t0) : clock(e.t)),
+          h("td", {}, h("span", { class: "dot", style: `background:${SIDES[e.side]}` }), ` ${e.side}`), row.what);
+        J.rows.set(key, row);
+      }
+      if (row.text !== e.text) row.what.textContent = row.text = e.text;
+      const dim = t != null && e.t > t + 1e-6;
+      if (row.dim !== dim) { row.dim = dim; row.tr.style.opacity = dim ? ".4" : ""; }
+      wanted.push([key, row]);
+    }
+    wanted.reverse();
+    const keys = new Set(wanted.map(([key]) => key));
+    for (const [key, row] of J.rows) if (!keys.has(key)) { row.tr.remove(); J.rows.delete(key); }
+    if (J.empty) { J.empty.remove(); J.empty = null; }
+    // Rows go where they belong; one already there is not touched. A reader who
+    // has scrolled down stays on the rows they were reading.
+    const before = J.scroll.scrollHeight, at = J.scroll.scrollTop;
+    wanted.forEach(([, row], i) => { if (J.tbody.children[i] !== row.tr) J.tbody.insertBefore(row.tr, J.tbody.children[i] || null); });
+    if (at > 0) J.scroll.scrollTop = at + (J.scroll.scrollHeight - before);
+    if (!wanted.length) J.tbody.append(J.empty = h("tr", {}, h("td", { colspan: 3, class: "empty" },
+      Object.values(show).some(Boolean) ? "Nothing has happened yet on the sides shown" : "Every side is switched off: choose one above")));
   }
 
   const GRAPH_OPTIONS = [
@@ -1421,8 +1484,8 @@
       sub: "Only the defender: what it saw, what it believed and when, what it decided and ran.",
       help: "Everything here comes from the defender's sensors and analytics: nothing of what the attacker really did.\nIts decisions: each response with the finding that triggered it and what the policy weighed. Alerts: raised and cleared. Its belief: when each step of the attack tree was first suspected, inferred, confirmed.\nClick a row to show the run at that time." },
     { id: "journal", title: "Journal", render: renderJournal,
-      sub: "Every fact of the run in order. Click a row to show the run at that time.",
-      help: "The run as a log: the attacker's steps, plans and writes; the defender's findings, beliefs, decisions and actions; the plant's changes of state. Repeated findings and writes within 5 s are grouped. Facts after the time shown are greyed. The buttons choose whose facts to list." },
+      sub: "Every fact of the run, the newest first. Click a row to show the run at that time.",
+      help: "The run as a log, newest fact at the top: the attacker's steps, plans and writes; the defender's findings, beliefs, decisions and actions; the plant's changes of state. Repeated findings and writes within 5 s are grouped. Facts after the time shown are greyed. The buttons choose whose facts to list." },
   ];
 
   let UI = null;

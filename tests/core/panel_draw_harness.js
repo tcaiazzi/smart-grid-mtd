@@ -271,6 +271,21 @@ function checkFacts(panel, fail) {
   if ("block_web_src" in panel.graph.overlayAt(run, null).applied) fail("a reverted countermeasure is still drawn as applied");
   has(drawn(cardOf(panel, "journal"), run), /reverts "Block the attacking source"/, "the journal shows a revert as another application");
   if (!panel.graph.marks(run).some(m => /block web src reverted/.test(m.kind))) fail("the time bar names a revert as an application");
+  // The journal reads newest first, and a new fact is a row added on top: the
+  // rows already there stay the elements they were. A list rebuilt at every
+  // event throws the reader back to its top and takes a row from under a click.
+  run = runFrom(fullEvents());
+  VIEW = null;
+  const journal = new El("div"), factRows = () => all(journal, e => e.tag === "tr").filter(tr => tr.parentNode && tr.parentNode.tag === "tbody");
+  cardOf(panel, "journal").render(journal, run, null);
+  const was = factRows();
+  if (!/attack ends/.test(textOf(was[0])) || !/attack starts|reconnaissance/.test(textOf(was[was.length - 1])))
+    fail(`the journal is not newest first: it opens with "${textOf(was[0]).replace(/\s+/g, " ")}"`);
+  apply(heard({ kind: "finding", guest_t: 155, detector: "rules", klass: "policy_violation", src: null, maps_to: null }));
+  cardOf(panel, "journal").render(journal, run, null);
+  const now = factRows();
+  if (now.length !== was.length + 1 || !/policy violation/.test(textOf(now[0]))) fail(`a new fact did not go to the top of the journal: ${now.length} rows after ${was.length}`);
+  if (was.some((tr, i) => now[i + 1] !== tr)) fail("the journal rebuilt its rows for one new fact: the reader loses their place at every event");
   // A model that could not be fitted is said, not left to look like a quiet run.
   run = runFrom([...fullEvents(), { kind: "model_error", guest_t: 112, error: "too few samples" }]);
   if (S.unshown.model_error) fail("model_error is recorded and shown nowhere");
