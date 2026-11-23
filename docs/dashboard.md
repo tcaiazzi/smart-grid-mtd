@@ -127,7 +127,8 @@ Space play or pause, End live.
 - **Defender**: only the defender — what it saw and believed and when, its
   decisions, the tree as it believes it;
 - **Players**: the operator's suggestions and what each team did. Present only
-  when a run has an operator or players;
+  when a run has an operator or players. Once a run with a harness at a seat is
+  scored, the **Trajectories** card is added below (see after this list);
 - **Campaign**: progress, every run, the aggregated results, with four tabs of
   its own (detection, physical impact, response, countermeasures).
 
@@ -152,6 +153,20 @@ the scenario is: [CPS, §8](scenario-cps.md#8-campaigns-and-the-progress-dashboa
 
 On a plant of several feeders, a row of buttons above the chart chooses the
 feeder shown.
+
+**Trajectories** is each harness's game, step by step, read from the documents
+the run keeps of it once scored (`trajectory-<team>.json`); it is absent while
+the run is played, and from a run with no harness. One chart puts every player
+on the same axis, a lane for its model and one for its tools: a bar is the
+model answering, or a call for as long as it took, coloured by what the call
+does (looks at the lab, acts on it, a shell command, a wait); ✕ marks a call
+that was not carried out or did not work, ◆ a refusal of the model. *By time*
+draws each bar as long as it took; *By steps* gives every step the same width,
+so that a minute's wait does not hide the short calls around it. A click on a
+mark moves the time bar there, and below the chart the step each player was on
+at that time is given in full: what the model said, what each call asked and
+what came back. Under it, where each player's time went, and every step as a
+table.
 
 **CPS advisor** shows the CPS panel. A benchmark of harnesses
 ([Harnesses as players](playing-with-agents.md)) adds a **Harnesses** tab to the
@@ -200,6 +215,7 @@ All `GET`, all read-only.
 | `/api/ledgers` | `{root, now, ledgers}`: the ledgers found under the root, newest first |
 | `/api/events?id=&since=&limit=` | `{gen, next, total, events}`: one page of a ledger's events |
 | `/api/structure?id=&run=` | `{source, kg, tree}`: a run's knowledge graph and attack tree — as recorded, or rebuilt from the current lab model for a run without them |
+| `/api/trajectories?id=&run=` | `{trajectories: {team: document}}`: what each player at a seat did, step by step, once the run is scored; empty for a run that kept none |
 | `/graph.js` | every registered scenario's `panel.js`, in one script |
 | `/vendor/<file>` | a library the page loads, if `cyberrange/core/vendor/VENDOR.json` lists it |
 

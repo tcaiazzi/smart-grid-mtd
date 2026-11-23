@@ -1527,6 +1527,196 @@
     J.note.textContent = `${rows.length} fact${rows.length === 1 ? "" : "s"}, the newest first. Click one to show the run at that time.`;
   }
 
+  // ── the players' trajectories ───────────────────────────────────────
+  // What a harness at a seat did, step by step, from the document a scored run
+  // keeps of each player (cps/trajectory.py). A step is an answer of the model
+  // with the calls it made, a call of a player that has no model, the prompt
+  // the player was given, or something its harness said of itself.
+  // The tools that act on the lab are the scorecard's (cps/scorecard.py), which
+  // counts the shell and the pause apart as this does; the rest only look.
+  const ACTING = new Set(["run_step", "report_findings", "answer_suggestion", "apply_countermeasure", "revert_countermeasure", "set_mode"]);
+  const spentOn = tool => tool === "shell" ? "shell" : tool === "wait" ? "wait" : ACTING.has(tool) ? "act" : "look";
+  // What a stretch of a player's time went on: its colour, and its name in the legend.
+  const SPENT = {
+    model: ["var(--s7)", "the model answering"], act: ["var(--s2)", "acting on the lab"], look: ["var(--s3)", "looking at the lab"],
+    shell: ["var(--s4)", "a shell command"], wait: ["var(--muted)", "waiting"], rest: ["var(--axis)", "nothing in progress"],
+  };
+  const TEAM_COLOUR = { red: "var(--critical)", blue: "var(--s1)" };
+  const IO = "margin:2px 0;padding:6px 8px;background:var(--wash);border-radius:6px;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto";
+  const count = (n, word) => `${Number(n).toLocaleString("en")} ${word}${n === 1 ? "" : "s"}`;
+  const secs = s => s < 1 ? `${Math.round(s * 1000)} ms` : s < 100 ? `${num(s, s < 10 ? 2 : 1)} s` : dur(s);
+  // How a call went, when it did not simply work: asked and not carried out, or carried out to no effect.
+  const wentWrong = x => x.answered === false ? "never answered" : x.outcome && x.outcome !== "ok" ? `not carried out (${pretty(x.outcome)})`
+    : x.result_ok === false ? "carried out, it did not work" : null;
+  const asked = c => clip(String(c.arguments?.cmd ?? c.arguments?.id ?? ""), 90);
+
+  // A player's game as stretches of time (the model answering, each call) and
+  // as moments (its prompt, what its harness said), each knowing its step.
+  function gameOf(team, doc) {
+    const steps = (doc.steps || []).map(s => ({ ...s, team, t: Date.parse(s.timestamp) / 1000 }));
+    const thinks = steps.some(s => s.source === "agent" && s.llm_call_count !== 0);
+    const model = `${team} · model`, tools = `${team} · tools`, spans = [], moments = [];
+    // When the player last finished something: its model's next answer is timed from there.
+    let free = null;
+    for (const s of steps) {
+      let at = s.t;
+      const calls = s.tool_calls || [];
+      if (s.source !== "agent") {
+        const what = s.source === "user" ? "prompt" : s.extra?.what || "event";
+        moments.push({ team, lane: thinks ? model : tools, kind: what, a: s.t, b: s.t, t: s.t, step: s,
+          text: s.source === "user" ? `${team} was given its prompt` : `${team}'s harness: ${pretty(what)}${s.message ? ` — ${clip(s.message, 160)}` : ""}` });
+      } else if (s.llm_call_count !== 0) {
+        const a = Math.min(free ?? s.t, s.t);
+        spans.push({ team, lane: model, kind: "model", a, b: s.t, t: s.t, step: s, of: 1, k: 0,
+          text: `${team}'s model answered after ${secs(s.t - a)}${s.message ? `: “${clip(s.message, 160)}”` : ""}${calls.length ? `\nit made ${count(calls.length, "call")}: ${calls.map(c => c.function_name).join(", ")}` : ""}` });
+      }
+      calls.forEach((c, k) => {
+        const x = c.extra || {}, a = x.timestamp ? Date.parse(x.timestamp) / 1000 : at, b = a + (x.duration_s || 0), bad = wentWrong(x);
+        spans.push({ team, lane: tools, kind: spentOn(c.function_name), a, b, t: Math.max(s.t, a), step: s, of: calls.length, k, bad,
+          text: `${team} called ${c.function_name}${asked(c) ? `: ${asked(c)}` : ""}\n${SPENT[spentOn(c.function_name)][1]}, ${x.duration_s == null ? "time not recorded" : secs(x.duration_s)}${bad ? ` — ${bad}` : ""}` });
+        at = Math.max(at, b);
+      });
+      free = Math.max(free ?? at, at);
+    }
+    return { team, doc, steps, spans, moments, thinks };
+  }
+  // Where the time a player played went, in seconds by what it was spent on.
+  // Calls made side by side count twice, so what is left over is never below zero.
+  function timeSpent(G) {
+    const ends = [...G.spans.map(s => s.b), ...G.steps.map(s => s.t)];
+    const total = ends.length ? Math.max(...ends) - G.steps[0].t : 0, sums = {};
+    for (const s of G.spans) sums[s.kind] = (sums[s.kind] || 0) + (s.b - s.a);
+    sums.rest = Math.max(0, total - Object.values(sums).reduce((a, b) => a + b, 0));
+    const whole = Object.values(sums).reduce((a, b) => a + b, 0);
+    return whole <= 0 ? [] : Object.keys(SPENT).filter(k => sums[k] > 0).map(k => ({ team: G.team, kind: k, s: sums[k], share: 100 * sums[k] / whole }));
+  }
+
+  // A step in full: what the model said, and each call with what was asked and what came back.
+  function stepInFull(G, s, t0, since) {
+    const head = `step ${s.step_id} of ${G.steps.length} · ${rel(s.t, t0)} since ${since}`;
+    if (s.source === "user") return [note(`${head} · the prompt it was given`), fold(`traj-${G.team}-prompt`, `the prompt, ${count(s.message.length, "character")}`, h("pre", { style: IO }, s.message), false)];
+    if (s.source === "system") return [note(`${head} · said by its harness`), h("div", { class: "now" }, pretty(s.extra?.what || "event")), s.message ? h("div", {}, s.message) : null];
+    const m = s.metrics, out = Object.fromEntries((s.observation?.results || []).map(o => [o.source_call_id, o.content]));
+    const tokens = m && m.prompt_tokens != null ? ` · ${count(m.prompt_tokens, "token")} in${m.cached_tokens ? ` (${Number(m.cached_tokens).toLocaleString("en")} from cache)` : ""}` : "";
+    return [note(`${head}${s.model_name ? ` · ${s.model_name}` : s.llm_call_count !== 0 ? "" : G.thinks ? " · a call outside any answer of its model" : " · no model: a scripted move"}${tokens}`),
+      s.llm_call_count === 0 ? null : s.message ? h("div", { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;margin:4px 0 8px" }, s.message) : h("div", {}, note("the model said nothing with this answer: only calls")),
+      ...(s.tool_calls || []).map((c, k) => {
+        const x = c.extra || {}, bad = wentWrong(x), given = out[c.tool_call_id];
+        return fold(`traj-${G.team}-${s.step_id}-${k}`, [h("span", { class: "dot", style: `background:${SPENT[spentOn(c.function_name)][0]};margin-right:6px` }), h("b", {}, c.function_name),
+          ` — ${SPENT[spentOn(c.function_name)][1]}${x.duration_s == null ? "" : `, ${secs(x.duration_s)}`}`, bad ? h("span", { style: "color:var(--critical)" }, ` ✕ ${bad}`) : null],
+          h("div", {}, note("asked"), h("pre", { style: IO }, JSON.stringify(c.arguments ?? {}, null, 1)),
+            note("came back"), given == null ? h("div", {}, note("nothing was kept of what came back")) : h("pre", { style: IO }, given)), true);
+      })];
+  }
+
+  let trajectoryAxis = "time";
+  function renderTrajectory(box, r, t) {
+    const docs = UI.trajectories(r);
+    if (!keep(box, r, t, [trajectoryAxis, docs && Object.entries(docs).map(([team, d]) => [team, d.steps?.length])])) return;
+    if (!docs) { box.replaceChildren(UI.empty("This run kept no trajectory: no harness sat at a seat, or the run is not scored yet.")); return; }
+    const games = ["red", "blue", ...Object.keys(docs).filter(k => k !== "red" && k !== "blue")].filter(k => docs[k]).map(k => gameOf(k, docs[k]));
+    // Both players on one axis: every step in the order they happened, whoever made it.
+    const order = games.flatMap(G => G.steps).sort((a, b) => a.t - b.t), index = new Map(order.map((s, i) => [s, i]));
+    if (!order.length) { box.replaceChildren(UI.empty("The players' trajectories hold no step.")); return; }
+    const byTime = trajectoryAxis === "time", t0 = r.start_t ?? order[0].t, since = r.start_t ? "run start" : "the first step";
+    const place = e => byTime ? { x1: e.a - t0, x2: e.b - t0 }
+      : { x1: index.get(e.step) + (e.of ? e.k / e.of : 0.5), x2: index.get(e.step) + (e.of ? (e.k + 1) / e.of : 0.5) };
+    const spans = games.flatMap(G => G.spans).map(e => ({ ...e, ...place(e) })).map(e => ({ ...e, x: (e.x1 + e.x2) / 2 }));
+    const moments = games.flatMap(G => G.moments).map(e => ({ ...e, x: place(e).x1 }));
+    const point = [...spans, ...moments], of = kind => spans.filter(e => e.kind === kind);
+    const lanes = games.flatMap(G => [`${G.team} · model`, `${G.team} · tools`]).filter(l => point.some(e => e.lane === l));
+    const ends = point.flatMap(e => [e.a, e.b]), lo = Math.min(...ends) - t0, hi = Math.max(...ends, Math.min(...ends) + 10) - t0;
+    // In steps, the time shown falls after the last step made by then.
+    const shown = t == null ? null : byTime ? t - t0 : order.filter(s => s.t <= t + 1e-6).length;
+    // Which answer of the model made which call: a line from the one to the other.
+    const made = spans.filter(e => e.kind !== "model" && e.step.llm_call_count !== 0).map(e => ({ ...e, from: byTime ? e.step.t - t0 : e.x1, model: `${e.team} · model` }));
+    const chart = UI.plot({
+      width: Math.max(360, box.clientWidth || 700), height: 46 + lanes.length * 32, marginLeft: 92, marginRight: 14, marginBottom: 36, marginTop: 6,
+      ariaLabel: `What each player did, step by step, in ${r.id}`,
+      x: byTime ? { domain: [Math.max(0, lo - (hi - lo) * 0.01), hi], ...UI.timeAxis(hi, since) }
+        : { domain: [0, order.length], label: "steps of every player, in the order they happened", labelAnchor: "center", labelArrow: "none", ticks: 8, tickSize: 4 },
+      y: { domain: lanes, label: null, tickSize: 0, padding: 0.3 },
+      marks: [
+        Plot.ruleY(lanes, { stroke: "var(--grid)" }),
+        Plot.link(made, { x1: "from", y1: "model", x2: "x1", y2: "lane", stroke: "var(--axis)", strokeDasharray: "2 3" }),
+        Plot.barX(of("model"), { x1: "x1", x2: "x2", y: "lane", fill: SPENT.model[0], fillOpacity: 0.35, insetLeft: 1, rx: 2 }),
+        Plot.tickX(of("model"), { x: "x2", y: "lane", stroke: SPENT.model[0], strokeWidth: 2 }),
+        ...["look", "act", "shell", "wait"].flatMap(kind => [
+          Plot.barX(of(kind), { x1: "x1", x2: "x2", y: "lane", fill: SPENT[kind][0], fillOpacity: 0.85, insetRight: 1, rx: 2 }),
+          Plot.tickX(of(kind), { x: "x1", y: "lane", stroke: SPENT[kind][0], strokeWidth: 2 })]),
+        Plot.dot(spans.filter(e => e.bad), { x: "x1", y: "lane", symbol: "times", r: 4, stroke: "var(--critical)", strokeWidth: 2 }),
+        Plot.dot(moments.filter(e => e.kind === "prompt"), { x: "x", y: "lane", symbol: "triangle2", r: 4, fill: "var(--ink-2)" }),
+        Plot.dot(moments.filter(e => e.kind === "refusal"), { x: "x", y: "lane", symbol: "diamond", r: 6, fill: "var(--critical)", stroke: "var(--surface)", strokeWidth: 1 }),
+        Plot.dot(moments.filter(e => e.kind !== "prompt" && e.kind !== "refusal"), { x: "x", y: "lane", symbol: "diamond", r: 6, fill: "var(--surface)", stroke: "var(--ink-2)", strokeWidth: 2 }),
+        ...(shown != null ? [Plot.ruleX([shown], { stroke: "var(--ink)", strokeWidth: 1.5 })] : []),
+        // What is nearest the pointer: ringed, and said in words.
+        Plot.dot(point, Plot.pointer({ x: "x", y: "lane", r: 9, stroke: "var(--ink)", strokeWidth: 1.5 })),
+        UI.plotTip(point, { near: true, x: "x", y: "lane", title: e => `${e.text}\n${rel(e.t, t0)} since ${since} — click to read this step` }),
+      ],
+    });
+    chart.style.cursor = "pointer";
+    chart.addEventListener("click", () => { if (chart.value) UI.setTime(chart.value.t); });
+    const redraw = () => { box.dataset.sig = ""; UI.render(); };
+    const axis = h("div", { class: "tabs", role: "group", "aria-label": "What the horizontal axis counts" },
+      ...[["time", "By time", "Each call as long as it took: where the time went"], ["steps", "By steps", "Every step as wide as the others: a long wait does not hide the short calls around it"]]
+        .map(([id, label, help]) => h("button", { type: "button", title: help, "aria-pressed": String(id === trajectoryAxis), onclick: () => { trajectoryAxis = id; redraw(); } }, label)));
+    // Who played, with what, and how far it got.
+    const who = games.map(G => {
+      const d = G.doc, a = d.agent || {}, f = d.final_metrics || {}, x = d.extra || {}, models = (x.models || []).join(" → ") || a.model_name;
+      return h("div", {}, h("span", { class: "dot", style: `background:${TEAM_COLOUR[G.team] || "var(--axis)"};margin-right:6px` }), h("span", { class: "team" }, G.team), " — ",
+        [a.name, a.version, models].filter(Boolean).join(" · "), note(` · ${count(G.steps.length, "step")}${G.thinks ? `, ${count(G.spans.filter(e => e.kind === "model").length, "answer")} of the model` : ", no model"}`
+          + `${f.total_prompt_tokens != null ? ` · ${count(f.total_prompt_tokens, "token")} in` : ""}${f.total_cost_usd != null ? ` · $${num(f.total_cost_usd, 2)}` : ""}`
+          + `${x.stop_reason ? ` · stopped: ${pretty(x.stop_reason)}` : ""}${x.exit_code ? ` (exit ${x.exit_code})` : ""}`));
+    });
+    // The legend names what these games have, not everything a game could.
+    const parts = games.flatMap(timeSpent), drawn = new Set([...spans.map(e => e.kind), ...parts.map(p => p.kind)]);
+    const key = (mark, colour, label) => h("span", {}, h("span", { style: `color:${colour};font-weight:700` }, mark), label);
+    const legend = h("div", { class: "legend" },
+      ...Object.entries(SPENT).filter(([kind]) => drawn.has(kind)).map(([, [colour, label]]) => h("span", {}, h("span", { class: "dot", style: `background:${colour};border-radius:2px` }), label)),
+      ...(spans.some(e => e.bad) ? [key("✕", "var(--critical)", "a call that did not work")] : []),
+      ...(moments.some(e => e.kind === "prompt") ? [key("▼", "var(--ink-2)", "the prompt")] : []),
+      ...(moments.some(e => e.kind === "refusal") ? [key("◆", "var(--critical)", "the model refused")] : []),
+      ...(moments.some(e => e.kind !== "prompt" && e.kind !== "refusal") ? [key("◇", "var(--ink-2)", "said by the harness")] : []),
+      h("span", { class: "muted" }, "click a mark to read its step"));
+    // Where each player's time went, as shares of the time it played.
+    const teams = games.map(G => G.team).filter(team => parts.some(p => p.team === team));
+    const shares = !parts.length ? null : UI.plot({
+      width: Math.max(360, box.clientWidth || 700), height: 40 + teams.length * 26, marginLeft: 92, marginRight: 14, marginBottom: 34, marginTop: 4,
+      ariaLabel: `Where each player's time went in ${r.id}`,
+      x: { domain: [0, 100], label: "share of the time the player played (%)", labelAnchor: "center", labelArrow: "none", ticks: 5, tickSize: 4 },
+      y: { domain: teams, label: null, tickSize: 0, padding: 0.3 },
+      marks: [
+        Plot.barX(parts, Plot.stackX({ x: "share", y: "team", fill: p => SPENT[p.kind][0], insetLeft: 1, insetRight: 1, rx: 2 })),
+        UI.plotTip(parts, Plot.stackX({ near: true, x: "share", y: "team", title: p => `${p.team}: ${SPENT[p.kind][1]} for ${secs(p.s)}, ${num(p.share, 1)}% of the time it played` })),
+      ],
+    });
+    const spent = teams.map(team => h("div", {}, h("span", { class: "team" }, team), note(` — ${parts.filter(p => p.team === team).map(p => `${SPENT[p.kind][1]} ${p.share < 1 ? "<1" : num(p.share, 0)}% (${secs(p.s)})`).join(" · ")}`)));
+    // The step each player was on at the time shown; the last one when following the run's end.
+    const reading = h("div", { class: "cols2" }, ...games.map(G => {
+      const s = G.steps.filter(uptoT(t)).pop();
+      return h("div", { class: `side ${G.team}` }, h("div", {}, h("b", { style: `color:${TEAM_COLOUR[G.team] || "var(--ink-2)"}` }, G.team)),
+        ...(s ? stepInFull(G, s, t0, since) : [h("div", {}, note("has not made a step yet at the time shown"))]));
+    }));
+    const thinking = new Set(games.filter(G => G.thinks).map(G => G.team));
+    const row = s => {
+      const calls = s.tool_calls || [], took = calls.reduce((a, c) => a + (c.extra?.duration_s || 0), 0), bad = calls.some(c => wentWrong(c.extra || {}));
+      const what = s.source === "user" ? "prompt" : s.source === "system" ? pretty(s.extra?.what || "event") : s.llm_call_count !== 0 ? "answer of the model" : thinking.has(s.team) ? "call outside an answer" : "scripted move";
+      return h("tr", jump(s.t), h("td", { class: "num" }, s.step_id), h("td", { class: "num" }, rel(s.t, t0)),
+        h("td", {}, h("span", { class: "dot", style: `background:${TEAM_COLOUR[s.team] || "var(--axis)"};margin-right:6px` }), s.team), h("td", {}, what),
+        h("td", {}, calls.map(c => c.function_name).join(", ") || "—", bad ? h("span", { style: "color:var(--critical)" }, " ✕") : null),
+        h("td", { class: "num" }, calls.length ? secs(took) : "—"), h("td", { class: "num" }, s.metrics?.prompt_tokens != null ? Number(s.metrics.prompt_tokens).toLocaleString("en") : "—"),
+        h("td", { class: "wrap" }, clip(s.message || (calls[0] ? asked(calls[0]) : ""), 140)));
+    };
+    box.replaceChildren(h("div", { class: "lines" }, ...who), axis, chart, legend,
+      h("h3", { style: "font-size:13px;margin:12px 0 0" }, "Where the time went"), ...(shares ? [shares] : []), h("div", { class: "lines" }, ...spent),
+      h("h3", { style: "font-size:13px;margin:12px 0 4px" }, t == null ? "The last step of each player" : "The step each player was on at the time shown"), reading,
+      fold("trajectory-steps", `the ${count(order.length, "step")} of every player as a table`,
+        table([th("step", "The step's number in its player's trajectory", true), th("when", `When the step was made, since ${since}`, true), th("player"), th("what", "An answer of the model, a move of a scripted player, the prompt, or something the harness said of itself"),
+          th("calls", "The tools the step called; ✕ when one did not work"), th("took", "How long its calls took together", true),
+          th("tokens in", "What the model read for this answer, the cached part included", true), th("in short", "What the model said, or what its first call asked")],
+          order.map(row), ""), false));
+  }
+
   const GRAPH_OPTIONS = [
     { id: "hideInputs", label: "hide input registers", view: "kg", default: true,
       help: "Input registers are the plant's measurements: read-only, never a target" },
@@ -1552,8 +1742,8 @@
       sections: ["card-attacker", "graph-card"], options: { perspective: "attacker" } },
     { id: "defender", label: "Defender", help: "Only the defender: what it saw and believed, what it decided and ran",
       sections: ["card-defender", "op-card", "graph-card"], options: { perspective: "defender" } },
-    { id: "players", label: "Players", help: "The people and harnesses in the match: what the defender asked its operator, what each team did",
-      sections: ["op-card", "teams-card"] },
+    { id: "players", label: "Players", help: "The people and harnesses in the match: what the defender asked its operator, what each team did, each harness's game step by step once the run is scored",
+      sections: ["op-card", "teams-card", "card-trajectory"] },
     { id: "campaign", label: "Campaign", help: "The experiment as a whole: how far it is, every run with what was measured on it, the aggregated results",
       sections: ["tiles-card", "runs-card", "results-card"] },
   ];
@@ -1573,6 +1763,9 @@
     { id: "journal", title: "Journal", render: renderJournal, dock: "side",
       sub: "Every fact of the run, beside whichever view is open.",
       help: "The run as a log, newest fact at the top: the attacker's steps, plans and writes; the defender's findings, beliefs, decisions and actions; the plant's changes of state. Repeated findings and writes within 5 s are grouped. Facts after the time shown are greyed. The buttons choose whose facts to list. Click a fact to show the run at that time." },
+    { id: "trajectory", title: "Trajectories", render: renderTrajectory, live: r => !!UI.trajectories(r),
+      sub: "What each harness at a seat did, step by step, once the run is scored: its model's answers, its calls, what came back.",
+      help: "One lane for a player's model and one for its tools; a scripted player has no model.\nA bar is a stretch of the player's time: its model answering (from when the player last finished something to the answer), or a call for as long as it took. The dashed lines join an answer to the calls it made. ✕: a call that was not carried out, or did not work.\nBy time: each bar as long as it took. By steps: every step as wide as the others, both players in the order they moved.\nClick a mark to read its step in full below, and to show the rest of the run at that time." },
   ];
 
   let UI = null;

@@ -287,8 +287,9 @@ and the campaign's bookkeeping. On the progress ledger the core also writes:
 - for a campaign, `run_failed`, `run_skipped` (a run whose earlier result was
   reused), `unit_blocked` (a unit whose `needs` did not succeed) and
   `aggregate_failed`;
-- `player_start`, `player_call`, `player_usage` and `player_exit`, the
-  transcript of a harness seated by `SeatPlayer`.
+- `player_start`, `player_call`, `player_event`, `player_usage` and
+  `player_exit`, the transcript of a harness seated by `SeatPlayer` — without
+  what a call was asked and gave back, which stays on the transcript.
 
 Scenario-specific kinds are:
 
@@ -382,6 +383,7 @@ Every route is a `GET`:
 | `/api/ledgers` | `{root, now, ledgers}`: one summary per ledger found under the root, with its scenario and status, running ones first. |
 | `/api/events?id=&since=&limit=` | One page of a ledger (below). |
 | `/api/structure?id=&run=` | `{source, kg, tree}` of a run: its recorded `kg.json` and `tree.json`, or the ones `Scenario.structure()` rebuilds for a run recorded without them. |
+| `/api/trajectories?id=&run=` | `{trajectories: {team: document}}` of a run: every `trajectory-<team>.json` in its directory, by team. Empty for a run that kept none; a document that cannot be read is left out. |
 
 **How a ledger reaches the page.** `GET /api/events?id=&since=&limit=` answers
 `{gen, next, total, events}`: one page of the events with `seq >= since`.
@@ -422,6 +424,7 @@ panel's. The helpers:
 | `grid(box, options)` | a long list, drawn by Tabulator (`options` are its own: `index`, `columns`, `data`, …) in the page's type and theme; `list.keepPlace(change)` applies a change to the data and leaves the row the reader was on where it was |
 | `plot(options)`, `plotTip(data, …)`, `timeAxis(span, since)` | an Observable Plot chart in the page's type and theme, its tooltip, a time axis in one unit that names its origin |
 | `structure(run)` | the run's recorded knowledge graph and attack tree, or `null` while they load (the page draws again when they arrive): it is where the names of the tree's steps and countermeasures come from |
+| `trajectories(run)` | `{team: document}`, what each player at a seat did step by step (`trajectory-<team>.json`), or `null` for a run that kept none. They are written when the run is scored, so the page asks only then, once, and draws again when they arrive |
 | `time()`, `setTime(t)`, `view()`, `render()`, `select(id)`, `S` | the time shown and the view chosen, and the page's state |
 
 A panel never shows a recorded identifier where it has a name for it: a reader
@@ -438,7 +441,7 @@ The hooks, all optional:
 | `detail(run)` | chips, chart and table of the selected run |
 | `chart(run)` | the selected run's chart |
 | `reduce(run, ev)` | folds the event kinds only it knows into `run.x`, and returns `true` for a kind it took (a kind nobody takes is listed at the foot of the page) |
-| `cards: [{id, title, sub, help?, span?, dock?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the view; `dock: "side"` puts the card in the column beside the views instead of in one of them |
+| `cards: [{id, title, sub, help?, span?, dock?, live?, render(box, run, t)}]` | cards of its own, drawn as of the time bar's `t` (`null` = live); `help` is what its ⓘ says, `span` its width in twelfths of the view; `dock: "side"` puts the card in the column beside the views instead of in one of them; `live(run)` says whether the card has anything to show for a run, and one that answers no is left out as an empty page section is (without it the card is shown for every run) |
 | `views: [{id, label, help, sections, options?}]` | the page's tabs, the first being the one it opens on: `sections` lists, in order, the page's sections (`tiles-card`, `runs-card`, `detail`, `score-card`, `graph-card`, `op-card`, `teams-card`, `results-card`) and its own cards (`card-<id>`) that the view shows; `options` sets graph switches on entering it. Every section and every card that is not docked must be in some view, or no tab leads to it |
 | `graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree, options?, origin?}` | the structure views; `marks(run)` are the time bar's stops, `options` its switches (`{id, label, view?, default}` a check box, with `choices: [{id, label}]` a row of buttons), `origin(run)` the time the bar counts from |
 | `results: {tabs: [{id, label}], render(tab, aggregate, table)}` | its tabs next to the mean [95% CI] one; `aggregate` is the campaign's `aggregate` event whole |

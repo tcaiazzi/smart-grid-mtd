@@ -330,9 +330,40 @@ class TheSeatPlayer(unittest.TestCase):
             ("player_call", {"tool": "run_step", "outcome": "ok", "team": "red", "guest_t": 5.0}),
         )
         self.assertIsNone(self.player.mirror({"kind": "something_else"}))
+        whole = call | {
+            "input": "{}",
+            "output": "x" * 9000,
+            "output_type": "str",
+            "event": "tool_end",
+        }
+        _kind, fields = self.player.mirror(whole)
+        self.assertEqual(
+            sorted(fields),
+            ["event", "guest_t", "outcome", "team", "tool"],
+            "what a call gave back is on every line of the ledger the live view reads",
+        )
+        for kind in ("player_call_start", "player_turn", "player_tools", "player_prompt"):
+            self.assertIsNone(self.player.mirror({"kind": kind}), kind)
+        self.assertEqual(
+            self.player.mirror({"kind": "player_event", "what": "model_change"})[0], "player_event"
+        )
         self.assertFalse(self.player.exited)
         self.player.mirror({"t": 9.0, "kind": "player_exit", "rc": 0})
         self.assertTrue(self.player.exited)
+        self.assertFalse(self.player.could_not_play, "a player that finished reads as refused")
+
+    def test_a_player_whose_model_refused_with_no_other_to_go_on_with_could_not_play(self):
+        refusal = {"t": 1.0, "kind": "player_event", "what": "refusal"}
+        self.player.mirror(refusal | {"fell_back": True})
+        self.player.mirror({"t": 2.0, "kind": "player_exit", "rc": 0})
+        self.assertFalse(
+            self.player.could_not_play, "a game that went on on another model was ended"
+        )
+        self.player.exited = False
+        self.player.mirror(refusal | {"fell_back": False})
+        self.assertFalse(self.player.could_not_play, "the game ended before the harness had")
+        self.player.mirror({"t": 3.0, "kind": "player_exit", "rc": 1})
+        self.assertTrue(self.player.could_not_play)
 
     def test_the_firewalls_counters_are_saved_before_the_lab_goes(self):
         class Ctx:
@@ -459,6 +490,27 @@ class Episode(unittest.TestCase):
             self.assertIn(kind, kinds, "the ledger does not show what the players did")
         start = next(e for e in col.events if e["kind"] == "run_start")
         self.assertEqual(start["players"]["red"]["harness"], "scripted")
+
+    def test_a_player_whose_model_refused_ends_the_game_the_other_would_play_alone(self):
+        refused = [
+            {"t": 100.0, "kind": "player_start", "harness": "claude-code"},
+            {"t": 101.0, "kind": "player_event", "what": "refusal", "fell_back": False},
+            {"t": 102.0, "kind": "player_exit", "rc": 1},
+        ]
+        still_playing = transcript("blue")[:2]
+        began = time.time()
+        _args, col = self.play(
+            {
+                ("redplayer", TRANSCRIPT): [json.dumps(r) + "\n" for r in refused],
+                ("blueplayer", TRANSCRIPT): still_playing,
+            },
+            engagement_s=60,
+        )
+        self.assertLess(
+            time.time() - began, 30, "the lab ran its whole engagement with one seat empty"
+        )
+        ended = [e["name"] for e in col.events if e["kind"] == "phase" and e["state"] == "end"]
+        self.assertIn("engagement", ended)
 
     def test_what_the_red_harness_did_is_scored_as_an_attack(self):
         self.play({"/red_actions.jsonl": self.steps(), TRANSCRIPT: transcript("red")})

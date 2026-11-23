@@ -79,7 +79,9 @@ against was the same.
 The engagement ends when its time is up or when both players have stopped,
 whichever comes first. Follow it on `make dashboard`: the **Teams** card, in the *Players* view, says
 who plays each seat, lists every step, countermeasure and command with the
-reason the player gave for it, and counts each harness's calls.
+reason the player gave for it, and counts each harness's calls. Once the run is
+scored, the **Trajectories** card below it shows each harness's game step by
+step ([§9](#9-the-trajectory-of-each-player)).
 
 ## 2. How a harness sits at a seat
 
@@ -197,9 +199,10 @@ For either team:
 | Group | Fields | Meaning |
 |---|---|---|
 | — | `harness`, `harness_version`, `model` | who played; the version and the model are the ones the harness reports of itself |
+| — | `model_played`, `model_changed_at_s`, `refusals` | the model the game was played on to its end, when the harness left the one it started with, and how many answers its model refused. A harness may fall back to another model after a refusal — at its very first turn, even: the game is then `model_played`'s, whatever `model` says |
 | — | `calls`, `actions`, `shell_commands`, `failed_calls`, `failed_call_rate` | tool calls made; those that act on the lab by the seat's contract (a step, a verdict, a countermeasure, a mode); the commands typed in the team's shell, counted apart because a command may look or act; and the calls the seat did not carry out, by why (`bad_arguments`, `seat_error`, `over_budget`, `past_deadline`, `unknown_tool`) |
 | — | `waits`, `waited_s`, `waits_cut_short` | the times it chose to let time pass with `wait`, for how long in all, and how many of them something at its console ended early. A wait is not a call: it is in none of the figures above, nor in `look_ratio` |
-| — | `turns`, `input_tokens`, `output_tokens`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped. A harness still playing when the engagement ended has `stop_reason: cut_off`: its tokens are then a running count from the events it printed, and its cost is unknown |
+| — | `turns`, `input_tokens`, `output_tokens`, `turns_uncounted`, `cost_usd`, `stop_reason`, `exit_code`, `played_s` | what the harness reports of its own run, and how and when it stopped. A harness still playing when the engagement ended has `stop_reason: cut_off`: its tokens are then counted from the events it printed — what each answer wrote from the event that closes it, so an answer cut off mid-way is left out of `output_tokens` and counted in `turns_uncounted` — and its cost is unknown |
 | `decision` | `think_median_s`, `first_action_s` | how long it takes between one call and the next (time spent in `wait` excluded), and before its first action |
 | | `woken_to_action_s` | from a wait that was cut short to the next action: how soon it acts on what came up, once told |
 | | `look_ratio`, `noted_action_rate`, `noted_shell_rate` | the share of calls that only look; the share of actions it gave a reason for; the same for its shell commands |
@@ -264,6 +267,11 @@ The launcher's contract (`nodes/players/harness_kit.py` does the common part):
 5. **Out**: `Terms.started(harness, version)` before the harness starts, with
    the version the harness reports of itself; `Terms.used(...)` when it ends,
    translated from its own log, with `None` for what it does not say.
+6. **Its model's turns**, if its log gives them: `Terms.turn(text, model=,
+   usage=, tool_calls=)` for each answer of the model, and `Terms.event(what,
+   ...)` for what it does on its own — a refused answer, a change of model.
+   Without them the trajectory still has every call and its result, and no
+   word of the model's.
 
 `nodes/players/claude_player.py` is the example to copy;
 `nodes/players/scripted_player.py` shows a player with no MCP client at all.
@@ -393,3 +401,79 @@ Limits of the measure, to keep in mind when reading it:
   the generator does not model cannot be reported, and is not scored.
 - The red console's page has no form for a report yet: a person playing this
   seat reports with `curl` to `POST /findings`.
+
+## 9. The trajectory of each player
+
+Every game leaves, for each team a harness played, the whole of what that
+player did: what it was told, what its model answered at each turn, every call
+it made and all that each gave back.
+
+**The transcript** (`player-<team>.jsonl`) is the record, one event per line,
+written on the player's node by the seat's adapter and the harness's launcher —
+never by the harness. A line is read two ways. By `kind`, the range's own
+names; and by `event`, `timestamp` and `phase`, the shape of
+[NIKA](https://github.com/sands-lab/nika)'s `messages.jsonl`, so that a parser
+written for that benchmark counts the same steps and calls:
+
+| `kind` | `event` | Written by | Holds |
+|---|---|---|---|
+| `player_start` | `agent_start` | launcher | `harness`, `harness_version`, `model` |
+| `player_prompt` | `prompt` | launcher | `text`: the first message, as this player got it |
+| `player_tools` | — | adapter | `tools`: what this seat offers, as the harness is told |
+| `player_turn` | `llm_end` | launcher | one answer of the model: `text`, `model`, `usage_metadata`, `tool_calls` (`id`, `name`, `args`), `thinking_blocks` |
+| `player_call_start` | `tool_start` | adapter | `tool.name`, `input` (the arguments, as JSON), `tool_call_id` — written before the seat is asked |
+| `player_call` | `tool_end`, `tool_error` | adapter | the call as it ended: `outcome`, `result_ok`, `duration_s`, `note`, the same `tool_call_id`, and `output`: all it gave back, as the harness was given it |
+| `player_event` | — | launcher | `what`: `refusal` (`category`) or `model_change` (`was`, `now`) |
+| `player_usage` | `sdk_result` | launcher | the harness's own totals |
+| `player_exit` | `agent_done` | `player-run.sh` | `rc` |
+
+The team's token is taken out of every line, a command's output included.
+Nothing else is: what a player reads in the lab — a password file on a host it
+took — is in the transcript as it read it. The ledger and the live view get the
+calls without `input` and `output`.
+
+**The trajectory** (`trajectory-<team>.json`) is the same game as one document
+in the Agent Trajectory Interchange Format
+([ATIF](https://docs.harborframework.com/agents/atif) v1.8, Harbor's): the
+form other benchmarks' viewers and validators read. It is built from the
+transcript when the run is scored (`cyberrange/scenarios/cps/trajectory.py`):
+
+- the two players of a game share its `session_id` (the run's id); each has
+  its own `trajectory_id`;
+- `agent` names the harness, its version, the model it started with and the
+  seat's tools;
+- a step of source `user` is the first message; one of source `agent` is an
+  answer of the model, with its calls, the result of each and its tokens; one
+  of source `system` is something the harness did on its own;
+- a scripted player has one step per call, marked `llm_call_count: 0`: no
+  model inferred it;
+- what the format has no field for is in `extra`: on a call, what the seat
+  says of it (`outcome`, `result_ok`, `duration_s`, `note`) and when it was
+  asked (`timestamp`: the calls of one answer share their step's); at the root, the
+  team's scorecard, the models played, and `unmatched_calls`.
+
+What it does not hold, and says so in `notes`: the model's reasoning, which
+Claude Code does not pass on (a turn says how many blocks of it there were),
+and the harness's own system prompt. A turn has `completion_tokens` only when
+the harness said what the whole answer took to write; an answer it was cut off
+under has none, and is left out of `final_metrics` too.
+
+A call is matched to the model's turn that made it by the id both carry, when
+the harness passes its own on to the seat. When it does not, by the order of
+the calls and only between calls of the same tool; one that cannot be told is
+left without a result and counted in `unmatched_calls` rather than guessed.
+
+To check a file against the format's own validator, outside this repository:
+
+```sh
+pip install harbor          # in a virtualenv of its own, never this one
+python -m harbor.utils.trajectory_validator trajectory-red.json
+```
+
+For a run played before the transcript kept turns and outputs, the trajectory
+is rebuilt from the Claude Code stream the range kept as the player's log:
+
+```sh
+.venv/bin/python -m cyberrange.scenarios.cps.trajectory RUN_DIR \
+    --harness-log red=RUN_DIR/redplayer.player.log
+```

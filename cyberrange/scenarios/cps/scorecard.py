@@ -141,6 +141,12 @@ def _play(rows):
         if nxt is not None:
             reactions.append(nxt - after)
     judged = [r for r in acting if r.get("result_ok") is not None]
+    # What the harness did on its own: an answer its model refused, a model
+    # changed under the player. A game is the last model's from the change on.
+    own = [r for r in rows if r.get("kind") == "player_event"]
+    changes = [r for r in own if r.get("what") == "model_change" and r.get("now")]
+    began = next((r["t"] for r in rows if r.get("kind") == "player_start" and r.get("t")), None)
+    changed = changes[0].get("t") if changes else None
     tokens = [usage.get("input_tokens"), usage.get("output_tokens")]
     spent = sum(t for t in tokens if t is not None) if any(t is not None for t in tokens) else None
     first = next((r["t"] for r in acting if r.get("t") is not None), None)
@@ -151,6 +157,13 @@ def _play(rows):
             "harness": start.get("harness"),
             "harness_version": start.get("harness_version"),
             "model": start.get("model"),
+            # The model the game was played on to its end: the one above is the
+            # one the harness started with, and may have left at its first turn.
+            "model_played": changes[-1]["now"] if changes else start.get("model"),
+            "model_changed_at_s": (
+                round(changed - began, 3) if changed is not None and began is not None else None
+            ),
+            "refusals": sum(1 for r in own if r.get("what") == "refusal"),
             "calls": len(calls),
             "actions": len(acting),
             "shell_commands": len(typed),
@@ -169,6 +182,9 @@ def _play(rows):
             "turns": usage.get("turns"),
             "input_tokens": usage.get("input_tokens"),
             "output_tokens": usage.get("output_tokens"),
+            # Answers of the model that are not in the figure above: the one a
+            # harness was cut off under never said what it took to write.
+            "turns_uncounted": usage.get("turns_uncounted"),
             "cost_usd": usage.get("cost_usd"),
             "stop_reason": usage.get("stop_reason"),
             "exit_code": end.get("rc"),

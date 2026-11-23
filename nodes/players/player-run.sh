@@ -25,8 +25,9 @@ set -a
 set +a
 
 exited() {
-    printf '{"t": %s, "kind": "player_exit", "team": "%s", "rc": %s}\n' \
-        "$(date +%s.%3N)" "$CR_TEAM" "$1" >>"$CR_TRANSCRIPT"
+    # "event" and "timestamp": the same row as a NIKA-style reader names it.
+    printf '{"t": %s, "kind": "player_exit", "team": "%s", "rc": %s, "event": "agent_done", "phase": "engagement", "timestamp": "%s"}\n' \
+        "$(date +%s.%3N)" "$CR_TEAM" "$1" "$(date -u +%Y-%m-%dT%H:%M:%S.%3N+00:00)" >>"$CR_TRANSCRIPT"
 }
 
 touch "$CR_TRANSCRIPT" "$home/secrets.env"

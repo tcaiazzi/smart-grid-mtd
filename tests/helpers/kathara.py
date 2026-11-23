@@ -4,7 +4,8 @@ FakeManager records every call (deploy/undeploy, exec) and answers
 ``exec_obj(..., stream=False)`` from canned data:
 
   * ``tail -n 1 <frames>``          -> the next of ``frames`` (CPS plant frames)
-  * ``tail -n +N <path>``           -> lines N.. of ``files[path]`` (telemetry)
+  * ``tail -n +N <path>``           -> lines N.. of ``files[path]`` (telemetry), or
+                                       of ``files[(node, path)]`` for one node
   * ``responses``                   -> {substring: (stdout, stderr, rc)} first match
   * anything else                   -> (b"", b"", 0)
 
@@ -67,7 +68,8 @@ class FakeManager:
         if text.startswith("tail -n +"):
             start = int(text.split("+")[1].split()[0])
             path = text.split()[-1]
-            lines = self.files.get(path, [])[start - 1 :]
+            # A file keyed by (node, path) is that node's alone.
+            lines = self.files.get((name, path), self.files.get(path, []))[start - 1 :]
             return "".join(lines).encode(), b"", 0
         return b"", b"", 0
 

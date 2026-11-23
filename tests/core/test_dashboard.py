@@ -376,6 +376,57 @@ class Structure(_Fixture):
         self.assertIn(b"drawTopology", body)
 
 
+class Trajectories(_Fixture):
+    """GET /api/trajectories: what each player of a scored run did, by team. A
+    run that kept none answers with none rather than failing: most runs have no
+    player at a seat, and the page asks for every scored run it shows."""
+
+    LID, RUN = "campaigns/finished/progress.jsonl", "manual-hijack-s1"
+
+    def put(self, team, doc):
+        d = os.path.join(self.root, "campaigns", "finished", "runs", self.RUN)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"trajectory-{team}.json"), "w") as f:
+            f.write(doc if isinstance(doc, str) else json.dumps(doc))
+
+    def trajectories(self, lid=LID, run=RUN):
+        q = urllib.parse.urlencode({"id": lid, "run": run})
+        return json.loads(self.get("/api/trajectories?" + q)[2])["trajectories"]
+
+    def test_a_run_with_no_player_has_none(self):
+        self.assertEqual(self.trajectories(), {}, "a run without players is not an error")
+
+    def test_each_players_document_by_its_team(self):
+        self.put("red", {"steps": [{"step_id": 1}]})
+        self.put("blue", {"steps": []})
+        got = self.trajectories()
+        self.assertEqual(sorted(got), ["blue", "red"])
+        self.assertEqual(got["red"]["steps"][0]["step_id"], 1)
+
+    def test_a_document_written_again_is_read_again(self):
+        """A run scored again writes its trajectories again: the page must not
+        be handed the ones it was first asked for."""
+        self.put("red", {"steps": []})
+        self.assertEqual(self.trajectories()["red"]["steps"], [])
+        self.put("red", {"steps": [{"step_id": 1}]})
+        path = os.path.join(self.root, "campaigns", "finished", "runs", self.RUN)
+        os.utime(os.path.join(path, "trajectory-red.json"), (1, 1))
+        self.assertEqual(len(self.trajectories()["red"]["steps"]), 1)
+
+    def test_a_document_that_cannot_be_read_does_not_hide_the_other(self):
+        self.put("red", "{ cut off")
+        self.put("blue", {"steps": []})
+        self.assertEqual(sorted(self.trajectories()), ["blue"])
+
+    def test_unknown_or_traversing_runs_refused(self):
+        for run in ("nope-s9", "../live", "..", "manual-hijack-s1/../../live", ""):
+            with self.assertRaises(urllib.error.HTTPError, msg=run) as cm:
+                self.trajectories(run=run)
+            self.assertEqual(cm.exception.code, 404, "a run the ledger does not name was served")
+        with self.assertRaises(urllib.error.HTTPError):
+            self.trajectories(lid="../../etc/progress.jsonl", run="x")
+
+
 class OtherScenarios(_Fixture):
     """A ledger of another scenario (MQTT) is listed with its scenario and has
     no knowledge-graph structure; older ledgers without one count as CPS."""

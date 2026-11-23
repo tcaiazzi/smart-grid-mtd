@@ -22,7 +22,7 @@
   --page: #f9f9f7; --surface: #fcfcfb;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.04);
-  --s1: #2a78d6; --s2: #eb6834;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s7: #6250d6;
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -31,7 +31,7 @@
     --page: #0d0d0d; --surface: #1a1a19;
     --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
-    --s1: #3987e5; --s2: #d95926;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s7: #9085e9;
   }
 }
 :root[data-theme="dark"] {
@@ -39,7 +39,7 @@
   --page: #0d0d0d; --surface: #1a1a19;
   --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
-  --s1: #3987e5; --s2: #d95926;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s7: #9085e9;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink);
@@ -764,10 +764,12 @@ function ledgerStatus() { return (ledgers.find(l => l.id === cur.id) || {}).stat
 //   detail(run)                 chips, chart and table of the selected run
 //   chart(run)                  the run's chart (null: no run selected)
 //   reduce(run, ev)             fold the scenario's own event kinds into run.x
-//   cards: [{id, title, sub, render(box, run, t), dock?}]   cards of its own, drawn
-//                               at the time the run's time bar selects (null =
-//                               live); dock: "side" puts one in the column beside
-//                               the views, in sight whichever view is chosen
+//   cards: [{id, title, sub, render(box, run, t), dock?, live?}]   cards of its
+//                               own, drawn at the time the run's time bar selects
+//                               (null = live); dock: "side" puts one in the column
+//                               beside the views, in sight whichever view is
+//                               chosen; live(run) false leaves the card out, as a
+//                               page section with nothing to show is
 //   views: [{id, label, help, sections, options?}]   the page's tabs (see views)
 //   graph: {index, overlayAt, marks, drawTopology, drawKG, drawTree,
 //           options?, origin?}  the structure card; marks also drive the time bar
@@ -788,6 +790,15 @@ const panelApi = {
     const st = gStruct[`${cur.id}|${r.id}`];
     if (!st) loadStructure(cur.id, r.id);
     return st && typeof st === "object" && !st.error ? st : null;
+  },
+  // What each player at a seat did, step by step: {team: document}, or null for
+  // a run that kept none. They are written when the run is scored, so the page
+  // asks only then, once, and draws again when they arrive.
+  trajectories(r) {
+    if (!r.metrics) return null;
+    const k = `${cur.id}|${r.id}|${r.attempt}`, got = gTraj[k];
+    if (!got) loadTrajectories(cur.id, r.id, k);
+    return got && typeof got === "object" && Object.keys(got).length ? got : null;
   },
   shownRunId: () => shownRunId(),
   select(id) { selectedRun = id; render(); },
@@ -1213,6 +1224,13 @@ async function loadStructure(lid, id) {
   catch (e) { gStruct[k] = { error: `structure not available (${e.message || e})` }; }
   gSig = ""; render();  // the cards name the tree's nodes from it
 }
+const gTraj = {};
+async function loadTrajectories(lid, id, k) {
+  gTraj[k] = "loading";
+  try { gTraj[k] = (await getJSON(`/api/trajectories?id=${encodeURIComponent(lid)}&run=${encodeURIComponent(id)}`)).trajectories || {}; }
+  catch (e) { gTraj[k] = {}; }  // a run with none to show: its card stays out
+  render();  // the card that was waiting for them can now be shown
+}
 // ── the run's time ──────────────────────────────────────────────────────────
 // The time bar is on the run's own clock: the slider is a time (stable while
 // it is dragged), its stops for ◀ ▶ are the facts the panel marks. gTime is
@@ -1305,7 +1323,9 @@ const LIVE = {
   "op-card": r => !!r && Object.keys(r.approvals).length > 0,
   "teams-card": r => !!r && (r.teams.length > 0 || Object.keys(r.players).length > 0 || !!(r.info && r.info.players)),
 };
-const sectionLive = (id, r) => (id.startsWith("card-") ? !!r : !LIVE[id] || LIVE[id](r));
+// A panel's card is shown for any run, unless it says when it has something to show.
+const cardLive = (id, r) => { const c = (panel()?.cards || []).find(c => `card-${c.id}` === id); return !c?.live || !!c.live(r); };
+const sectionLive = (id, r) => (id.startsWith("card-") ? !!r && cardLive(id, r) : !LIVE[id] || LIVE[id](r));
 function pageViews() {
   const own = panel()?.views;
   if (own && own.length) return own;

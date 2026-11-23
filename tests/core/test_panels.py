@@ -23,6 +23,7 @@ import unittest
 from pathlib import Path
 
 from cyberrange.core import registry
+from tests.helpers import trajectories
 
 NODE = shutil.which("node")
 
@@ -78,7 +79,8 @@ def run_node(script):
     harness loads the page's libraries from the files named in the environment,
     in the order VENDOR.json lists them (a library after the one it needs). One
     that lays out in a real window (browser_only) is not loaded: the harness
-    has a stand-in for it."""
+    has a stand-in for it. The players' trajectories it hands the panels are
+    built here, by the range's own builder."""
     from cyberrange.core.dashboard import PAGE, VENDOR_DIR, vendored
 
     files = [f for f, entry in vendored().items() if not entry.get("browser_only")]
@@ -87,6 +89,7 @@ def run_node(script):
         "DASHBOARD_VENDOR_FILES": json.dumps([os.path.join(VENDOR_DIR, f) for f in files]),
         # The harness takes the page's reducer and helpers from the page itself.
         "DASHBOARD_PAGE": PAGE,
+        "DASHBOARD_TRAJECTORIES": json.dumps(trajectories.of_a_run()),
     }
     return subprocess.run([NODE, "-"], input=script, capture_output=True, text=True, env=env)
 
@@ -201,7 +204,8 @@ console.log(JSON.stringify(out));""",
     def test_a_card_has_an_id_a_title_and_draws(self):
         """The page lays out one card per entry and calls render() at the time the
         bar selects: a card without an id is drawn twice, one without render is an
-        empty box."""
+        empty box. A card may say when it has something to show (live): the page
+        calls it for every run, so anything but a function there throws at each frame."""
         for name in registry.names():
             path = registry.get(name).panel_js()
             if path is None:
@@ -209,7 +213,8 @@ console.log(JSON.stringify(out));""",
             script = (HARNESS % open(path).read()).replace(
                 "Object.keys(panel).filter(k => panel[k] !== undefined).sort()",
                 "(panel.cards || [])"
-                ".map(c => ({ id: c.id, title: c.title, render: typeof c.render }))",
+                ".map(c => ({ id: c.id, title: c.title, render: typeof c.render,"
+                " live: typeof c.live }))",
             )
             result = run_node(script)
             self.assertEqual(0, result.returncode, result.stderr.strip())
@@ -219,6 +224,11 @@ console.log(JSON.stringify(out));""",
                 for card in cards:
                     self.assertTrue(card["id"] and card["title"], f"unusable card {card}")
                     self.assertEqual("function", card["render"], f"card {card['id']} cannot draw")
+                    self.assertIn(
+                        card["live"],
+                        ("undefined", "function"),
+                        f"card {card['id']} cannot be asked whether it has anything to show",
+                    )
 
     def test_a_view_shows_sections_that_exist(self):
         """A view lists the sections it shows, by id: one that names a section

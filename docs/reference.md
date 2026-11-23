@@ -469,6 +469,7 @@ below are `cps`, `cps-advisor`, `cps-recon` and `cps-soc`.
 | `<node>.terminal.typescript` | `WebTerminal`: the transcript of the team's terminal | teams |
 | `<node>.sshd.log` | `JumpHost`, on each host the blue team can reach | teams |
 | `player-<team>.jsonl`, `player-<team>.firewall.txt` | `SeatPlayer`: the harness's transcript, and the firewall counters of its node | a harness at a seat |
+| `trajectory-<team>.json` | written when the run is scored: the player's game as one ATIF v1.8 document (`cyberrange/scenarios/cps/trajectory.py`), which the dashboard's Trajectories card draws | a harness at a seat |
 | `<node>.wazuh-cluster.log` | `WazuhIndexer` | `cps-soc` |
 | `<node>.integrations.log` | `IrisAlertForwarder` | `cps-soc` |
 

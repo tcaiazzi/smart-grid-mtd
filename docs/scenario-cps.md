@@ -339,7 +339,9 @@ can be compared from both sides:
   decisions with their trigger and costs, the operator's suggestions, and the
   attack tree as it believes it.
 - **Players**: the operator's suggestions and what each team did. The tab is
-  there only when a run has an operator or players.
+  there only when a run has an operator or players. A scored run with a harness
+  at a seat adds the **Trajectories** card: each harness's game step by step
+  ([The dashboard](dashboard.md#6-what-each-scenario-adds)).
 - **Campaign**: progress, the table of every run, the aggregated results.
 
 The **Journal** is in none of them: it is docked in a column beside whichever

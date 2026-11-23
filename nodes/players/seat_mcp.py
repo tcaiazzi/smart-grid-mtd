@@ -10,10 +10,15 @@ red_console.py), with the team's token.
 It is also where every harness is held to the same terms, because the terms
 are applied here and not left to each harness: the tools and their wording, the
 budget of calls (--max-calls), the deadline (--deadline), the one way to let
-time pass (wait), and the record of every call with how long it took and how
-it ended (--transcript). That record
-is what the range scores a harness on, so it is written by this adapter and
-never by the harness it measures.
+time pass (wait), and the record of every call with what was asked, what
+came back, how long it took and how it ended (--transcript). That record is
+what the range scores a harness on and builds its trajectory from, so it is
+written by this adapter and never by the harness it measures.
+
+A row is read two ways: by its ``kind`` (the range's own names) and by its
+``event``, ``timestamp`` and ``phase`` — the shape of NIKA's messages.jsonl
+(tool_start, tool_end, tool_error), so a parser written for that benchmark
+counts the same calls.
 
     seat_mcp.py --url http://HOST:PORT --token-file F --operator agent:NAME
                 [--deadline EPOCH] [--max-calls N] [--transcript F]
@@ -22,6 +27,7 @@ Copied flat onto a player's node. Stdlib only.
 """
 
 import argparse
+import datetime
 import json
 import sys
 import time
@@ -53,6 +59,19 @@ REPORTED = (
     "registers",
     "workstation_ip",
 )
+PHASE = "engagement"  # the one phase a player plays in
+# Where a harness puts its own id of a call in the MCP request's _meta. With it
+# a call here and the turn of the model that made it are the same call beyond
+# doubt; without it the adapter numbers its own.
+HARNESS_CALL_ID = ("claudecode/toolUseId",)
+
+
+def envelope(t, event):
+    """The fields a NIKA-style reader goes by, next to the range's own ``t``."""
+    stamp = datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+    return {"timestamp": stamp.isoformat(timespec="milliseconds"), "phase": PHASE, "event": event}
+
+
 NOTE = {
     "type": "string",
     "description": "Why you are doing this, in a sentence. The referees read it.",
@@ -293,10 +312,17 @@ class Player:
         self.deadline, self.max_calls = deadline, max_calls
         self.clock, self.sleep = clock or time.time, sleep
         self.calls = 0
+        self._made = 0  # every call, a wait included: what its own ids count
         self.tools = {t["name"]: t for t in COMMON}
         for action in described.get("actions") or []:
             self.tools.update({t["name"]: t for t in BY_ACTION.get(action, [])})
         self._transcript = open(transcript, "a", buffering=1) if transcript else None
+        # What this seat offers, as the harness is told: a trajectory names the
+        # tools its agent had, and they differ by seat.
+        self._write(
+            {"t": round(self.clock(), 3), "kind": "player_tools", "team": self.team}
+            | {"tools": list(self.tools.values())}
+        )
 
     # ── the terms ────────────────────────────────────────────────────────────
     def left(self):
@@ -346,9 +372,38 @@ class Player:
         result = {"waited_s": round(self.clock() - started), **self.left()}
         return result | ({"woken_by": woken_by} if woken_by else {})
 
+    def _clean(self, value):
+        """``value`` without the team's token, wherever in it the token is: a
+        command's output may print it as readily as the command names it."""
+        if isinstance(value, str):
+            return value.replace(self._secret, "<token>") if self._secret else value
+        if isinstance(value, dict):
+            return {k: self._clean(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self._clean(v) for v in value]
+        return value
+
+    def _write(self, row):
+        if self._transcript:
+            self._transcript.write(json.dumps(self._clean(row), default=str) + "\n")
+
+    def _asked(self, tool_name, call_id, args):
+        """What identifies a call on both of its rows."""
+        return {
+            "team": self.team,
+            "tool": {"name": tool_name},
+            "input": json.dumps(args, sort_keys=True, default=str),
+            "tool_call_id": call_id,
+        }
+
+    def _log_start(self, tool_name, started, call_id, args, meta=None):
+        # Written before the seat is asked: a call the lab is cut off under
+        # leaves this row and no other.
+        row = {"t": round(started, 3), "kind": "player_call_start"}
+        row |= envelope(started, "tool_start") | self._asked(tool_name, call_id, args)
+        self._write(row | ({"meta": meta} if meta else {}))
+
     def _log(self, tool_name, started, outcome, args, worked=None, **more):
-        if not self._transcript:
-            return
         row = {
             "t": round(started, 3),
             "kind": "player_call",
@@ -362,16 +417,10 @@ class Player:
             # "ok" above says the seat took the call; this, that the action
             # did what it was for. A step can be run and fail.
             row["result_ok"] = worked
-        # What was asked for, not what came back: a step's output or a shell's
-        # may hold anything, and the seat keeps its own record of both.
         asked = ("id", "verdict", "mode", "cmd", "note", "seconds", *REPORTED)
         row.update({k: args[k] for k in asked if k in args})
         row.update(more)
-        if self._secret:
-            for k in ("cmd", "note"):
-                if isinstance(row.get(k), str):
-                    row[k] = row[k].replace(self._secret, "<token>")
-        self._transcript.write(json.dumps(row) + "\n")
+        self._write(row)
 
     # ── the tools ────────────────────────────────────────────────────────────
     def _do(self, name, a):
@@ -406,15 +455,22 @@ class Player:
             return s.call("POST", "/mode", {"mode": a["mode"], **noted})
         raise KeyError(name)
 
-    def call(self, name, args):
+    def call(self, name, args, meta=None):
         """-> (result for the harness, whether it is an error). An unknown tool
-        is the caller's to report: it raises KeyError."""
+        is the caller's to report: it raises KeyError. ``meta`` is what the
+        harness sent along with the call (the MCP request's _meta)."""
         started = self.clock()
         args = args if args is not None else {}
+        meta = meta if isinstance(meta, dict) else {}
+        self._made += 1
+        own = f"{self.team}-{self._made}"
+        call_id = next((meta[k] for k in HARNESS_CALL_ID if isinstance(meta.get(k), str)), own)
+        said = args if isinstance(args, dict) else {}
         spec = self.tools.get(name)
         if spec is None:
-            self._log(name, started, "unknown_tool", {})
+            self._log(name, started, "unknown_tool", {}, **envelope(started, "tool_error"))
             raise KeyError(name)
+        self._log_start(name, started, call_id, said, meta)
         # A wait is free: charged, a harness would sleep in the shell instead,
         # or spend its budget looking at a state that has not changed.
         if name != WAIT:
@@ -435,7 +491,13 @@ class Player:
         more = {}
         if name == WAIT and outcome == "ok" and result.get("woken_by"):
             more["woken_by"] = [item.get("what") for item in result["woken_by"]]
-        self._log(name, started, outcome, args if isinstance(args, dict) else {}, worked, **more)
+        # The whole of what the harness was given, as it was given: the
+        # trajectory is what the player saw, and a record that kept only the
+        # question could not say what the next move was decided on.
+        more |= envelope(started, "tool_end" if outcome == "ok" else "tool_error")
+        more |= {k: v for k, v in self._asked(name, call_id, said).items() if k != "tool"}
+        more |= {"output": as_text(result), "output_type": type(result).__name__}
+        self._log(name, started, outcome, said, worked, **more)
         return result, outcome != "ok"
 
 
@@ -485,7 +547,8 @@ class Server:
             return {"tools": list(p.tools.values())}
         if method == "tools/call":
             try:
-                result, failed = p.call(params.get("name"), params.get("arguments"))
+                asked = params.get("name"), params.get("arguments"), params.get("_meta")
+                result, failed = p.call(*asked)
             except KeyError:
                 # Not a tool's failure but a call to nothing: a protocol error.
                 wrong = f"no tool named {params.get('name')!r}"

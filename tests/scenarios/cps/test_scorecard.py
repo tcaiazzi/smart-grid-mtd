@@ -155,6 +155,27 @@ class ACard(unittest.TestCase):
             red["efficiency"], {"tokens_per_action": 200.0, "cost_per_action_usd": 0.1}
         )
 
+    def test_a_game_is_scored_to_the_model_that_played_it(self):
+        red = self.cards()["red"]
+        self.assertEqual(
+            (red["model_played"], red["model_changed_at_s"], red["refusals"]), ("m1", None, 0)
+        )
+        with open(os.path.join(self.d, "player-red.jsonl"), "a") as f:
+            for what, more in (("refusal", {}), ("model_change", {"was": "m1", "now": "m0"})):
+                row = {"t": T0 + 1.5, "kind": "player_event", "what": what} | more
+                f.write(json.dumps(row) + "\n")
+            # What a reader of another benchmark's format counts as steps and
+            # calls must not move the card: the rows are told apart by kind.
+            f.write(json.dumps({"t": T0 + 3, "kind": "player_turn", "event": "llm_end"}) + "\n")
+            f.write(json.dumps({"t": T0 + 3, "kind": "player_call_start", "tool": {}}) + "\n")
+        red = self.cards()["red"]
+        self.assertEqual(
+            (red["model"], red["model_played"], red["model_changed_at_s"], red["refusals"]),
+            ("m1", "m0", 1.5, 1),
+            "a game played on a fallback model was laid at the door of the one it left",
+        )
+        self.assertEqual((red["calls"], red["actions"]), (7, 5))
+
     def test_how_it_decided(self):
         d = self.cards()["red"]["decision"]
         self.assertEqual(d["first_action_s"], 10.0)

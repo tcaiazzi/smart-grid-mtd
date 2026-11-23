@@ -125,15 +125,24 @@ class SeatPlayer(GuestAgent):
 
     What the player does is on its transcript, written on the node by the
     seat's adapter and not by the harness it measures; it is mirrored to the
-    ledger as ``player_start``, ``player_call``, ``player_usage`` and
-    ``player_exit``. ``exited`` turns true at the last one."""
+    ledger as ``player_start``, ``player_call``, ``player_event``,
+    ``player_usage`` and ``player_exit``. ``exited`` turns true at the last
+    one. What a call was given back stays on the transcript: the ledger says
+    that the player moved, the transcript what it saw.
+
+    ``refused`` turns true when the harness's model refused to play and the
+    harness had no other to go on with: once such a player has exited
+    (``could_not_play``) there is no game left to wait for."""
 
     HOME = "/home/player"
     TRANSCRIPT = f"{HOME}/player.jsonl"
     TOKEN, TERMS, SECRETS = f"{HOME}/seat.token", f"{HOME}/terms.env", f"{HOME}/secrets.env"
     RUN = "bash /player-run.sh"  # nodes/players/player-run.sh, staged by the scenario
     FIREWALL = f"{HOME}/firewall.txt"  # the firewall's counters, saved when the player stops
-    EVENTS = ("player_start", "player_call", "player_usage", "player_exit")
+    EVENTS = ("player_start", "player_call", "player_event", "player_usage", "player_exit")
+    # Of a call's row, what is the transcript's alone: a command's whole output
+    # in every line of the ledger would make the live view carry the game twice.
+    KEPT_ON_THE_NODE = ("kind", "t", "input", "output", "output_type")
 
     def __init__(
         self, node, team, harness, seat, token, terms=None, secrets=None, resolvers=(), plane="core"
@@ -164,7 +173,11 @@ class SeatPlayer(GuestAgent):
             **{k: v for k, v in (terms or {}).items() if v is not None},
         }
         self.secrets = dict(secrets or {})
-        self.exited = False
+        self.exited = self.refused = False
+
+    @property
+    def could_not_play(self):
+        return self.exited and self.refused
 
     @staticmethod
     def _env(values):
@@ -191,7 +204,9 @@ class SeatPlayer(GuestAgent):
             return None
         if kind == "player_exit":
             self.exited = True
-        fields = {k: v for k, v in ev.items() if k not in ("kind", "t")}
+        if kind == "player_event" and ev.get("what") == "refusal" and not ev.get("fell_back"):
+            self.refused = True
+        fields = {k: v for k, v in ev.items() if k not in self.KEPT_ON_THE_NODE}
         return kind, fields | {"team": self.team, "guest_t": ev.get("t")}
 
 

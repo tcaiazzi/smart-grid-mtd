@@ -86,6 +86,7 @@ COLUMNS = {
         ("think (s)", "players.red.decision.think_median_s"),
         ("calls", "players.red.calls"),
         ("failed calls", "players.red.failed_call_rate"),
+        ("refusals", "players.red.refusals"),
         ("cost ($)", "players.red.cost_usd"),
     ),
     "blue": (

@@ -485,7 +485,9 @@ class People(Feature):
     def play(self, ctx):
         """Start the harnesses, both at once so that neither side has a head
         start; with one at each seat, give them their engagement and end it
-        when the time is up or both have stopped playing."""
+        when the time is up, when both have stopped playing, or when one could
+        not play at all — its model refused, and the game asked for is not the
+        one the other side would go on playing alone."""
         a = ctx.args
         played = self.players(a)
         if not played:
@@ -529,3 +531,10 @@ class People(Feature):
                 # The players' transcripts are read here: without this pull a
                 # run that polls nothing would never see a player stop.
                 ctx.poll()
+                out = [p.team for p in started if p.could_not_play]
+                if out:
+                    log.warning(
+                        "The model of the %s team refused to play: the engagement ends here",
+                        " and the ".join(out),
+                    )
+                    break

@@ -276,6 +276,9 @@ is the control view: read-only, and the one place where both teams' moves are
 on one timeline. It draws the `cps` panel, and with an operator or players it
 has a **Players** view: the SOC's suggestions with their outcome and, in time
 order, each team's steps and every command typed, with the host and the team.
+Once a run with a harness at a seat is scored, its **Trajectories** card shows
+each harness's game step by step: its model's answers, its calls and what came
+back, and where its time went.
 A benchmark of harnesses adds a **Harnesses** tab to the campaign's results,
 one row per harness, side and opponent. [The dashboard](dashboard.md) describes
 the page; do not hand its address to a team during a game, because it shows the

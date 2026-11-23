@@ -23,6 +23,10 @@ Endpoints:
                                 — a run's kg.json / tree.json, when its scenario
                                 records a structure; rebuilt from the current
                                 lab model when the run predates them
+  GET /api/trajectories?id=&run=
+                                {"trajectories": {team: document}}: what each
+                                player at a seat did, step by step, once the run
+                                is scored; empty for a run that kept none
 
 Only ledgers discovered under --root are served (the id is looked up, never
 joined into a path); a run is served only if the ledger names it, and its
@@ -155,6 +159,12 @@ class ProgressDashboard:
                         self.send_error(404, "unknown run")
                     elif "error" in res:
                         self.send_error(404, res["error"][:200])
+                    else:
+                        self._json(res)
+                elif url.path == "/api/trajectories":
+                    res = server.store.trajectories(q.get("id", [""])[0], q.get("run", [""])[0])
+                    if res is None:
+                        self.send_error(404, "unknown run")
                     else:
                         self._json(res)
                 elif url.path == "/api/ledgers":

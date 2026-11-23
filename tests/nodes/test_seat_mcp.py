@@ -54,9 +54,13 @@ class Seated(unittest.TestCase):
         client = M.Seat(f"http://127.0.0.1:{console.port}", TOKEN, "scripted")
         return M.Player(client, client.wait(5), transcript=self.transcript, **terms)
 
-    def rows(self):
+    def every(self):
         with open(self.transcript) as f:
             return [json.loads(line) for line in f]
+
+    def rows(self):
+        """The calls as they ended: what the range scores."""
+        return [r for r in self.every() if r["kind"] == "player_call"]
 
 
 class TheRedSeat(Seated):
@@ -130,6 +134,51 @@ class TheRedSeat(Seated):
             "the transcript says the seat took the call, not whether the step worked: "
             "a harness repeating a failed step cannot be told from one that is getting on",
         )
+
+    def test_a_call_is_on_record_when_asked_and_when_answered_with_all_it_gave(self):
+        self.player.call("shell", {"cmd": "id", "note": "who am I"})
+        self.player.call("run_step", {"id": "no_such_step"})
+        asked, answered, _again, refused = [r for r in self.every() if r.get("event")]
+        self.assertEqual(
+            (asked["event"], asked["tool"], json.loads(asked["input"])),
+            ("tool_start", {"name": "shell"}, {"cmd": "id", "note": "who am I"}),
+        )
+        self.assertEqual((answered["event"], answered["phase"]), ("tool_end", "engagement"))
+        self.assertEqual(asked["tool_call_id"], answered["tool_call_id"])
+        self.assertTrue(answered["timestamp"].endswith("+00:00"))
+        self.assertIn("ran id", answered["output"], "what the player saw is not on its record")
+        self.assertEqual(json.loads(answered["output"])["stdout"], "ran id")
+        self.assertEqual(refused["event"], "tool_error", "a refused call reads as one that worked")
+        self.assertNotEqual(refused["tool_call_id"], answered["tool_call_id"])
+
+    def test_a_reader_of_nikas_format_counts_the_calls_the_range_counts(self):
+        for name, args in (("list_steps", {}), ("shell", {"cmd": "id"}), ("run_step", {})):
+            self.player.call(name, args)
+        events = [r.get("event") for r in self.every()]
+        self.assertEqual(events.count("tool_start"), len(self.rows()), "NIKA counts tool_start")
+        self.assertEqual((events.count("tool_end"), events.count("tool_error")), (2, 1))
+
+    def test_a_call_keeps_the_id_the_harness_gave_it(self):
+        self.player.call("list_steps", {}, {"claudecode/toolUseId": "toolu_1", "other": 1})
+        self.player.call("wait", {"seconds": 1})
+        self.player.call("list_steps", {})
+        ids = [r["tool_call_id"] for r in self.every() if r.get("event") == "tool_start"]
+        self.assertEqual(ids, ["toolu_1", "red-2", "red-3"], "a wait shares an id with a call")
+
+    def test_the_tools_of_the_seat_are_on_record(self):
+        tools = [r for r in self.every() if r["kind"] == "player_tools"]
+        self.assertEqual(len(tools), 1)
+        names = {t["name"] for t in tools[0]["tools"]}
+        self.assertLessEqual({"run_step", "shell", "wait"}, names)
+        self.assertNotIn("answer_suggestion", names, "the other seat's tools are on this record")
+
+    def test_the_teams_token_is_not_kept_in_what_came_back_either(self):
+        self.console.seat.run = lambda cmd: (0, f"Authorization: Bearer {TOKEN}", "")
+        self.player.call("shell", {"cmd": "env"})
+        with open(self.transcript) as f:
+            kept = f.read()
+        self.assertNotIn(TOKEN, kept, "a token a command printed is in a file kept with the run")
+        self.assertIn("Bearer <token>", kept)
 
     def test_the_teams_token_is_not_kept_in_the_transcript(self):
         self.player.call("shell", {"cmd": f"curl http://red:{TOKEN}@x/", "note": f"with {TOKEN}"})

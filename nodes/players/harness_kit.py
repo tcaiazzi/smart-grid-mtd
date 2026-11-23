@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """harness_kit.py — what every harness launcher does the same way: read the
 terms the range set, point the harness at the seat, and say on the transcript
-which harness played and what it spent.
+which harness played, what it was told, what its model said at each turn and
+what it spent.
 
 A launcher (claude_player.py, scripted_player.py) is the only code written for
 one harness. Whatever two launchers would otherwise each do their own way —
@@ -28,6 +29,8 @@ import json
 import os
 import time
 
+import seat_mcp
+
 SEAT_MCP = "/seat_mcp.py"  # guest path of the seat's adapter (the scenario's manifest)
 # The first message, the same for every harness. It says in so many words that
 # the game is the whole engagement: a model left to judge for itself calls its
@@ -46,7 +49,16 @@ PROMPT = (
 )
 # What a harness may report of its own run. One it cannot give stays None: a
 # figure made up to fill the table would be compared with real ones.
-USAGE = ("turns", "input_tokens", "output_tokens", "cost_usd", "stop_reason")
+# ``turns_uncounted`` is how many of its model's answers are not in
+# ``output_tokens``: a harness cut off mid-answer never says what that one took.
+USAGE = ("turns", "input_tokens", "output_tokens", "cost_usd", "stop_reason", "turns_uncounted")
+# The rows a NIKA-style reader knows under another name (seat_mcp.envelope).
+EVENT = {
+    "player_start": "agent_start",
+    "player_prompt": "prompt",
+    "player_turn": "llm_end",
+    "player_usage": "sdk_result",
+}
 
 
 class Terms:
@@ -63,6 +75,7 @@ class Terms:
         self.deadline = float(env["CR_DEADLINE"]) if env.get("CR_DEADLINE") else None
         self.max_calls = int(env["CR_MAX_CALLS"]) if env.get("CR_MAX_CALLS") else None
         self.transcript = env.get("CR_TRANSCRIPT") or None
+        self._told = False
 
     def seat_args(self):
         """seat_mcp.py's options: the same seat, budget and record for every harness."""
@@ -80,10 +93,14 @@ class Terms:
         """The seat as an MCP stdio server, in the shape MCP clients configure one."""
         return {"command": "python3", "args": [SEAT_MCP, *self.seat_args()]}
 
-    def record(self, kind, **fields):
+    def record(self, kind, t=None, **fields):
         if not self.transcript:
             return
-        row = {"t": round(time.time(), 3), "kind": kind, "team": self.team, **fields}
+        t = time.time() if t is None else t
+        row = {"t": round(t, 3), "kind": kind, "team": self.team}
+        if kind in EVENT:
+            row |= seat_mcp.envelope(t, EVENT[kind])
+        row |= fields
         # One short line per write, appended: the adapter writes the same file
         # from another process, and lines must not interleave.
         with open(self.transcript, "a") as f:
@@ -97,6 +114,30 @@ class Terms:
         self.record(
             "player_start", harness=harness, harness_version=version, model=model or self.model
         )
+        if not self._told:
+            # The first message, as this player got it: a trajectory starts
+            # with what the agent was asked, and a run may have set its own.
+            self._told = True
+            self.record("player_prompt", text=self.prompt)
+
+    def turn(self, text, model=None, usage=None, tool_calls=(), t=None, **more):
+        """One answer of the harness's model: what it said, the calls it made
+        (``{"id", "name", "args"}`` each), what the answer cost. A harness with
+        no model has no turns to say."""
+        self.record(
+            "player_turn",
+            t,
+            text=text,
+            model=model,
+            usage_metadata=usage or {},
+            tool_calls=list(tool_calls),
+            **more,
+        )
+
+    def event(self, what, **fields):
+        """Something the harness did to the game that no call shows: a refused
+        answer, a model changed under the player."""
+        self.record("player_event", what=what, **fields)
 
     def used(self, **figures):
         self.record("player_usage", **{k: figures.get(k) for k in USAGE})

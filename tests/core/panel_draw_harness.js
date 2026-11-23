@@ -18,7 +18,7 @@ for (const file of JSON.parse(process.env.DASHBOARD_VENDOR_FILES))
 // real, so a chart given a wrong option or a missing channel throws here too.
 class El {
   constructor(tag, ns) { this.tag = this.tagName = tag; this.namespaceURI = ns; this.children = []; this.attrs = {};
-    this.dataset = {}; this.textContent = ""; this.clientWidth = 800; this.offsetWidth = 120;
+    this.dataset = {}; this.textContent = ""; this.clientWidth = 800; this.offsetWidth = 120; this.heard = {};
     this.parentNode = null; this.ownerDocument = globalThis.document;
     this.style = { setProperty(k, v) { this[k] = v; }, removeProperty(k) { delete this[k]; } };
     this.classList = { add() {}, remove() {}, toggle() {}, contains: () => false }; }
@@ -43,7 +43,8 @@ class El {
   hasAttribute(k) { return k in this.attrs; }
   removeAttribute(k) { delete this.attrs[k]; }
   removeAttributeNS(ns, k) { delete this.attrs[k]; }
-  addEventListener() {}
+  // What the element was told to do on an event is kept, so a check can press a button.
+  addEventListener(type, fn) { (this.heard[type] ||= []).push(fn); }
   removeEventListener() {}
   dispatchEvent() { return true; }
   querySelector() { return null; }
@@ -115,8 +116,13 @@ require("vm").runInThisContext(model[1], { filename: "dashboard.html (model)" })
 let VIEW = null, TIME = null;
 // The run's structure as the page hands it to a panel; null while it loads.
 let STRUCTURE = null;
+// What each player did, step by step, as the page hands it to a panel once the
+// run is scored; null before. Written by the range's own builder from two
+// transcripts (tests/helpers/trajectories.py), not by hand.
+const TRAJECTORIES = JSON.parse(process.env.DASHBOARD_TRAJECTORIES);
+let GAMES = null;
 const api = { get S() { return S; }, $, h, svg, num, dur, clock, rel, pretty, metric, metricHead, term, termText, empty, table, grid,
-  plot, plotTip, timeAxis, now: () => 200, statusBadge, structure: () => STRUCTURE,
+  plot, plotTip, timeAxis, now: () => 200, statusBadge, structure: () => STRUCTURE, trajectories: () => GAMES,
   shownRunId: () => "r1", select() {}, render() {}, stepCell: () => h("td"), queueTable() {},
   time: () => TIME, setTime(t) { TIME = t; }, view: () => VIEW };
 
@@ -382,6 +388,48 @@ function checkFacts(panel, fail) {
   for (const card of panel.cards) drawn(card, run);
 }
 
+// What a scored run keeps of its players' games and the Trajectories card must
+// therefore show: who played, each step in full at the time shown, and where
+// the time went.
+function checkTrajectories(panel, fail) {
+  PANEL = panel;
+  const card = cardOf(panel, "trajectory"), run = runFrom(fullEvents());
+  const has = (text, what, why) => { if (!what.test(text)) fail(`${why}: got "${text.replace(/\s+/g, " ").slice(0, 600)}"`); };
+  // The card is on the page only for a run that has trajectories to show.
+  GAMES = null;
+  if (card.live(run)) fail("the Trajectories card is offered for a run that kept no trajectory");
+  has(drawn(card, run), /kept no trajectory/, "a run with no trajectory draws something else than saying so");
+  GAMES = TRAJECTORIES;
+  if (!card.live(run)) fail("the Trajectories card is left out of a run that has trajectories");
+  const end = drawn(card, run);
+  has(end, /claude-code · 2\.1 · m1 → m0/, "the card does not say which harness and models played");
+  has(end, /scripted-slow[\s\S]*no model/, "a scripted player is not said to have no model");
+  has(end, /red · model[\s\S]*red · tools[\s\S]*blue · tools/, "a player's model and its tools are not on lanes of their own");
+  if (/blue · model/.test(end)) fail("a scripted player got a lane for a model it does not have");
+  has(end, /the model refused/, "a refusal of the model is not marked");
+  has(end, /waiting \d+% \(8 s\)/, "where a player's time went does not count its wait");
+  has(end, /never answered/, "a call the lab never answered reads as one that worked");
+  // The step each player was on at the time shown, with what was asked and what came back.
+  const early = drawn(card, run, 134);
+  has(early, /I look at the lab first\./, "the model's words on the step at the time shown are not drawn");
+  has(early, /"cmd": "id"[\s\S]*uid=0\(root\)/, "a call does not show what was asked and what came back");
+  has(early, /1,200 tokens in \(800 from cache\)/, "an answer does not say what the model read for it");
+  has(early, /list_suggestions/, "the other player's step at the same time is not beside it");
+  if (/Now I wait/.test(early.split("as a table")[0])) fail("a step made after the time shown is drawn as the one the player was on");
+  has(drawn(card, run, 139), /carried out, it did not work/, "a step that failed reads as one that worked");
+  has(drawn(card, run, 140.5), /not carried out \(error\)/, "a call the seat refused reads as one that was made");
+  // By steps, every step is as wide as the others: the axis counts steps, not seconds.
+  const box = new El("div");
+  card.render(box, run, null);
+  if (!/time since run start/.test(textOf(box))) fail("the trajectories do not open on the run's own time axis");
+  const bySteps = all(box, e => e.tag === "button").find(b => /By steps/.test(textOf(b)));
+  if (!bySteps) return fail("the Trajectories card has no way to lay the steps out evenly");
+  for (const press of bySteps.heard.click || []) press();
+  card.render(box, run, null);
+  has(textOf(box), /steps of every player/, "choosing the steps axis leaves the chart on the time axis");
+  for (const press of all(box, e => e.tag === "button").find(b => /By time/.test(textOf(b))).heard.click) press();
+}
+
 function checkMtd(panel, fail) {
   PANEL = panel;
   const alert = (t, state) => ({ kind: "detector_alert", guest_t: t, scmc_id: "s1", state, p: 0.9 });
@@ -413,9 +461,10 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
     if (!run) continue;
     step(`${label}: detail`, () => panel.detail?.(run));
     step(`${label}: chart`, () => panel.chart?.(run));
-    // Each card before the run's structure has loaded, and once it has.
+    // Each card before the run's structure and its players' trajectories have
+    // loaded, and once they have.
     for (const structure of [null, STRUCT]) for (const view of [null, ...(panel.views || []).map(v => v.id)]) {
-      VIEW = view; STRUCTURE = structure;
+      VIEW = view; STRUCTURE = structure; GAMES = structure && TRAJECTORIES;
       for (const card of panel.cards || []) for (const t of [null, 135])
         step(`${label}: card ${card.id} in view ${view} at ${t}${structure ? "" : ", structure not loaded"}`, () => card.render(new El("div"), run, t));
     }
@@ -429,6 +478,7 @@ for (const [name, make] of Object.entries(window.CyberRangePanels)) {
   if (name === "cps") {
     step("two feeders shown apart", () => checkFeeders(panel, what => failures.push(what)));
     step("what the ledger records is shown", () => checkFacts(panel, what => failures.push(what)));
+    step("what each player did is shown", () => checkTrajectories(panel, what => failures.push(what)));
   }
   if (name === "mqtt-mtd") step("detector alerts counted once", () => checkMtd(panel, what => failures.push(what)));
   step("chart with no run", () => panel.chart?.(null));

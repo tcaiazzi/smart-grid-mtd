@@ -376,9 +376,17 @@ class CpsScenario(Scenario):
         )
 
     def metrics(self, run_dir):
+        from cyberrange.scenarios.cps import trajectory
         from cyberrange.scenarios.cps.metrics import compute_metrics
 
-        return compute_metrics(run_dir)
+        m = compute_metrics(run_dir)
+        try:
+            # Each player's game, step by step, next to the figures drawn from it.
+            trajectory.write(run_dir, m.get("players"))
+        except ValueError as e:
+            # A trajectory that cannot be written must not cost the run its score.
+            log.warning("%s", e)
+        return m
 
     def report(self, metrics):
         from cyberrange.scenarios.cps.metrics import format_report

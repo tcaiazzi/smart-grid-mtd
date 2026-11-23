@@ -11,6 +11,7 @@ may ask for it. A ledger is only ever read, so nothing here can disturb a lab.
 """
 
 import bisect
+import glob
 import json
 import os
 import re
@@ -26,6 +27,9 @@ RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # in the dashboard that knows a scenario exists.
 LEGACY_SCENARIO = "cps"
 STRUCTURE_FILES = ("kg.json", "tree.json")
+# A scored run keeps one document per player that sat at a seat, named by its
+# team. The scenario that writes them names its files to match this pattern.
+TRAJECTORY_FILES = "trajectory-*.json"
 LEDGER_NAME = "progress.jsonl"
 # An unfinished ledger whose file has not been touched this long is "interrupted".
 # The writer touches it every progress.HEARTBEAT_S even when it has nothing to say.
@@ -135,6 +139,7 @@ class LedgerStore:
         self._ledgers = {}  # id (relative path) -> _Ledger
         self._structures = {}  # (run dir, mtimes) -> loaded structure
         self._rebuilt = {}  # scenario name -> structure
+        self._trajectories = {}  # (run dir, files and mtimes) -> {team: document}
         self._walked = None  # when the root was last walked (monotonic)
 
     def discover(self, force=False):
@@ -279,6 +284,39 @@ class LedgerStore:
             with self._lock:
                 self._structures = {k: v for k, v in self._structures.items() if k[0] != d}
                 self._structures[key] = hit
+        return hit
+
+    # ── players' trajectories (trajectory-<team>.json) ───────────────────────
+    def trajectories(self, lid, run_id):
+        """{"trajectories": {team: document}} for a run, empty when it kept
+        none (no player sat at a seat, or it is not scored yet); None if the run
+        is unknown. A document that cannot be read is left out: the other
+        player's game is still worth showing."""
+        d = self.run_dir(lid, run_id)
+        if d is None:
+            return None
+        head, tail = TRAJECTORY_FILES.split("*")
+        found = {}
+        for p in sorted(glob.glob(os.path.join(glob.escape(d), TRAJECTORY_FILES))):
+            try:
+                found[os.path.basename(p)[len(head) : -len(tail)]] = (p, os.path.getmtime(p))
+            except OSError:
+                continue  # removed between the listing and the stat
+        key = (d,) + tuple((team, mtime) for team, (_p, mtime) in found.items())
+        with self._lock:
+            hit = self._trajectories.get(key)
+        if hit is None:
+            docs = {}
+            for team, (p, _mtime) in found.items():
+                try:
+                    with open(p) as f:
+                        docs[team] = json.load(f)
+                except (OSError, json.JSONDecodeError):
+                    continue
+            hit = {"trajectories": docs}
+            with self._lock:
+                self._trajectories = {k: v for k, v in self._trajectories.items() if k[0] != d}
+                self._trajectories[key] = hit
         return hit
 
     def scenario_of(self, lid, run_id):
